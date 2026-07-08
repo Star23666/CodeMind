@@ -35,7 +35,7 @@ class FakeRetrievalService:
         self.sources = sources
         self.last_request = None
 
-    async def retrieve_for_chat(self, request: ChatRequest) -> RetrievalResult:
+    async def retrieve_for_chat(self, request: ChatRequest, user_id: int = 1) -> RetrievalResult:
         self.last_request = request
         rewritten = "操作系统中进程与线程的区别是什么？" if request.enable_rewrite else None
         return RetrievalResult(rewritten_question=rewritten, sources=self.sources)

@@ -1,5 +1,3 @@
-from openai import AsyncOpenAI
-
 from app.core.config import settings
 
 
@@ -7,6 +5,8 @@ class LlmClient:
     async def generate_answer(self, prompt: str) -> str:
         if not settings.llm_api_key or not settings.llm_model:
             return self.generate_local_fallback(prompt)
+
+        from openai import AsyncOpenAI
 
         client_kwargs = {"api_key": settings.llm_api_key}
         if settings.llm_base_url:

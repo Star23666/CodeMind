@@ -1,6 +1,10 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
@@ -18,6 +22,8 @@ class Settings(BaseSettings):
     embedding_base_url: str = ""
     embedding_model: str = ""
 
+    upload_dir: str = "storage/uploads"
+    max_upload_size_mb: int = 50
     chroma_persist_dir: str = "storage/chroma"
     backend_cors_origins: str = "http://localhost:5173"
 
@@ -39,6 +45,22 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.backend_cors_origins.split(",") if origin.strip()]
+
+    @property
+    def upload_dir_path(self) -> Path:
+        return self._resolve_project_path(self.upload_dir)
+
+    @property
+    def chroma_persist_path(self) -> Path:
+        return self._resolve_project_path(self.chroma_persist_dir)
+
+    @property
+    def max_upload_size_bytes(self) -> int:
+        return self.max_upload_size_mb * 1024 * 1024
+
+    def _resolve_project_path(self, value: str) -> Path:
+        path = Path(value)
+        return path if path.is_absolute() else PROJECT_ROOT / path
 
 
 @lru_cache

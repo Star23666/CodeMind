@@ -1,6 +1,8 @@
 from pydantic import BaseModel, Field
 
-from app.schemas.contracts import ChatRequest, SourceReference
+from app.schemas.contracts import ChatRequest, SearchRequest, SourceReference
+from app.services.embedding_client import embedding_client
+from app.services.vector_store import VectorSearchHit, get_vector_store
 
 
 class RetrievalResult(BaseModel):
@@ -9,69 +11,105 @@ class RetrievalResult(BaseModel):
 
 
 class RetrievalService:
-    """Temporary retrieval-side contract.
+    """Retrieval side backed by Chroma vectors."""
 
-    Li Zhuhuan can replace this implementation with Chroma retrieval while
-    keeping the return type stable for the generation side.
-    """
-
-    async def retrieve_for_chat(self, request: ChatRequest) -> RetrievalResult:
+    async def retrieve_for_chat(self, request: ChatRequest, user_id: int = 1) -> RetrievalResult:
         rewritten_question = self.rewrite_question(request.question) if request.enable_rewrite else None
         query = rewritten_question or request.question
-        sources = self.retrieve_mock_sources(query, request)
+        sources = self.retrieve_sources(query, request, user_id=user_id)
         return RetrievalResult(rewritten_question=rewritten_question, sources=sources)
+
+    async def retrieve_for_search(self, request: SearchRequest, user_id: int = 1) -> RetrievalResult:
+        rewritten_query = self.rewrite_question(request.query) if request.enable_rewrite else None
+        query = rewritten_query or request.query
+        sources = self.retrieve_sources(query, request, user_id=user_id)
+        return RetrievalResult(rewritten_question=rewritten_query, sources=sources)
 
     def rewrite_question(self, question: str) -> str:
         return question.strip()
 
-    def retrieve_mock_sources(self, query: str, request: ChatRequest) -> list[SourceReference]:
-        query_text = query.lower()
-        candidates = [
-            SourceReference(
-                document_id=1,
-                chunk_id=10,
-                file_name="操作系统笔记.pdf",
-                chunk_index=3,
-                page_no=12,
-                score=0.89,
-                source_text="进程是资源分配的基本单位，拥有独立地址空间；线程是 CPU 调度的基本单位，同一进程内的线程共享进程资源。",
-                jump_url="/documents/1/chunks/10",
-            ),
-            SourceReference(
-                document_id=1,
-                chunk_id=11,
-                file_name="操作系统笔记.pdf",
-                chunk_index=4,
-                page_no=13,
-                score=0.83,
-                source_text="进程切换开销通常大于线程切换；线程共享数据时需要关注同步、互斥和并发安全问题。",
-                jump_url="/documents/1/chunks/11",
-            ),
-            SourceReference(
-                document_id=2,
-                chunk_id=21,
-                file_name="RAG 技术导论.md",
-                chunk_index=1,
-                page_no=2,
-                score=0.88,
-                source_text="RAG 是检索增强生成技术，先从知识库检索相关资料，再将资料作为上下文交给大模型生成回答。",
-                jump_url="/documents/2/chunks/21",
-            ),
+    def retrieve_sources(
+        self,
+        query: str,
+        request: ChatRequest | SearchRequest,
+        *,
+        user_id: int,
+    ) -> list[SourceReference]:
+        query_embedding = embedding_client.embed_texts([query])[0]
+        hits = get_vector_store().search(
+            embedding=query_embedding,
+            knowledge_base_id=request.knowledge_base_id,
+            owner_id=user_id,
+            top_k=request.top_k,
+        )
+        sources = [
+            self._hit_to_source(hit)
+            for hit in hits
+            if hit.score >= request.score_threshold
         ]
 
-        if "rag" in query_text or "检索" in query_text or "知识库" in query_text:
-            filtered = [source for source in candidates if source.document_id == 2]
-        elif "进程" in query_text or "线程" in query_text:
-            filtered = [source for source in candidates if source.document_id == 1]
-        else:
-            filtered = []
+        if request.enable_rerank:
+            sources = sorted(
+                sources,
+                key=lambda source: self._rerank_score(query, source),
+                reverse=True,
+            )
+            return sources[: request.rerank_top_n]
 
-        filtered = [
-            source
-            for source in filtered
-            if source.score is None or source.score >= request.score_threshold
-        ]
-        return filtered[: request.rerank_top_n if request.enable_rerank else request.top_k]
+        return sources[: request.top_k]
+
+    def _hit_to_source(self, hit: VectorSearchHit) -> SourceReference:
+        metadata = hit.metadata
+        document_id = int(metadata["document_id"])
+        chunk_id = int(metadata["chunk_id"])
+        page_no = int(metadata.get("page_no") or 0) or None
+
+        return SourceReference(
+            document_id=document_id,
+            chunk_id=chunk_id,
+            file_name=str(metadata.get("file_name") or ""),
+            chunk_index=int(metadata.get("chunk_index") or 0),
+            page_no=page_no,
+            score=hit.score,
+            source_text=hit.text,
+            jump_url=f"/documents/{document_id}/chunks/{chunk_id}",
+        )
+
+    def _rerank_score(self, query: str, source: SourceReference) -> float:
+        vector_score = source.score or 0.0
+        overlap_score = self._keyword_overlap(query, source.source_text)
+        return vector_score * 0.8 + overlap_score * 0.2
+
+    def _keyword_overlap(self, query: str, text: str) -> float:
+        query_tokens = set(self._rough_tokens(query))
+        text_tokens = set(self._rough_tokens(text))
+        if not query_tokens or not text_tokens:
+            return 0.0
+        return len(query_tokens & text_tokens) / len(query_tokens)
+
+    def _rough_tokens(self, text: str) -> list[str]:
+        lowered = text.lower()
+        tokens: list[str] = []
+        current: list[str] = []
+        cjk_chars: list[str] = []
+
+        for char in lowered:
+            if char.isascii() and char.isalnum():
+                current.append(char)
+                continue
+
+            if current:
+                tokens.append("".join(current))
+                current = []
+
+            if "\u4e00" <= char <= "\u9fff":
+                cjk_chars.append(char)
+
+        if current:
+            tokens.append("".join(current))
+
+        tokens.extend("".join(cjk_chars[index : index + 2]) for index in range(max(len(cjk_chars) - 1, 0)))
+        return tokens
 
 
 retrieval_service = RetrievalService()

@@ -18,7 +18,7 @@ class RagService:
         self.history_service = history_service
 
     async def answer_question(self, request: ChatRequest, user_id: int = 1) -> ChatResponse:
-        retrieval_result = await self.retrieval_service.retrieve_for_chat(request)
+        retrieval_result = await self.retrieval_service.retrieve_for_chat(request, user_id=user_id)
         sources = retrieval_result.sources
         rewritten_question = retrieval_result.rewritten_question
 
