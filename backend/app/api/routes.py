@@ -187,8 +187,11 @@ async def search_documents(payload: SearchRequest) -> SearchResponse:
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest) -> ChatResponse:
-    return await rag_service.answer_question(request)
+async def chat(
+    request: ChatRequest,
+    user_id: int = Header(default=1, alias="X-User-Id"),
+) -> ChatResponse:
+    return await rag_service.answer_question(request, user_id=user_id)
 
 
 @router.get("/qa-records", response_model=list[QaRecordRead])
