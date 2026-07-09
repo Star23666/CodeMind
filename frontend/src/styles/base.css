@@ -1,0 +1,121 @@
+:root {
+  font-family:
+    Inter, "PingFang SC", "Microsoft YaHei", system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--cm-text);
+  background: var(--cm-bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+
+  --cm-bg: #f5f8fc;
+  --cm-bg-soft: #eef4fb;
+  --cm-surface: #ffffff;
+  --cm-surface-soft: #f8fbff;
+  --cm-text: #162033;
+  --cm-heading: #0f1d35;
+  --cm-muted: #667085;
+  --cm-border: #dce6f2;
+  --cm-primary: #2563eb;
+  --cm-primary-strong: #1d4ed8;
+  --cm-primary-soft: #eaf2ff;
+  --cm-success: #18a058;
+  --cm-warning: #c88719;
+  --cm-danger: #dc4c4c;
+  --cm-shadow: 0 18px 50px rgba(37, 99, 235, 0.12);
+  --cm-radius: 8px;
+}
+
+:root[data-theme="dark"] {
+  --cm-bg: #0f172a;
+  --cm-bg-soft: #111d33;
+  --cm-surface: #172033;
+  --cm-surface-soft: #1d2940;
+  --cm-text: #e6edf7;
+  --cm-heading: #f6f9ff;
+  --cm-muted: #aab6ca;
+  --cm-border: #2f3f5e;
+  --cm-primary: #60a5fa;
+  --cm-primary-strong: #93c5fd;
+  --cm-primary-soft: rgba(96, 165, 250, 0.14);
+  --cm-success: #4ade80;
+  --cm-warning: #fbbf24;
+  --cm-danger: #f87171;
+  --cm-shadow: 0 18px 60px rgba(0, 0, 0, 0.34);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  min-height: 100%;
+  scroll-behavior: smooth;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  color: var(--cm-text);
+  background:
+    radial-gradient(circle at 12% 0%, rgba(37, 99, 235, 0.11), transparent 28%),
+    linear-gradient(180deg, var(--cm-bg-soft), var(--cm-bg));
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.el-button--primary {
+  --el-button-bg-color: var(--cm-primary);
+  --el-button-border-color: var(--cm-primary);
+  --el-button-hover-bg-color: var(--cm-primary-strong);
+  --el-button-hover-border-color: var(--cm-primary-strong);
+}
+
+:root[data-theme="dark"] .el-card,
+:root[data-theme="dark"] .el-input__wrapper,
+:root[data-theme="dark"] .el-textarea__inner,
+:root[data-theme="dark"] .el-select__wrapper,
+:root[data-theme="dark"] .el-upload-dragger {
+  color: var(--cm-text);
+  background-color: var(--cm-surface);
+  border-color: var(--cm-border);
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .el-segmented {
+  --el-segmented-bg-color: var(--cm-surface-soft);
+  --el-segmented-item-selected-bg-color: var(--cm-primary);
+  --el-segmented-item-selected-color: #ffffff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
