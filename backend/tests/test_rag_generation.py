@@ -2,6 +2,7 @@ import asyncio
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -10,6 +11,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 from app.schemas.contracts import ChatRequest, SourceReference
 from app.services.prompt_builder import build_rag_prompt
 from app.services.rag_service import RagService
+from app.services.retrieval_service import RetrievalService
 from app.services.retrieval_service import RetrievalResult
 
 
@@ -129,6 +131,18 @@ class RagGenerationTest(unittest.TestCase):
         self.assertEqual(response.sources, [])
         self.assertEqual(response.qa_record_id, 1001)
         self.assertEqual(history.saved["sources"], [])
+
+    def test_retrieval_returns_empty_sources_when_vector_store_is_unavailable(self):
+        service = RetrievalService()
+        request = ChatRequest(knowledge_base_id=1, question="进程和线程有什么区别？")
+
+        with patch(
+            "app.services.retrieval_service.get_vector_store",
+            side_effect=RuntimeError("chromadb is not installed"),
+        ):
+            sources = service.retrieve_sources(request.question, request, user_id=1)
+
+        self.assertEqual(sources, [])
 
 
 if __name__ == "__main__":

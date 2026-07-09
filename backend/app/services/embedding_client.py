@@ -1,7 +1,11 @@
 import hashlib
+import logging
 import math
 
 from app.core.config import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingClient:
@@ -12,7 +16,10 @@ class EmbeddingClient:
             return []
 
         if settings.embedding_api_key and settings.embedding_model:
-            return self._embed_with_api(texts)
+            try:
+                return self._embed_with_api(texts)
+            except Exception as exc:
+                logger.warning("Embedding API unavailable, falling back to local embeddings: %s", exc)
 
         return [self._embed_locally(text) for text in texts]
 

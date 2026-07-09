@@ -1,8 +1,13 @@
+import logging
+
 from pydantic import BaseModel, Field
 
 from app.schemas.contracts import ChatRequest, SearchRequest, SourceReference
 from app.services.embedding_client import embedding_client
 from app.services.vector_store import VectorSearchHit, get_vector_store
+
+
+logger = logging.getLogger(__name__)
 
 
 class RetrievalResult(BaseModel):
@@ -36,12 +41,17 @@ class RetrievalService:
         user_id: int,
     ) -> list[SourceReference]:
         query_embedding = embedding_client.embed_texts([query])[0]
-        hits = get_vector_store().search(
-            embedding=query_embedding,
-            knowledge_base_id=request.knowledge_base_id,
-            owner_id=user_id,
-            top_k=request.top_k,
-        )
+        try:
+            hits = get_vector_store().search(
+                embedding=query_embedding,
+                knowledge_base_id=request.knowledge_base_id,
+                owner_id=user_id,
+                top_k=request.top_k,
+            )
+        except Exception as exc:
+            logger.warning("Vector store unavailable, returning empty retrieval result: %s", exc)
+            return []
+
         sources = [
             self._hit_to_source(hit)
             for hit in hits

@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -8,6 +9,11 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 from app.services.embedding_client import EmbeddingClient
 from app.services.text_splitter import TextBlock, TextSplitter
+
+
+class FailingApiEmbeddingClient(EmbeddingClient):
+    def _embed_with_api(self, texts: list[str]) -> list[list[float]]:
+        raise RuntimeError("embedding api unavailable")
 
 
 class DocumentPipelineTest(unittest.TestCase):
@@ -40,6 +46,20 @@ class DocumentPipelineTest(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(first), client.local_dimension)
         self.assertAlmostEqual(sum(value * value for value in first), 1.0, places=6)
+
+    def test_embedding_api_failure_falls_back_to_local_embedding(self):
+        import app.services.embedding_client as embedding_module
+
+        client = FailingApiEmbeddingClient()
+
+        with (
+            patch.object(embedding_module.settings, "embedding_api_key", "test-key"),
+            patch.object(embedding_module.settings, "embedding_model", "test-model"),
+        ):
+            vectors = client.embed_texts(["进程和线程共享资源"])
+
+        self.assertEqual(len(vectors), 1)
+        self.assertEqual(len(vectors[0]), client.local_dimension)
 
 
 if __name__ == "__main__":
