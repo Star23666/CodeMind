@@ -1,4 +1,5 @@
-from datetime import datetime
+from fastapi import APIRouter, File, UploadFile, Depends, Form, HTTPException
+from sqlalchemy.orm import Session
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Header, HTTPException, UploadFile, status
 from sqlalchemy.exc import IntegrityError
@@ -27,7 +28,9 @@ from app.schemas.contracts import (
 from app.services.document_service import document_service
 from app.services.knowledge_base_service import knowledge_base_service
 from app.services.rag_service import rag_service
-from app.services.retrieval_service import retrieval_service
+from app.api.dependencies import get_current_user
+from app.models.user import User
+from app.db.session import get_db
 
 router = APIRouter()
 
@@ -245,6 +248,7 @@ async def search_documents(
         rewritten_query=retrieval_result.rewritten_question,
         results=retrieval_result.sources,
     )
+
 
 
 @router.post("/chat", response_model=ChatResponse)

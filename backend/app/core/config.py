@@ -22,8 +22,11 @@ class Settings(BaseSettings):
     embedding_base_url: str = ""
     embedding_model: str = ""
 
-    upload_dir: str = "storage/uploads"
-    max_upload_size_mb: int = 50
+    # JWT
+    jwt_secret_key: str = "change-me-in-production-use-a-long-random-string"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 60 * 24 * 7  # 7 days
+
     chroma_persist_dir: str = "storage/chroma"
     backend_cors_origins: str = "http://localhost:5173"
 
