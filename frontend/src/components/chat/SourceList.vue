@@ -5,22 +5,22 @@
       <span>{{ sources.length }} 条</span>
     </div>
 
-    <el-empty v-if="!sources.length" description="暂无来源，提问后会显示检索片段" />
+    <el-empty v-if="!sources.length" description="暂无来源，提问后会显示检索片段。" />
 
-    <article v-for="(source, index) in sources" v-else :key="source.chunk_id" class="source-item">
-      <div class="rank">来源{{ index + 1 }}</div>
+    <article v-for="(source, index) in sources" v-else :key="source.chunk_id || index" class="source-item">
+      <div class="rank">来源 {{ index + 1 }}</div>
       <div class="content">
         <div class="meta">
-          <strong>{{ source.file_name }}</strong>
+          <strong>{{ source.file_name || "未命名文档" }}</strong>
           <el-tag size="small" effect="plain">
             {{ formatScore(source.score) }}
           </el-tag>
         </div>
         <p>{{ source.source_text }}</p>
         <div class="footer">
-          <span>chunk {{ source.chunk_index }}</span>
+          <span>chunk {{ source.chunk_index ?? "-" }}</span>
           <span v-if="source.page_no">第 {{ source.page_no }} 页</span>
-          <a :href="source.jump_url">查看片段</a>
+          <RouterLink :to="sourceTo(source)">查看片段</RouterLink>
         </div>
       </div>
     </article>
@@ -34,6 +34,24 @@ defineProps({
     default: () => [],
   },
 });
+
+function sourceTo(source) {
+  if (source.jump_url) {
+    return source.jump_url;
+  }
+
+  if (source.document_id && source.chunk_id) {
+    return {
+      name: "document-chunk",
+      params: {
+        documentId: source.document_id,
+        chunkId: source.chunk_id,
+      },
+    };
+  }
+
+  return { name: "documents" };
+}
 
 function formatScore(score) {
   if (score === null || score === undefined) {

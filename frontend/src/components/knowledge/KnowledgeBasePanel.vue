@@ -5,20 +5,28 @@
         <p>当前知识库</p>
         <h2>{{ currentName }}</h2>
       </div>
-      <el-input-number v-model="model" :min="1" :max="999" controls-position="right" />
+      <el-select v-model="model" class="kb-select" aria-label="选择知识库">
+        <el-option
+          v-for="base in bases"
+          :key="base.id"
+          :label="base.name"
+          :value="base.id"
+        />
+        <el-option v-if="!bases.length" label="默认知识库" :value="1" />
+      </el-select>
     </div>
 
     <div class="facts">
       <div>
         <span>接口状态</span>
-        <strong>{{ loaded ? "已尝试读取" : "未读取" }}</strong>
+        <strong>{{ loaded ? "已读取" : "未读取" }}</strong>
       </div>
       <div>
-        <span>真实数据</span>
+        <span>知识库数量</span>
         <strong>{{ bases.length }} 个</strong>
       </div>
       <div>
-        <span>默认 ID</span>
+        <span>当前 ID</span>
         <strong>{{ model }}</strong>
       </div>
     </div>
@@ -43,7 +51,7 @@ const props = defineProps({
 
 const currentName = computed(() => {
   const matched = props.bases.find((item) => item.id === model.value);
-  return matched?.name || "演示知识库";
+  return matched?.name || "默认知识库";
 });
 </script>
 
@@ -76,6 +84,10 @@ h2 {
   margin: 0;
   color: var(--cm-heading);
   font-size: 22px;
+}
+
+.kb-select {
+  width: 180px;
 }
 
 .facts {
@@ -111,6 +123,10 @@ h2 {
   .panel-head {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .kb-select {
+    width: 100%;
   }
 
   .facts {

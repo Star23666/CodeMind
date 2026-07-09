@@ -18,7 +18,7 @@
       <el-icon class="upload-icon"><UploadFilled /></el-icon>
       <div class="upload-text">拖拽文件到此处，或点击选择上传</div>
       <template #tip>
-        <p class="tip">当前后端会返回 pending 状态，真实解析和入库仍由后端继续实现。</p>
+        <p class="tip">支持 PDF、Word、Markdown、TXT。上传后后端会自动解析、切分并写入向量库。</p>
       </template>
     </el-upload>
 
@@ -42,6 +42,7 @@ const props = defineProps({
   },
 });
 
+const emit = defineEmits(["uploaded"]);
 const lastDocument = ref(null);
 
 async function handleUpload(options) {
@@ -51,8 +52,9 @@ async function handleUpload(options) {
       file: options.file,
     });
     lastDocument.value = document;
+    emit("uploaded", document);
     options.onSuccess?.(document);
-    ElMessage.success("文件已提交到后端");
+    ElMessage.success("文件已提交到后端处理");
   } catch (error) {
     options.onError?.(error);
     ElMessage.error(error.message);

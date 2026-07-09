@@ -1,0 +1,366 @@
+<template>
+  <div class="me-view">
+    <AppHeader :health-online="healthOnline" />
+
+    <main class="page">
+      <section class="page-head">
+        <div>
+          <el-tag effect="plain">个人中心</el-tag>
+          <h1>我的知识库</h1>
+          <p>这里先放账户信息、知识库管理入口和当前资料统计，后续可以继续扩展历史问答和偏好设置。</p>
+        </div>
+        <el-button type="primary" plain @click="goDocuments">去文档上传</el-button>
+      </section>
+
+      <section class="profile-grid">
+        <article class="panel profile-panel">
+          <div class="avatar">{{ initials }}</div>
+          <div>
+            <p>当前用户</p>
+            <h2>{{ userStore.displayName }}</h2>
+            <span>{{ userStore.user?.email || "暂未填写邮箱" }}</span>
+          </div>
+          <el-button @click="logout">退出登录</el-button>
+        </article>
+
+        <article class="panel stat-panel">
+          <div>
+            <span>知识库</span>
+            <strong>{{ knowledgeBases.length }}</strong>
+          </div>
+          <div>
+            <span>文档</span>
+            <strong>{{ documents.length }}</strong>
+          </div>
+          <div>
+            <span>后端</span>
+            <strong>{{ healthOnline ? "在线" : "未连接" }}</strong>
+          </div>
+        </article>
+      </section>
+
+      <section class="manager-grid">
+        <article class="panel create-panel">
+          <div class="panel-head">
+            <div>
+              <p>新建知识库</p>
+              <h2>为不同资料分组</h2>
+            </div>
+          </div>
+
+          <el-form label-position="top" @submit.prevent>
+            <el-form-item label="名称">
+              <el-input v-model="kbForm.name" placeholder="例如：课程资料、项目文档" />
+            </el-form-item>
+            <el-form-item label="描述">
+              <el-input v-model="kbForm.description" type="textarea" :rows="3" placeholder="简单说明用途" />
+            </el-form-item>
+            <el-button type="primary" :loading="creating" @click="createKb">创建</el-button>
+          </el-form>
+        </article>
+
+        <article class="panel list-panel">
+          <div class="panel-head">
+            <div>
+              <p>已有知识库</p>
+              <h2>只展示当前用户的数据</h2>
+            </div>
+            <el-button text @click="loadData">刷新</el-button>
+          </div>
+
+          <div class="kb-list">
+            <div v-for="base in knowledgeBases" :key="base.id" class="kb-item">
+              <div>
+                <strong>{{ base.name }}</strong>
+                <span>{{ base.description || "暂无描述" }}</span>
+              </div>
+              <el-tag effect="plain">{{ base.visibility }}</el-tag>
+            </div>
+            <el-empty v-if="!knowledgeBases.length" description="暂无知识库。" />
+          </div>
+        </article>
+      </section>
+    </main>
+  </div>
+</template>
+
+<script setup>
+import { computed, onMounted, reactive, ref } from "vue";
+import { ElMessage } from "element-plus";
+import { useRouter } from "vue-router";
+import { logoutUser } from "../api/auth";
+import { getHealth } from "../api/health";
+import { listDocuments } from "../api/documents";
+import { createKnowledgeBase, listKnowledgeBases } from "../api/knowledgeBases";
+import AppHeader from "../components/layout/AppHeader.vue";
+import { useUserStore } from "../stores/user";
+
+const router = useRouter();
+const userStore = useUserStore();
+const healthOnline = ref(false);
+const knowledgeBases = ref([]);
+const documents = ref([]);
+const creating = ref(false);
+const kbForm = reactive({
+  name: "",
+  description: "",
+});
+
+const initials = computed(() => userStore.displayName.slice(0, 1).toUpperCase());
+
+onMounted(() => {
+  checkHealth();
+  loadData();
+});
+
+async function checkHealth() {
+  try {
+    const data = await getHealth();
+    healthOnline.value = data.status === "ok";
+  } catch {
+    healthOnline.value = false;
+  }
+}
+
+async function loadData() {
+  try {
+    const [bases, docs] = await Promise.all([listKnowledgeBases(), listDocuments()]);
+    knowledgeBases.value = bases;
+    documents.value = docs;
+  } catch (error) {
+    ElMessage.error(error.message);
+  }
+}
+
+async function createKb() {
+  const name = kbForm.name.trim();
+  if (!name) {
+    ElMessage.warning("请输入知识库名称。");
+    return;
+  }
+
+  creating.value = true;
+  try {
+    await createKnowledgeBase({
+      name,
+      description: kbForm.description.trim() || null,
+      visibility: "private",
+    });
+    kbForm.name = "";
+    kbForm.description = "";
+    ElMessage.success("知识库已创建。");
+    loadData();
+  } catch (error) {
+    ElMessage.error(error.message);
+  } finally {
+    creating.value = false;
+  }
+}
+
+function goDocuments() {
+  router.push({ name: "documents" });
+}
+
+async function logout() {
+  try {
+    await logoutUser();
+  } catch {
+    // 本地退出优先保证用户状态正确。
+  } finally {
+    userStore.clearAuth();
+    router.push({ name: "login" });
+  }
+}
+</script>
+
+<style scoped>
+.me-view {
+  min-height: 100vh;
+  padding: 16px 0 56px;
+}
+
+.page {
+  width: min(1180px, calc(100% - 32px));
+  margin: 44px auto 0;
+}
+
+.page-head,
+.profile-grid,
+.manager-grid {
+  margin-bottom: 20px;
+}
+
+.page-head,
+.profile-panel,
+.stat-panel,
+.panel-head,
+.kb-item {
+  display: flex;
+  align-items: center;
+}
+
+.page-head {
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.page-head h1 {
+  margin: 12px 0 8px;
+  color: var(--cm-heading);
+  font-size: 34px;
+}
+
+.page-head p {
+  margin: 0;
+  color: var(--cm-muted);
+  line-height: 1.7;
+}
+
+.profile-grid,
+.manager-grid {
+  display: grid;
+  gap: 20px;
+}
+
+.profile-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.7fr);
+}
+
+.manager-grid {
+  grid-template-columns: minmax(300px, 0.75fr) minmax(0, 1fr);
+}
+
+.panel {
+  padding: 22px;
+  border: 1px solid var(--cm-border);
+  border-radius: var(--cm-radius);
+  background: var(--cm-surface);
+  box-shadow: var(--cm-shadow);
+}
+
+.profile-panel {
+  gap: 16px;
+}
+
+.profile-panel > div:nth-child(2) {
+  min-width: 0;
+  flex: 1;
+}
+
+.avatar {
+  display: grid;
+  width: 56px;
+  height: 56px;
+  place-items: center;
+  border-radius: var(--cm-radius);
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--cm-primary), #38bdf8);
+  font-size: 24px;
+  font-weight: 900;
+}
+
+.profile-panel p,
+.panel-head p {
+  margin: 0 0 6px;
+  color: var(--cm-primary);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.profile-panel h2,
+.panel-head h2 {
+  margin: 0;
+  color: var(--cm-heading);
+  font-size: 22px;
+}
+
+.profile-panel span {
+  color: var(--cm-muted);
+}
+
+.stat-panel {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stat-panel div {
+  display: grid;
+  gap: 6px;
+}
+
+.stat-panel span {
+  color: var(--cm-muted);
+  font-size: 13px;
+}
+
+.stat-panel strong {
+  color: var(--cm-heading);
+  font-size: 28px;
+}
+
+.create-panel,
+.list-panel,
+.kb-list {
+  display: grid;
+  gap: 16px;
+}
+
+.panel-head {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.kb-list {
+  max-height: 460px;
+  overflow: auto;
+}
+
+.kb-item {
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--cm-border);
+  border-radius: var(--cm-radius);
+  background: var(--cm-surface-soft);
+}
+
+.kb-item div {
+  display: grid;
+  gap: 6px;
+}
+
+.kb-item strong {
+  color: var(--cm-heading);
+}
+
+.kb-item span {
+  color: var(--cm-muted);
+  font-size: 13px;
+}
+
+@media (max-width: 920px) {
+  .profile-grid,
+  .manager-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .me-view {
+    padding-top: 8px;
+  }
+
+  .page {
+    width: min(100% - 20px, 1180px);
+    margin-top: 32px;
+  }
+
+  .page-head,
+  .profile-panel,
+  .stat-panel,
+  .panel-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+</style>

@@ -2,8 +2,8 @@
   <section class="chat-panel" id="chat">
     <div class="panel-head">
       <div>
-        <p>知识库问答</p>
-        <h2>围绕资料提问，返回回答和来源</h2>
+        <p>AI 知识库问答</p>
+        <h2>围绕你的资料提问</h2>
       </div>
       <el-tag effect="plain">knowledge_base_id = {{ knowledgeBaseId }}</el-tag>
     </div>
@@ -15,7 +15,7 @@
       :autosize="{ minRows: 5, maxRows: 8 }"
       maxlength="500"
       show-word-limit
-      placeholder="例如：操作系统中进程和线程有什么区别？"
+      placeholder="例如：这份资料里对项目部署流程是怎么描述的？"
       @keydown.ctrl.enter="askQuestion"
     />
 
@@ -94,7 +94,7 @@ async function askQuestion() {
   if (!trimmedQuestion) {
     hasError.value = true;
     answerStatus.value = "需要输入问题";
-    answer.value = "请先输入一个和课程知识相关的问题。";
+    answer.value = "请先输入一个和资料相关的问题。";
     sources.value = [];
     return;
   }

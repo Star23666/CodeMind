@@ -8,15 +8,22 @@
     </RouterLink>
 
     <nav class="nav-links" aria-label="主导航">
-      <a href="#chat">问答</a>
-      <a href="#documents">文档</a>
-      <a href="#sources">来源</a>
+      <RouterLink to="/">AI 问答</RouterLink>
+      <RouterLink to="/documents">文档上传</RouterLink>
+      <RouterLink to="/me">我的</RouterLink>
     </nav>
 
     <div class="actions">
-      <el-tag :type="healthOnline ? 'success' : 'info'" effect="light" round>
-        {{ healthOnline ? "后端在线" : "演示模式" }}
+      <el-tag v-if="showHealth" :type="healthOnline ? 'success' : 'info'" effect="light" round>
+        {{ healthOnline ? "后端在线" : "后端未连接" }}
       </el-tag>
+
+      <template v-if="userStore.isLoggedIn">
+        <RouterLink class="user-link" to="/me">{{ userStore.displayName }}</RouterLink>
+        <el-button text @click="logout">退出</el-button>
+      </template>
+      <el-button v-else type="primary" plain @click="goLogin">登录</el-button>
+
       <el-button
         :aria-label="isDark ? '切换到浅色主题' : '切换到深色主题'"
         :icon="isDark ? Sunny : Moon"
@@ -29,16 +36,44 @@
 
 <script setup>
 import { Cpu, Moon, Sunny } from "@element-plus/icons-vue";
+import { useRoute, useRouter } from "vue-router";
+import { logoutUser } from "../../api/auth";
 import { useTheme } from "../../composables/useTheme";
+import { useUserStore } from "../../stores/user";
 
 defineProps({
   healthOnline: {
     type: Boolean,
     default: false,
   },
+  showHealth: {
+    type: Boolean,
+    default: true,
+  },
 });
 
+const route = useRoute();
+const router = useRouter();
+const userStore = useUserStore();
 const { isDark, toggleTheme } = useTheme();
+
+function goLogin() {
+  router.push({
+    name: "login",
+    query: route.name === "login" ? {} : { redirect: route.fullPath },
+  });
+}
+
+async function logout() {
+  try {
+    await logoutUser();
+  } catch {
+    // 前端退出不依赖后端登出是否成功。
+  } finally {
+    userStore.clearAuth();
+    router.push({ name: "login" });
+  }
+}
 </script>
 
 <style scoped>
@@ -104,7 +139,8 @@ const { isDark, toggleTheme } = useTheme();
     background 0.18s ease;
 }
 
-.nav-links a:hover {
+.nav-links a:hover,
+.nav-links a.router-link-active {
   color: var(--cm-primary);
   background: var(--cm-primary-soft);
 }
@@ -114,7 +150,17 @@ const { isDark, toggleTheme } = useTheme();
   gap: 10px;
 }
 
-@media (max-width: 760px) {
+.user-link {
+  max-width: 140px;
+  overflow: hidden;
+  color: var(--cm-heading);
+  font-size: 14px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 860px) {
   .app-header {
     grid-template-columns: 1fr;
     top: 8px;
@@ -122,6 +168,18 @@ const { isDark, toggleTheme } = useTheme();
 
   .nav-links,
   .actions {
+    justify-content: flex-start;
+  }
+
+  .actions {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 560px) {
+  .nav-links {
+    width: 100%;
+    overflow-x: auto;
     justify-content: flex-start;
   }
 }

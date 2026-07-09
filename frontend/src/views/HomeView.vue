@@ -3,31 +3,16 @@
     <AppHeader :health-online="healthOnline" />
 
     <main class="page">
-      <HeroSection
-        @focus-chat="focusChat"
-        @focus-upload="focusUpload"
-        @use-prompt="usePrompt"
-      />
-
-      <section class="dashboard">
-        <KnowledgeBasePanel
-          v-model="knowledgeBaseId"
-          :bases="knowledgeBases"
-          :loaded="knowledgeLoaded"
-        />
-        <HealthCard :online="healthOnline" :message="healthMessage" />
+      <section class="hero">
+        <el-tag effect="plain">个人知识库 AI 助手</el-tag>
+        <h1>首页只保留提问入口</h1>
+        <p>
+          登录后可以基于自己的资料提问，回答会带上可跳转的来源片段。
+          文档上传和个人资料放到独立页面里，首页保持干净。
+        </p>
       </section>
 
-      <section class="workspace">
-        <div ref="uploadSection">
-          <UploadPanel :knowledge-base-id="knowledgeBaseId" />
-        </div>
-        <ChatPanel
-          ref="chatPanel"
-          :knowledge-base-id="knowledgeBaseId"
-          :initial-question="selectedPrompt"
-        />
-      </section>
+      <ChatPanel :knowledge-base-id="knowledgeBaseId" />
     </main>
   </div>
 </template>
@@ -36,61 +21,33 @@
 import { onMounted, ref } from "vue";
 import { getHealth } from "../api/health";
 import { listKnowledgeBases } from "../api/knowledgeBases";
-import AppHeader from "../components/layout/AppHeader.vue";
-import HeroSection from "../components/home/HeroSection.vue";
 import ChatPanel from "../components/chat/ChatPanel.vue";
-import UploadPanel from "../components/documents/UploadPanel.vue";
-import HealthCard from "../components/status/HealthCard.vue";
-import KnowledgeBasePanel from "../components/knowledge/KnowledgeBasePanel.vue";
+import AppHeader from "../components/layout/AppHeader.vue";
 
-const knowledgeBaseId = ref(1);
-const knowledgeBases = ref([]);
-const knowledgeLoaded = ref(false);
 const healthOnline = ref(false);
-const healthMessage = ref("正在检测后端服务");
-const selectedPrompt = ref("");
-const chatPanel = ref(null);
-const uploadSection = ref(null);
+const knowledgeBaseId = ref(1);
 
 onMounted(() => {
   checkHealth();
-  loadKnowledgeBases();
+  loadDefaultKnowledgeBase();
 });
 
 async function checkHealth() {
   try {
     const data = await getHealth();
     healthOnline.value = data.status === "ok";
-    healthMessage.value = healthOnline.value ? "FastAPI 已响应 /api/health" : "后端返回了未知状态";
-  } catch (error) {
-    healthOnline.value = false;
-    healthMessage.value = error.message;
-  }
-}
-
-async function loadKnowledgeBases() {
-  try {
-    knowledgeBases.value = await listKnowledgeBases();
   } catch {
-    knowledgeBases.value = [];
-  } finally {
-    knowledgeLoaded.value = true;
+    healthOnline.value = false;
   }
 }
 
-function focusChat() {
-  chatPanel.value?.focusQuestion?.();
-  document.querySelector("#chat")?.scrollIntoView({ behavior: "smooth", block: "center" });
-}
-
-function focusUpload() {
-  uploadSection.value?.scrollIntoView({ behavior: "smooth", block: "center" });
-}
-
-function usePrompt(prompt) {
-  selectedPrompt.value = prompt;
-  chatPanel.value?.setQuestion?.(prompt);
-  focusChat();
+async function loadDefaultKnowledgeBase() {
+  try {
+    const bases = await listKnowledgeBases();
+    knowledgeBaseId.value = bases[0]?.id || 1;
+  } catch {
+    knowledgeBaseId.value = 1;
+  }
 }
 </script>
 
@@ -101,31 +58,35 @@ function usePrompt(prompt) {
 }
 
 .page {
-  width: min(1180px, calc(100% - 32px));
-  margin: 0 auto;
-}
-
-.dashboard,
-.workspace {
   display: grid;
-  gap: 20px;
+  gap: 22px;
+  width: min(920px, calc(100% - 32px));
+  margin: 56px auto 0;
 }
 
-.dashboard {
-  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
-  margin-bottom: 20px;
+.hero {
+  display: grid;
+  gap: 12px;
+  text-align: center;
 }
 
-.workspace {
-  grid-template-columns: minmax(320px, 0.88fr) minmax(0, 1.12fr);
-  align-items: start;
+.hero :deep(.el-tag) {
+  justify-self: center;
 }
 
-@media (max-width: 980px) {
-  .dashboard,
-  .workspace {
-    grid-template-columns: 1fr;
-  }
+h1 {
+  margin: 0;
+  color: var(--cm-heading);
+  font-size: clamp(32px, 5vw, 54px);
+  line-height: 1.08;
+}
+
+p {
+  width: min(680px, 100%);
+  margin: 0 auto;
+  color: var(--cm-muted);
+  font-size: 16px;
+  line-height: 1.8;
 }
 
 @media (max-width: 640px) {
@@ -134,7 +95,8 @@ function usePrompt(prompt) {
   }
 
   .page {
-    width: min(100% - 20px, 1180px);
+    width: min(100% - 20px, 920px);
+    margin-top: 32px;
   }
 }
 </style>
