@@ -1,62 +1,59 @@
 <template>
-  <main class="app-shell">
-    <section class="hero">
-      <p class="eyebrow">CodeMind</p>
-      <h1>计算机知识 RAG 问答系统</h1>
-      <p class="description">
-        上传课程资料、技术文档和学习笔记，构建可追溯来源的知识库问答体验。
-      </p>
-    </section>
-
-    <section class="workspace">
-      <div class="panel">
-        <h2>文档上传</h2>
-        <el-upload drag action="/api/documents/upload" name="file">
-          <el-icon class="upload-icon"><UploadFilled /></el-icon>
-          <div>拖拽文件到此处，或点击上传</div>
-          <template #tip>
-            <p class="tip">计划支持 PDF、DOCX、Markdown 和 TXT 文件。</p>
-          </template>
-        </el-upload>
+  <div id="app">
+    <!-- 顶部导航栏 -->
+    <header class="app-header" v-if="userStore.isLoggedIn">
+      <div class="brand">CodeMind</div>
+      <div class="user-info">
+        <span class="username">{{ userStore.user?.username }}</span>
+        <span class="email">{{ userStore.user?.email }}</span>
+        <el-button type="text" @click="logout">退出登录</el-button>
       </div>
-
-      <div class="panel">
-        <h2>知识库问答</h2>
-        <el-input
-          v-model="question"
-          type="textarea"
-          :rows="5"
-          placeholder="例如：操作系统中的进程和线程有什么区别？"
-        />
-        <el-button class="ask-button" type="primary" @click="askQuestion">发送问题</el-button>
-        <div v-if="answer" class="answer">
-          <strong>回答：</strong>
-          <p>{{ answer }}</p>
-        </div>
-      </div>
-    </section>
-  </main>
+    </header>
+    <!-- 路由内容 -->
+    <router-view />
+  </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import { UploadFilled } from '@element-plus/icons-vue'
-import axios from 'axios'
+import { useUserStore } from './stores/user'
+import { useRouter } from 'vue-router'
 
-const question = ref('')
-const answer = ref('')
+const userStore = useUserStore()
+const router = useRouter()
 
-async function askQuestion() {
-  if (!question.value.trim()) {
-    answer.value = '请先输入问题。'
-    return
-  }
-
-  const response = await axios.post('/api/chat', {
-    question: question.value,
-    top_k: 5
-  })
-  answer.value = response.data.answer
+function logout() {
+  userStore.clearAuth()
+  router.push('/login')
 }
 </script>
 
+<style scoped>
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 24px;
+  height: 56px;
+  background: #ffffff;
+  border-bottom: 1px solid #e2e7f0;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+.brand {
+  font-weight: 700;
+  font-size: 20px;
+  color: #2f6fed;
+}
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+}
+.username {
+  font-weight: 600;
+  font-size: 16px;
+}
+.email {
+  color: #68748a;
+}
+</style>

@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     mysql_host: str = "localhost"
     mysql_port: int = 3306
     mysql_user: str = "root"
-    mysql_password: str = "codemind_password"
+    mysql_password: str = "dzy71423381"
     mysql_database: str = "codemind"
 
     llm_api_key: str = ""
@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     embedding_api_key: str = ""
     embedding_base_url: str = ""
     embedding_model: str = ""
+
+    # JWT
+    jwt_secret_key: str = "change-me-in-production-use-a-long-random-string"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 60 * 24 * 7  # 7 days
 
     chroma_persist_dir: str = "storage/chroma"
     backend_cors_origins: str = "http://localhost:5173"
