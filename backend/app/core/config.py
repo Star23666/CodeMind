@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 24 * 7  # 7 days
 
+    upload_dir: str = "storage/uploads"
+    max_upload_size_mb: int = 50
     chroma_persist_dir: str = "storage/chroma"
     backend_cors_origins: str = "http://localhost:5173"
 
