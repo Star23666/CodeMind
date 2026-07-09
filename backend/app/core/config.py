@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     mysql_host: str = "localhost"
     mysql_port: int = 3306
     mysql_user: str = "root"
-    mysql_password: str = "dzy71423381"
+    mysql_password: str = "codemind_password"
     mysql_database: str = "codemind"
 
     llm_api_key: str = ""
