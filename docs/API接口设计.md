@@ -413,4 +413,4 @@ POST /api/qa-records/{qa_record_id}/feedback
 | `source_text`          | `qa_sources.source_text`、Chroma document                            | 来源片段快照                             |
 | `score`                | `qa_sources.score`                                                   | 检索相似度或 rerank 分数，范围 `[-1, 1]` |
 
-后端参考代码位于 `backend/app/api/routes.py` 和 `backend/app/schemas/contracts.py`。当前代码只提供接口合同与占位响应，真实的数据库访问、Chroma 调用、Embedding、rerank 和 LLM 调用由后端开发人员继续实现。
+后端实现位于 `backend/app/api/routes.py`、`backend/app/services/` 和 `backend/app/schemas/contracts.py`。当前已接入 MySQL、Chroma、Embedding 与在线 LLM API；认证、反馈管理和更完整的检索评估仍需继续完善。

@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_base_url: str = ""
     llm_model: str = ""
+    llm_timeout_seconds: float = 45.0
+    llm_max_retries: int = 1
+    llm_max_tokens: int = 600
 
     embedding_api_key: str = ""
     embedding_base_url: str = ""
