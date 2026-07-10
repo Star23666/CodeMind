@@ -33,6 +33,8 @@ from app.services.auth_service import (
 )
 from app.services.document_service import document_service
 from app.services.knowledge_base_service import knowledge_base_service
+from app.services.llm_client import LlmServiceError
+from app.services.qa_history_service import qa_history_service
 from app.services.rag_service import rag_service
 from app.services.retrieval_service import retrieval_service
 
@@ -289,35 +291,59 @@ async def chat(
     db: Session = Depends(get_db),
 ) -> ChatResponse:
     try:
-        knowledge_base_service.get_owned(db, request.knowledge_base_id, current_user.id)
+        knowledge_base_service.get_owned(
+            db,
+            request.knowledge_base_id,
+            current_user.id,
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在。") from exc
-    return await rag_service.answer_question(request, user_id=current_user.id)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="知识库不存在。",
+        ) from exc
+
+    try:
+        return await rag_service.answer_question(
+            request,
+            user_id=current_user.id,
+            db=db,
+        )
+    except LlmServiceError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=str(exc),
+        ) from exc
 
 
 @router.get("/qa-records", response_model=list[QaRecordRead])
 async def list_qa_records(
     knowledge_base_id: int | None = None,
     current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> list[QaRecordRead]:
-    return []
-
+    return qa_history_service.list_qa_records(
+        db,
+        user_id=current_user.id,
+        knowledge_base_id=knowledge_base_id,
+    )
 
 @router.get("/qa-records/{qa_record_id}", response_model=QaRecordRead)
 async def get_qa_record(
     qa_record_id: int,
     current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> QaRecordRead:
-    return QaRecordRead(
-        id=qa_record_id,
-        user_id=current_user.id,
-        knowledge_base_id=1,
-        question="Reference question",
-        answer="Reference answer generated from retrieved chunks.",
-        source_count=0,
-        created_at=datetime.utcnow(),
-    )
-
+    try:
+        return qa_history_service.get_qa_record(
+            db,
+            qa_record_id=qa_record_id,
+            user_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="问答记录不存在。",
+        ) from exc
 
 @router.post(
     "/qa-records/{qa_record_id}/feedback",
