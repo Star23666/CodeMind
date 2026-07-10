@@ -5,7 +5,6 @@
         <p>文档上传</p>
         <h2>把资料放进知识库</h2>
       </div>
-      <el-tag effect="plain">KB {{ knowledgeBaseId }}</el-tag>
     </div>
 
     <el-upload
@@ -31,21 +30,50 @@
 
 <script setup>
 import { ref } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { UploadFilled } from "@element-plus/icons-vue";
+import { useRouter } from "vue-router";
 import { uploadDocument } from "../../api/documents";
+import { useUserStore } from "../../stores/user";
 
 const props = defineProps({
   knowledgeBaseId: {
     type: Number,
-    default: 1,
+    default: null,
   },
 });
 
+const router = useRouter();
+const userStore = useUserStore();
 const emit = defineEmits(["uploaded"]);
 const lastDocument = ref(null);
 
 async function handleUpload(options) {
+  if (!userStore.isLoggedIn) {
+    options.onError?.(new Error("请先登录。"));
+    router.push({ name: "login", query: { redirect: "/documents" } });
+    return;
+  }
+
+  if (!props.knowledgeBaseId) {
+    options.onError?.(new Error("请先创建知识库。"));
+    try {
+      await ElMessageBox.confirm(
+        "请先创建一个知识库，再上传文档。",
+        "创建一个知识库",
+        {
+          confirmButtonText: "去创建",
+          cancelButtonText: "取消",
+          type: "warning",
+        },
+      );
+      router.push({ name: "me" });
+    } catch {
+      // 用户取消后留在当前页面。
+    }
+    return;
+  }
+
   try {
     const document = await uploadDocument({
       knowledgeBaseId: props.knowledgeBaseId,

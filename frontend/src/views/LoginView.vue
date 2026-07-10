@@ -7,12 +7,12 @@
         <div class="auth-head">
           <el-tag effect="plain">登录</el-tag>
           <h1>进入你的知识库</h1>
-          <p>当前阶段先不强制登录，保留这个页面用于后续接入完整账号校验。</p>
+          <p>登录后访问自己的知识库、文档和 AI 问答空间。</p>
         </div>
 
         <el-form ref="formRef" :model="form" :rules="rules" label-position="top" @submit.prevent>
-          <el-form-item label="用户名" prop="username">
-            <el-input v-model="form.username" autocomplete="username" placeholder="请输入用户名" />
+          <el-form-item label="用户名或邮箱" prop="username">
+            <el-input v-model="form.username" autocomplete="username" placeholder="请输入用户名或邮箱" />
           </el-form-item>
           <el-form-item label="密码" prop="password">
             <el-input
@@ -41,7 +41,7 @@
 import { reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
-import { loginUser } from "../api/auth";
+import { getCurrentUser, loginUser } from "../api/auth";
 import AppHeader from "../components/layout/AppHeader.vue";
 import { useUserStore } from "../stores/user";
 
@@ -69,17 +69,12 @@ async function submit() {
       password: form.password,
     });
 
-    userStore.setAuth({
-      token: tokenData.access_token,
-      user: {
-        id: 1,
-        username: form.username,
-        email: "",
-      },
-    });
+    userStore.setAuth({ token: tokenData.access_token, user: null });
+    userStore.updateUser(await getCurrentUser());
     ElMessage.success("登录成功。");
     router.replace(resolveRedirect());
   } catch (error) {
+    userStore.clearAuth();
     ElMessage.error(error.message);
   } finally {
     loading.value = false;
@@ -88,7 +83,9 @@ async function submit() {
 
 function resolveRedirect() {
   const redirect = route.query.redirect;
-  return typeof redirect === "string" ? redirect : "/";
+  return typeof redirect === "string" && redirect.startsWith("/") && !redirect.startsWith("//")
+    ? redirect
+    : "/";
 }
 </script>
 

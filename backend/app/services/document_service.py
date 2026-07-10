@@ -192,6 +192,35 @@ class DocumentService:
         ).mappings()
         get_vector_store().delete_ids([row["vector_id"] for row in rows])
 
+    def delete_knowledge_base(self, db: Session, *, knowledge_base_id: int, owner_id: int) -> None:
+        knowledge_base_service.get_owned(db, knowledge_base_id, owner_id)
+        file_rows = db.execute(
+            text(
+                """
+                SELECT file_path
+                FROM documents
+                WHERE knowledge_base_id = :knowledge_base_id AND owner_id = :owner_id
+                """
+            ),
+            {"knowledge_base_id": knowledge_base_id, "owner_id": owner_id},
+        ).mappings()
+        file_paths = [Path(row["file_path"]) for row in file_rows]
+
+        self.delete_vectors_for_knowledge_base(
+            db,
+            knowledge_base_id=knowledge_base_id,
+            owner_id=owner_id,
+        )
+        db.execute(
+            text("DELETE FROM knowledge_bases WHERE id = :id AND owner_id = :owner_id"),
+            {"id": knowledge_base_id, "owner_id": owner_id},
+        )
+        db.commit()
+
+        for file_path in file_paths:
+            self._unlink_file(file_path)
+        self._remove_empty_upload_directory(owner_id, knowledge_base_id)
+
     def process_document(self, document_id: int) -> None:
         db = SessionLocal()
         inserted_vector_ids: list[str] = []
@@ -395,6 +424,13 @@ class DocumentService:
         try:
             if path.exists() and path.is_file():
                 path.unlink()
+        except OSError:
+            pass
+
+    def _remove_empty_upload_directory(self, owner_id: int, knowledge_base_id: int) -> None:
+        target_dir = settings.upload_dir_path / str(owner_id) / str(knowledge_base_id)
+        try:
+            target_dir.rmdir()
         except OSError:
             pass
 

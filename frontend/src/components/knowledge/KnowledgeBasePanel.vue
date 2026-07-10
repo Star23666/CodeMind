@@ -5,14 +5,13 @@
         <p>当前知识库</p>
         <h2>{{ currentName }}</h2>
       </div>
-      <el-select v-model="model" class="kb-select" aria-label="选择知识库">
+      <el-select v-model="model" class="kb-select" aria-label="选择知识库" placeholder="暂无知识库">
         <el-option
           v-for="base in bases"
           :key="base.id"
           :label="base.name"
           :value="base.id"
         />
-        <el-option v-if="!bases.length" label="默认知识库" :value="1" />
       </el-select>
     </div>
 
@@ -25,10 +24,6 @@
         <span>知识库数量</span>
         <strong>{{ bases.length }} 个</strong>
       </div>
-      <div>
-        <span>当前 ID</span>
-        <strong>{{ model }}</strong>
-      </div>
     </div>
   </section>
 </template>
@@ -36,7 +31,7 @@
 <script setup>
 import { computed } from "vue";
 
-const model = defineModel({ type: Number, default: 1 });
+const model = defineModel({ type: Number, default: null });
 
 const props = defineProps({
   bases: {
@@ -51,7 +46,7 @@ const props = defineProps({
 
 const currentName = computed(() => {
   const matched = props.bases.find((item) => item.id === model.value);
-  return matched?.name || "默认知识库";
+  return matched?.name || "尚未选择知识库";
 });
 </script>
 
@@ -92,7 +87,7 @@ h2 {
 
 .facts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 

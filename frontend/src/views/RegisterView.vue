@@ -26,6 +26,15 @@
               placeholder="至少 8 位"
             />
           </el-form-item>
+          <el-form-item label="确认密码" prop="confirmPassword">
+            <el-input
+              v-model="form.confirmPassword"
+              type="password"
+              autocomplete="new-password"
+              show-password
+              placeholder="请再次输入密码"
+            />
+          </el-form-item>
           <el-button type="primary" size="large" :loading="loading" class="submit-button" @click="submit">
             注册并进入
           </el-button>
@@ -57,7 +66,20 @@ const form = reactive({
   username: "",
   email: "",
   password: "",
+  confirmPassword: "",
 });
+
+function validatePasswordConfirmation(_rule, value, callback) {
+  if (!value) {
+    callback(new Error("请再次输入密码"));
+    return;
+  }
+  if (value !== form.password) {
+    callback(new Error("两次输入的密码不一致"));
+    return;
+  }
+  callback();
+}
 
 const rules = {
   username: [
@@ -72,6 +94,7 @@ const rules = {
     { required: true, message: "请输入密码", trigger: "blur" },
     { min: 8, message: "密码至少 8 位", trigger: "blur" },
   ],
+  confirmPassword: [{ validator: validatePasswordConfirmation, trigger: ["blur", "change"] }],
 };
 
 async function submit() {
@@ -103,7 +126,9 @@ async function submit() {
 
 function resolveRedirect() {
   const redirect = route.query.redirect;
-  return typeof redirect === "string" ? redirect : "/";
+  return typeof redirect === "string" && redirect.startsWith("/") && !redirect.startsWith("//")
+    ? redirect
+    : "/";
 }
 </script>
 

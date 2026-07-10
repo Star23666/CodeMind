@@ -7,3 +7,7 @@ export function listKnowledgeBases() {
 export function createKnowledgeBase(payload) {
   return request.post("/knowledge-bases", payload);
 }
+
+export function deleteKnowledgeBase(knowledgeBaseId) {
+  return request.delete(`/knowledge-bases/${knowledgeBaseId}`);
+}

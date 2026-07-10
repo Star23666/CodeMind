@@ -7,24 +7,8 @@ from app.schemas.contracts import KnowledgeBaseCreate, KnowledgeBaseRead, Knowle
 class KnowledgeBaseService:
     def ensure_user_exists(self, db: Session, user_id: int) -> None:
         existing = db.execute(text("SELECT id FROM users WHERE id = :id"), {"id": user_id}).first()
-        if existing:
-            return
-
-        db.execute(
-            text(
-                """
-                INSERT INTO users (id, username, email, password_hash)
-                VALUES (:id, :username, :email, :password_hash)
-                """
-            ),
-            {
-                "id": user_id,
-                "username": f"reference_user_{user_id}",
-                "email": f"user{user_id}@example.com",
-                "password_hash": "temporary-reference-user",
-            },
-        )
-        db.commit()
+        if existing is None:
+            raise ValueError("User not found")
 
     def list_for_owner(self, db: Session, owner_id: int) -> list[KnowledgeBaseRead]:
         self.ensure_user_exists(db, owner_id)
@@ -39,19 +23,7 @@ class KnowledgeBaseService:
             ),
             {"owner_id": owner_id},
         ).mappings()
-        items = [self._to_read(row) for row in rows]
-        if items:
-            return items
-
-        default_base = self.create(
-            db,
-            owner_id,
-            KnowledgeBaseCreate(
-                name="演示知识库",
-                description="默认创建的知识库，可直接用于上传资料。",
-            ),
-        )
-        return [default_base]
+        return [self._to_read(row) for row in rows]
 
     def create(self, db: Session, owner_id: int, payload: KnowledgeBaseCreate) -> KnowledgeBaseRead:
         self.ensure_user_exists(db, owner_id)

@@ -5,7 +5,7 @@
         <p>AI 知识库问答</p>
         <h2>围绕你的资料提问</h2>
       </div>
-      <el-tag effect="plain">knowledge_base_id = {{ knowledgeBaseId }}</el-tag>
+      <el-tag effect="plain">{{ knowledgeBaseName || "未选择知识库" }}</el-tag>
     </div>
 
     <el-input
@@ -52,14 +52,21 @@
 
 <script setup>
 import { nextTick, ref, watch } from "vue";
+import { ElMessageBox } from "element-plus";
 import { Search } from "@element-plus/icons-vue";
+import { useRouter } from "vue-router";
 import { sendChatQuestion } from "../../api/chat";
+import { useUserStore } from "../../stores/user";
 import AnswerCard from "./AnswerCard.vue";
 
 const props = defineProps({
   knowledgeBaseId: {
     type: Number,
-    default: 1,
+    default: null,
+  },
+  knowledgeBaseName: {
+    type: String,
+    default: "",
   },
   initialQuestion: {
     type: String,
@@ -67,6 +74,8 @@ const props = defineProps({
   },
 });
 
+const router = useRouter();
+const userStore = useUserStore();
 const question = ref(props.initialQuestion);
 const topK = ref(4);
 const scoreThreshold = ref(0.77);
@@ -89,6 +98,29 @@ watch(
 );
 
 async function askQuestion() {
+  if (!userStore.isLoggedIn) {
+    router.push({ name: "login", query: { redirect: "/" } });
+    return;
+  }
+
+  if (!props.knowledgeBaseId) {
+    try {
+      await ElMessageBox.confirm(
+        "请先创建一个知识库，再开始提问。",
+        "创建一个知识库",
+        {
+          confirmButtonText: "去创建",
+          cancelButtonText: "取消",
+          type: "warning",
+        },
+      );
+      router.push({ name: "me" });
+    } catch {
+      // 用户取消后留在当前页面。
+    }
+    return;
+  }
+
   const trimmedQuestion = question.value.trim();
 
   if (!trimmedQuestion) {

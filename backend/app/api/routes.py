@@ -1,9 +1,10 @@
 from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Header, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import get_current_user, require_admin
 from app.db.session import get_db
 from app.schemas.contracts import (
     ActionResponse,
@@ -24,6 +25,12 @@ from app.schemas.contracts import (
     UserCreate,
     UserRead,
 )
+from app.services.auth_service import (
+    AuthenticationError,
+    DisabledUserError,
+    RegistrationConflictError,
+    auth_service,
+)
 from app.services.document_service import document_service
 from app.services.knowledge_base_service import knowledge_base_service
 from app.services.rag_service import rag_service
@@ -38,31 +45,44 @@ async def health_check() -> dict[str, str]:
 
 
 @router.post("/auth/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
-async def register(payload: UserCreate) -> UserRead:
-    return UserRead(id=1, username=payload.username, email=payload.email)
+async def register(payload: UserCreate, db: Session = Depends(get_db)) -> UserRead:
+    try:
+        return auth_service.register(db, payload)
+    except RegistrationConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.post("/auth/login", response_model=TokenResponse)
-async def login(payload: LoginRequest) -> TokenResponse:
-    return TokenResponse(access_token=f"reference-token-for-{payload.username}")
+async def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
+    try:
+        user = auth_service.authenticate(db, payload)
+    except AuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    except DisabledUserError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return TokenResponse(access_token=auth_service.create_access_token(user))
 
 
 @router.post("/auth/logout", response_model=ActionResponse)
-async def logout() -> ActionResponse:
-    return ActionResponse(status="ok", message="Token invalidation is implemented by the auth service.")
+async def logout(current_user: UserRead = Depends(get_current_user)) -> ActionResponse:
+    return ActionResponse(status="ok", message=f"用户 {current_user.username} 已退出登录。")
 
 
 @router.get("/auth/me", response_model=UserRead)
-async def current_user(user_id: int = Header(default=1, alias="X-User-Id")) -> UserRead:
-    return UserRead(id=user_id, username="reference_user", email="user@example.com")
+async def current_user(current_user: UserRead = Depends(get_current_user)) -> UserRead:
+    return current_user
 
 
 @router.get("/knowledge-bases", response_model=list[KnowledgeBaseRead])
 async def list_knowledge_bases(
-    owner_id: int = Header(default=1, alias="X-User-Id"),
+    current_user: UserRead = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[KnowledgeBaseRead]:
-    return knowledge_base_service.list_for_owner(db, owner_id)
+    return knowledge_base_service.list_for_owner(db, current_user.id)
 
 
 @router.post(
@@ -72,11 +92,11 @@ async def list_knowledge_bases(
 )
 async def create_knowledge_base(
     payload: KnowledgeBaseCreate,
-    owner_id: int = Header(default=1, alias="X-User-Id"),
+    current_user: UserRead = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> KnowledgeBaseRead:
     try:
-        return knowledge_base_service.create(db, owner_id, payload)
+        return knowledge_base_service.create(db, current_user.id, payload)
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="同名知识库已存在。") from exc
@@ -86,11 +106,11 @@ async def create_knowledge_base(
 async def update_knowledge_base(
     knowledge_base_id: int,
     payload: KnowledgeBaseUpdate,
-    owner_id: int = Header(default=1, alias="X-User-Id"),
+    current_user: UserRead = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> KnowledgeBaseRead:
     try:
-        return knowledge_base_service.update(db, knowledge_base_id, owner_id, payload)
+        return knowledge_base_service.update(db, knowledge_base_id, current_user.id, payload)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在。") from exc
     except IntegrityError as exc:
@@ -101,12 +121,15 @@ async def update_knowledge_base(
 @router.delete("/knowledge-bases/{knowledge_base_id}", response_model=ActionResponse)
 async def delete_knowledge_base(
     knowledge_base_id: int,
-    owner_id: int = Header(default=1, alias="X-User-Id"),
+    current_user: UserRead = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ActionResponse:
     try:
-        document_service.delete_vectors_for_knowledge_base(db, knowledge_base_id=knowledge_base_id, owner_id=owner_id)
-        knowledge_base_service.delete(db, knowledge_base_id, owner_id)
+        document_service.delete_knowledge_base(
+            db,
+            knowledge_base_id=knowledge_base_id,
+            owner_id=current_user.id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在。") from exc
 
@@ -117,12 +140,12 @@ async def delete_knowledge_base(
 async def list_documents(
     knowledge_base_id: int | None = None,
     parse_status: str | None = None,
-    owner_id: int = Header(default=1, alias="X-User-Id"),
+    current_user: UserRead = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[DocumentRead]:
     return document_service.list_documents(
         db,
-        owner_id=owner_id,
+        owner_id=current_user.id,
         knowledge_base_id=knowledge_base_id,
         parse_status=parse_status,
     )
@@ -137,13 +160,13 @@ async def upload_document(
     background_tasks: BackgroundTasks,
     knowledge_base_id: int = Form(...),
     file: UploadFile = File(...),
-    owner_id: int = Header(default=1, alias="X-User-Id"),
+    current_user: UserRead = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DocumentRead:
     try:
         document = await document_service.save_upload(
             db=db,
-            owner_id=owner_id,
+            owner_id=current_user.id,
             knowledge_base_id=knowledge_base_id,
             file=file,
         )
@@ -157,11 +180,11 @@ async def upload_document(
 @router.get("/documents/{document_id}", response_model=DocumentRead)
 async def get_document(
     document_id: int,
-    owner_id: int = Header(default=1, alias="X-User-Id"),
+    current_user: UserRead = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DocumentRead:
     try:
-        return document_service.get_owned_document(db, document_id, owner_id)
+        return document_service.get_owned_document(db, document_id, current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在。") from exc
 
@@ -169,11 +192,11 @@ async def get_document(
 @router.delete("/documents/{document_id}", response_model=ActionResponse)
 async def delete_document(
     document_id: int,
-    owner_id: int = Header(default=1, alias="X-User-Id"),
+    current_user: UserRead = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ActionResponse:
     try:
-        document_service.delete_document(db, document_id=document_id, owner_id=owner_id)
+        document_service.delete_document(db, document_id=document_id, owner_id=current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在。") from exc
 
@@ -184,11 +207,11 @@ async def delete_document(
 async def reindex_document(
     document_id: int,
     background_tasks: BackgroundTasks,
-    owner_id: int = Header(default=1, alias="X-User-Id"),
+    current_user: UserRead = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ActionResponse:
     try:
-        document_service.queue_reindex(db, document_id=document_id, owner_id=owner_id)
+        document_service.queue_reindex(db, document_id=document_id, owner_id=current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在。") from exc
 
@@ -199,11 +222,11 @@ async def reindex_document(
 @router.get("/documents/{document_id}/chunks", response_model=list[DocumentChunkRead])
 async def list_document_chunks(
     document_id: int,
-    owner_id: int = Header(default=1, alias="X-User-Id"),
+    current_user: UserRead = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[DocumentChunkRead]:
     try:
-        return document_service.list_chunks(db, document_id=document_id, owner_id=owner_id)
+        return document_service.list_chunks(db, document_id=document_id, owner_id=current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在。") from exc
 
@@ -212,11 +235,16 @@ async def list_document_chunks(
 async def get_document_chunk(
     document_id: int,
     chunk_id: int,
-    owner_id: int = Header(default=1, alias="X-User-Id"),
+    current_user: UserRead = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DocumentChunkRead:
     try:
-        return document_service.get_owned_chunk(db, chunk_id=chunk_id, document_id=document_id, owner_id=owner_id)
+        return document_service.get_owned_chunk(
+            db,
+            chunk_id=chunk_id,
+            document_id=document_id,
+            owner_id=current_user.id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="片段不存在。") from exc
 
@@ -224,11 +252,11 @@ async def get_document_chunk(
 @router.get("/chunks/{chunk_id}", response_model=DocumentChunkRead)
 async def get_chunk(
     chunk_id: int,
-    owner_id: int = Header(default=1, alias="X-User-Id"),
+    current_user: UserRead = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DocumentChunkRead:
     try:
-        return document_service.get_owned_chunk(db, chunk_id=chunk_id, owner_id=owner_id)
+        return document_service.get_owned_chunk(db, chunk_id=chunk_id, owner_id=current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="片段不存在。") from exc
 
@@ -236,9 +264,15 @@ async def get_chunk(
 @router.post("/search", response_model=SearchResponse)
 async def search_documents(
     payload: SearchRequest,
-    user_id: int = Header(default=1, alias="X-User-Id"),
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> SearchResponse:
-    retrieval_result = await retrieval_service.retrieve_for_search(payload, user_id=user_id)
+    try:
+        knowledge_base_service.get_owned(db, payload.knowledge_base_id, current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在。") from exc
+
+    retrieval_result = await retrieval_service.retrieve_for_search(payload, user_id=current_user.id)
     return SearchResponse(
         knowledge_base_id=payload.knowledge_base_id,
         query=payload.query,
@@ -251,21 +285,32 @@ async def search_documents(
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
-    user_id: int = Header(default=1, alias="X-User-Id"),
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> ChatResponse:
-    return await rag_service.answer_question(request, user_id=user_id)
+    try:
+        knowledge_base_service.get_owned(db, request.knowledge_base_id, current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在。") from exc
+    return await rag_service.answer_question(request, user_id=current_user.id)
 
 
 @router.get("/qa-records", response_model=list[QaRecordRead])
-async def list_qa_records(knowledge_base_id: int | None = None) -> list[QaRecordRead]:
+async def list_qa_records(
+    knowledge_base_id: int | None = None,
+    current_user: UserRead = Depends(get_current_user),
+) -> list[QaRecordRead]:
     return []
 
 
 @router.get("/qa-records/{qa_record_id}", response_model=QaRecordRead)
-async def get_qa_record(qa_record_id: int) -> QaRecordRead:
+async def get_qa_record(
+    qa_record_id: int,
+    current_user: UserRead = Depends(get_current_user),
+) -> QaRecordRead:
     return QaRecordRead(
         id=qa_record_id,
-        user_id=1,
+        user_id=current_user.id,
         knowledge_base_id=1,
         question="Reference question",
         answer="Reference answer generated from retrieved chunks.",
@@ -282,12 +327,12 @@ async def get_qa_record(qa_record_id: int) -> QaRecordRead:
 async def submit_feedback(
     qa_record_id: int,
     payload: FeedbackCreate,
-    user_id: int = Header(default=1, alias="X-User-Id"),
+    current_user: UserRead = Depends(get_current_user),
 ) -> FeedbackRead:
     return FeedbackRead(
         id=1,
         qa_record_id=qa_record_id,
-        user_id=user_id,
+        user_id=current_user.id,
         rating=payload.rating,
         comment=payload.comment,
         created_at=datetime.utcnow(),
@@ -295,5 +340,5 @@ async def submit_feedback(
 
 
 @router.get("/admin/feedbacks", response_model=list[FeedbackRead])
-async def list_feedbacks() -> list[FeedbackRead]:
+async def list_feedbacks(admin_user: UserRead = Depends(require_admin)) -> list[FeedbackRead]:
     return []

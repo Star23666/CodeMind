@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
+import { useUserStore } from "../stores/user";
 
 const routes = [
   {
@@ -27,16 +28,19 @@ const routes = [
     path: "/me",
     name: "me",
     component: () => import("../views/MeView.vue"),
+    meta: { requiresAuth: true },
   },
   {
     path: "/login",
     name: "login",
     component: () => import("../views/LoginView.vue"),
+    meta: { guestOnly: true },
   },
   {
     path: "/register",
     name: "register",
     component: () => import("../views/RegisterView.vue"),
+    meta: { guestOnly: true },
   },
   {
     path: "/:pathMatch(.*)*",
@@ -47,4 +51,21 @@ const routes = [
 export const router = createRouter({
   history: createWebHistory(),
   routes,
+});
+
+router.beforeEach((to) => {
+  const userStore = useUserStore();
+
+  if (to.meta.requiresAuth && !userStore.isLoggedIn) {
+    return {
+      name: "login",
+      query: { redirect: to.fullPath },
+    };
+  }
+
+  if (to.meta.guestOnly && userStore.isLoggedIn) {
+    return { name: "home" };
+  }
+
+  return true;
 });

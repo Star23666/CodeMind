@@ -21,7 +21,7 @@ const userStore = reactive({
     return this.user?.username || "未登录用户";
   },
   get userId() {
-    return this.user?.id || 1;
+    return this.user?.id || null;
   },
   setAuth({ token, user }) {
     this.token = token || "";

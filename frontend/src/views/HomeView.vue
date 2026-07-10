@@ -4,32 +4,68 @@
 
     <main class="page">
       <section class="hero">
-        <el-tag effect="plain">个人知识库 AI 助手</el-tag>
-        <h1>首页只保留提问入口</h1>
+        <el-tag effect="plain">你的私人知识库 AI</el-tag>
+        <h1>让每一份资料，都成为随时可问的知识</h1>
         <p>
-          登录后可以基于自己的资料提问，回答会带上可跳转的来源片段。
-          文档上传和个人资料放到独立页面里，首页保持干净。
+          上传文档，沉淀属于你的知识空间。CodeMind 从资料中寻找依据，
+          为你生成清晰、可信、可追溯的回答。
         </p>
       </section>
 
-      <ChatPanel :knowledge-base-id="knowledgeBaseId" />
+      <section v-if="userStore.isLoggedIn" class="knowledge-picker">
+        <div>
+          <p>当前知识库</p>
+          <h2>{{ currentKnowledgeBase?.name || "尚未创建知识库" }}</h2>
+        </div>
+        <el-select
+          v-model="knowledgeBaseId"
+          placeholder="请选择知识库"
+          :disabled="!knowledgeBases.length"
+          class="knowledge-select"
+        >
+          <el-option
+            v-for="base in knowledgeBases"
+            :key="base.id"
+            :label="base.name"
+            :value="base.id"
+          />
+        </el-select>
+        <el-button v-if="!knowledgeBases.length" type="primary" plain @click="goCreateKnowledgeBase">
+          创建知识库
+        </el-button>
+      </section>
+
+      <ChatPanel
+        :knowledge-base-id="knowledgeBaseId"
+        :knowledge-base-name="currentKnowledgeBase?.name || ''"
+      />
     </main>
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
 import { getHealth } from "../api/health";
 import { listKnowledgeBases } from "../api/knowledgeBases";
 import ChatPanel from "../components/chat/ChatPanel.vue";
 import AppHeader from "../components/layout/AppHeader.vue";
+import { useUserStore } from "../stores/user";
 
+const userStore = useUserStore();
+const router = useRouter();
 const healthOnline = ref(false);
-const knowledgeBaseId = ref(1);
+const knowledgeBases = ref([]);
+const knowledgeBaseId = ref(null);
+const currentKnowledgeBase = computed(() =>
+  knowledgeBases.value.find((base) => base.id === knowledgeBaseId.value),
+);
 
 onMounted(() => {
   checkHealth();
-  loadDefaultKnowledgeBase();
+  if (userStore.isLoggedIn) {
+    loadDefaultKnowledgeBase();
+  }
 });
 
 async function checkHealth() {
@@ -43,11 +79,16 @@ async function checkHealth() {
 
 async function loadDefaultKnowledgeBase() {
   try {
-    const bases = await listKnowledgeBases();
-    knowledgeBaseId.value = bases[0]?.id || 1;
+    knowledgeBases.value = await listKnowledgeBases();
+    knowledgeBaseId.value = knowledgeBases.value[0]?.id ?? null;
   } catch {
-    knowledgeBaseId.value = 1;
+    knowledgeBases.value = [];
+    knowledgeBaseId.value = null;
   }
+}
+
+function goCreateKnowledgeBase() {
+  router.push({ name: "me" });
 }
 </script>
 
@@ -68,6 +109,43 @@ async function loadDefaultKnowledgeBase() {
   display: grid;
   gap: 12px;
   text-align: center;
+}
+
+.knowledge-picker {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 20px;
+  border: 1px solid var(--cm-border);
+  border-radius: var(--cm-radius);
+  background: var(--cm-surface);
+  box-shadow: var(--cm-shadow);
+}
+
+.knowledge-picker > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.knowledge-picker p {
+  width: auto;
+  margin: 0 0 5px;
+  color: var(--cm-primary);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.knowledge-picker h2 {
+  margin: 0;
+  overflow: hidden;
+  color: var(--cm-heading);
+  font-size: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-select {
+  width: min(280px, 100%);
 }
 
 .hero :deep(.el-tag) {
@@ -97,6 +175,15 @@ p {
   .page {
     width: min(100% - 20px, 920px);
     margin-top: 32px;
+  }
+
+  .knowledge-picker {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .knowledge-select {
+    width: 100%;
   }
 }
 </style>

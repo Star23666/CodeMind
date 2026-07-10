@@ -3,6 +3,16 @@
     <AppHeader :health-online="healthOnline" />
 
     <main class="page">
+      <el-alert
+        v-if="!userStore.isLoggedIn"
+        title="当前为游客浏览模式"
+        description="你可以查看页面；上传、刷新文档或访问个人数据时会先跳转到登录页面。"
+        type="info"
+        show-icon
+        :closable="false"
+        class="guest-alert"
+      />
+
       <section class="page-head">
         <div>
           <el-tag effect="plain">我的资料</el-tag>
@@ -45,7 +55,7 @@
             <el-table
               v-loading="documentsLoading"
               :data="documents"
-              empty-text="暂无文档，先上传一份资料。"
+              :empty-text="knowledgeBaseId ? '暂无文档，先上传一份资料。' : '请先创建并选择知识库。'"
               class="documents-table"
             >
               <el-table-column label="文件" min-width="220">
@@ -62,7 +72,7 @@
                 </template>
               </el-table-column>
               <el-table-column prop="chunk_count" label="片段" width="90" />
-              <el-table-column label="操作" width="170" fixed="right">
+              <el-table-column label="操作" width="230" fixed="right">
                 <template #default="{ row }">
                   <el-button link type="primary" @click="openDocument(row)">查看</el-button>
                   <el-button
@@ -73,6 +83,7 @@
                   >
                     重建
                   </el-button>
+                  <el-button link type="danger" @click="removeDocument(row)">删除</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -85,18 +96,20 @@
 
 <script setup>
 import { onMounted, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { useRouter } from "vue-router";
 import { getHealth } from "../api/health";
 import { listKnowledgeBases } from "../api/knowledgeBases";
-import { listDocuments, reindexDocument } from "../api/documents";
+import { deleteDocument, listDocuments, reindexDocument } from "../api/documents";
 import UploadPanel from "../components/documents/UploadPanel.vue";
 import KnowledgeBasePanel from "../components/knowledge/KnowledgeBasePanel.vue";
 import AppHeader from "../components/layout/AppHeader.vue";
+import { useUserStore } from "../stores/user";
 
 const router = useRouter();
+const userStore = useUserStore();
 const healthOnline = ref(false);
-const knowledgeBaseId = ref(1);
+const knowledgeBaseId = ref(null);
 const knowledgeBases = ref([]);
 const knowledgeLoaded = ref(false);
 const documents = ref([]);
@@ -104,12 +117,18 @@ const documentsLoading = ref(false);
 
 onMounted(async () => {
   checkHealth();
+  if (!userStore.isLoggedIn) {
+    knowledgeLoaded.value = true;
+    return;
+  }
   await loadKnowledgeBases();
   await loadDocuments();
 });
 
 watch(knowledgeBaseId, () => {
-  loadDocuments();
+  if (userStore.isLoggedIn) {
+    loadDocuments();
+  }
 });
 
 async function checkHealth() {
@@ -124,17 +143,22 @@ async function checkHealth() {
 async function loadKnowledgeBases() {
   try {
     knowledgeBases.value = await listKnowledgeBases();
-    if (knowledgeBases.value.length) {
-      knowledgeBaseId.value = knowledgeBases.value[0].id;
-    }
+    const selectionStillExists = knowledgeBases.value.some((base) => base.id === knowledgeBaseId.value);
+    knowledgeBaseId.value = selectionStillExists ? knowledgeBaseId.value : (knowledgeBases.value[0]?.id ?? null);
   } catch {
     knowledgeBases.value = [];
+    knowledgeBaseId.value = null;
   } finally {
     knowledgeLoaded.value = true;
   }
 }
 
 async function loadDocuments() {
+  if (!knowledgeBaseId.value) {
+    documents.value = [];
+    return;
+  }
+
   documentsLoading.value = true;
   try {
     documents.value = await listDocuments({ knowledge_base_id: knowledgeBaseId.value });
@@ -157,6 +181,27 @@ async function rebuildIndex(row) {
     loadDocuments();
   } catch (error) {
     ElMessage.error(error.message);
+  }
+}
+
+async function removeDocument(row) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除文档“${row.file_name}”吗？原始文件、文本片段和向量数据都会被删除，且无法恢复。`,
+      "确认删除文档",
+      {
+        confirmButtonText: "确定删除",
+        cancelButtonText: "取消",
+        type: "warning",
+      },
+    );
+    await deleteDocument(row.id);
+    ElMessage.success("文档已删除。");
+    await loadDocuments();
+  } catch (error) {
+    if (error !== "cancel" && error !== "close") {
+      ElMessage.error(error.message || "删除文档失败。");
+    }
   }
 }
 
@@ -210,6 +255,10 @@ function formatSize(size) {
 .page {
   width: min(1180px, calc(100% - 32px));
   margin: 44px auto 0;
+}
+
+.guest-alert {
+  margin-bottom: 20px;
 }
 
 .page-head,

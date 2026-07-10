@@ -74,7 +74,17 @@
                 <strong>{{ base.name }}</strong>
                 <span>{{ base.description || "暂无描述" }}</span>
               </div>
-              <el-tag effect="plain">{{ base.visibility }}</el-tag>
+              <div class="kb-actions">
+                <el-tag effect="plain">私人</el-tag>
+                <el-button
+                  link
+                  type="danger"
+                  :loading="deletingKnowledgeBaseId === base.id"
+                  @click="removeKnowledgeBase(base)"
+                >
+                  删除
+                </el-button>
+              </div>
             </div>
             <el-empty v-if="!knowledgeBases.length" description="暂无知识库。" />
           </div>
@@ -86,12 +96,12 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { useRouter } from "vue-router";
 import { logoutUser } from "../api/auth";
 import { getHealth } from "../api/health";
 import { listDocuments } from "../api/documents";
-import { createKnowledgeBase, listKnowledgeBases } from "../api/knowledgeBases";
+import { createKnowledgeBase, deleteKnowledgeBase, listKnowledgeBases } from "../api/knowledgeBases";
 import AppHeader from "../components/layout/AppHeader.vue";
 import { useUserStore } from "../stores/user";
 
@@ -101,6 +111,7 @@ const healthOnline = ref(false);
 const knowledgeBases = ref([]);
 const documents = ref([]);
 const creating = ref(false);
+const deletingKnowledgeBaseId = ref(null);
 const kbForm = reactive({
   name: "",
   description: "",
@@ -154,6 +165,30 @@ async function createKb() {
     ElMessage.error(error.message);
   } finally {
     creating.value = false;
+  }
+}
+
+async function removeKnowledgeBase(base) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除知识库“${base.name}”吗？其中的所有文档、文本片段和向量数据都会被删除，且无法恢复。`,
+      "确认删除知识库",
+      {
+        confirmButtonText: "确定删除",
+        cancelButtonText: "取消",
+        type: "warning",
+      },
+    );
+    deletingKnowledgeBaseId.value = base.id;
+    await deleteKnowledgeBase(base.id);
+    ElMessage.success("知识库已删除。");
+    await loadData();
+  } catch (error) {
+    if (error !== "cancel" && error !== "close") {
+      ElMessage.error(error.message || "删除知识库失败。");
+    }
+  } finally {
+    deletingKnowledgeBaseId.value = null;
   }
 }
 
@@ -324,9 +359,15 @@ async function logout() {
   background: var(--cm-surface-soft);
 }
 
-.kb-item div {
+.kb-item > div:first-child {
   display: grid;
   gap: 6px;
+}
+
+.kb-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .kb-item strong {

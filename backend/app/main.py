@@ -24,13 +24,13 @@ def create_app() -> FastAPI:
             ctx = error.get("ctx", {})
 
             # 常见验证类型 → 中文提示
-            if error["type"] == "value_error.missing":
+            if error["type"] in {"missing", "value_error.missing"}:
                 msg = f"缺少必填字段：{field}"
             elif error["type"] == "string_too_short":
                 msg = f"“{field}”长度不能少于{ctx.get('min_length', '?')}个字符"
             elif error["type"] == "string_too_long":
                 msg = f"“{field}”长度不能超过{ctx.get('max_length', '?')}个字符"
-            elif error["type"] == "value_error.email":
+            elif error["type"] in {"value_error.email", "value_error.email_address"}:
                 msg = "邮箱格式不正确"
             # 其他类型可继续扩展...
             errors.append(msg)

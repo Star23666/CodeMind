@@ -1,18 +1,15 @@
 import axios from "axios";
-import { TOKEN_KEY, USER_KEY } from "../stores/user";
+import { TOKEN_KEY } from "../stores/user";
 
 export const request = axios.create({
   baseURL: "/api",
   timeout: 20000,
 });
 
-function readStoredUserId() {
-  try {
-    const user = JSON.parse(localStorage.getItem(USER_KEY) || "null");
-    return user?.id || 1;
-  } catch {
-    return 1;
-  }
+let unauthorizedHandler = null;
+
+export function setUnauthorizedHandler(handler) {
+  unauthorizedHandler = handler;
 }
 
 request.interceptors.request.use((config) => {
@@ -23,18 +20,23 @@ request.interceptors.request.use((config) => {
     config.headers.Authorization = `Bearer ${token}`;
   }
 
-  config.headers["X-User-Id"] = config.headers["X-User-Id"] || String(readStoredUserId());
   return config;
 });
 
 request.interceptors.response.use(
   (response) => response.data,
   (error) => {
+    if (error.response?.status === 401) {
+      unauthorizedHandler?.();
+    }
+
     const detail = error.response?.data?.detail;
     const message = Array.isArray(detail)
       ? detail.map((item) => item.msg || item.message || String(item)).join("；")
       : detail || error.message || "请求失败，请稍后重试。";
 
-    return Promise.reject(new Error(message));
+    const requestError = new Error(message);
+    requestError.status = error.response?.status;
+    return Promise.reject(requestError);
   },
 );

@@ -1,7 +1,8 @@
 from datetime import datetime
 from enum import Enum
+import re
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class UserRole(str, Enum):
@@ -31,10 +32,38 @@ class UserCreate(BaseModel):
     email: str = Field(..., min_length=5, max_length=120)
     password: str = Field(..., min_length=8, max_length=128)
 
+    @field_validator("username", mode="before")
+    @classmethod
+    def normalize_username(cls, value: str) -> str:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        if normalized and not re.fullmatch(r"[\w\u4e00-\u9fff.-]+", normalized):
+            raise ValueError("用户名只能包含中文、字母、数字、下划线、点或短横线")
+        return normalized
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip().lower()
+        if normalized and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", normalized):
+            raise ValueError("邮箱格式不正确")
+        return normalized
+
 
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=120)
     password: str = Field(..., min_length=1, max_length=128)
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def normalize_identity(cls, value: str) -> str:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        return normalized.lower() if "@" in normalized else normalized
 
 
 class TokenResponse(BaseModel):
@@ -55,11 +84,25 @@ class KnowledgeBaseCreate(BaseModel):
     description: str | None = None
     visibility: Visibility = Visibility.PRIVATE
 
+    @field_validator("visibility")
+    @classmethod
+    def private_only(cls, value: Visibility) -> Visibility:
+        if value != Visibility.PRIVATE:
+            raise ValueError("目前仅支持私人知识库")
+        return value
+
 
 class KnowledgeBaseUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = None
     visibility: Visibility | None = None
+
+    @field_validator("visibility")
+    @classmethod
+    def private_only(cls, value: Visibility | None) -> Visibility | None:
+        if value not in {None, Visibility.PRIVATE}:
+            raise ValueError("目前仅支持私人知识库")
+        return value
 
 
 class KnowledgeBaseRead(BaseModel):

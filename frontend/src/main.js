@@ -4,8 +4,40 @@ import 'element-plus/dist/index.css'
 import './styles/base.css'
 import App from './App.vue'
 import { router } from './router'
+import { getCurrentUser } from './api/auth'
+import { setUnauthorizedHandler } from './api/request'
+import { useUserStore } from './stores/user'
 
 const app = createApp(App)
-app.use(ElementPlus)
-app.use(router)
-app.mount('#app')
+const userStore = useUserStore()
+
+async function bootstrap() {
+  if (userStore.token) {
+    try {
+      userStore.updateUser(await getCurrentUser())
+    } catch {
+      userStore.clearAuth()
+    }
+  }
+
+  setUnauthorizedHandler(() => {
+    const currentRoute = router.currentRoute.value
+    const isAuthPage = currentRoute.name === 'login' || currentRoute.name === 'register'
+    const redirect = isAuthPage ? undefined : currentRoute.fullPath
+    userStore.clearAuth()
+
+    if (!isAuthPage) {
+      router.replace({
+        name: 'login',
+        query: redirect ? { redirect } : {},
+      })
+    }
+  })
+
+  app.use(ElementPlus)
+  app.use(router)
+  await router.isReady()
+  app.mount('#app')
+}
+
+bootstrap()

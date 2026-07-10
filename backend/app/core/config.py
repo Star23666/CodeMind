@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     # JWT
     jwt_secret_key: str = "change-me-in-production-use-a-long-random-string"
     jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 60 * 24 * 7  # 7 days
+    jwt_expire_minutes: int = 60 * 3  # 3 hours
 
     upload_dir: str = "storage/uploads"
     max_upload_size_mb: int = 50
