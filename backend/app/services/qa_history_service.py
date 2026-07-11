@@ -1,7 +1,12 @@
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.schemas.contracts import ChatRequest, QaRecordRead, SourceReference
+from app.schemas.contracts import (
+    ChatRequest,
+    HistoricalSourceReference,
+    QaRecordRead,
+    SourceReference,
+)
 
 
 class QaHistoryService:
@@ -46,11 +51,13 @@ class QaHistoryService:
                         """
                         INSERT INTO qa_sources (
                             qa_record_id, document_id, chunk_id,
-                            rank_no, score, source_text
+                            rank_no, score, source_text,
+                            file_name, chunk_index, page_no
                         )
                         VALUES (
                             :qa_record_id, :document_id, :chunk_id,
-                            :rank_no, :score, :source_text
+                            :rank_no, :score, :source_text,
+                            :file_name, :chunk_index, :page_no
                         )
                         """
                     ),
@@ -61,6 +68,9 @@ class QaHistoryService:
                         "rank_no": rank_no,
                         "score": source.score,
                         "source_text": source.source_text,
+                        "file_name": source.file_name,
+                        "chunk_index": source.chunk_index,
+                        "page_no": source.page_no,
                     },
                 )
 
@@ -122,11 +132,13 @@ class QaHistoryService:
         source_rows = db.execute(
             text(
                 """
-                SELECT s.document_id, s.chunk_id, d.file_name,
-                       c.chunk_index, c.page_no, s.score, s.source_text
+                SELECT s.document_id, s.chunk_id, s.file_name,
+                       s.chunk_index, s.page_no, s.score, s.source_text,
+                       d.id AS live_document_id, c.id AS live_chunk_id
                 FROM qa_sources s
-                JOIN documents d ON d.id = s.document_id
-                JOIN document_chunks c ON c.id = s.chunk_id
+                LEFT JOIN documents d ON d.id = s.document_id
+                LEFT JOIN document_chunks c
+                  ON c.id = s.chunk_id AND c.document_id = d.id
                 WHERE s.qa_record_id = :qa_record_id
                 ORDER BY s.rank_no ASC, s.id ASC
                 """
@@ -141,7 +153,7 @@ class QaHistoryService:
         self,
         row,
         *,
-        sources: list[SourceReference] | None = None,
+        sources: list[HistoricalSourceReference] | None = None,
     ) -> QaRecordRead:
         return QaRecordRead(
             id=int(row["id"]),
@@ -155,10 +167,14 @@ class QaHistoryService:
             created_at=row["created_at"],
         )
 
-    def _to_source(self, row) -> SourceReference:
-        document_id = int(row["document_id"])
-        chunk_id = int(row["chunk_id"])
-        return SourceReference(
+    def _to_source(self, row) -> HistoricalSourceReference:
+        source_is_available = (
+            row["live_document_id"] is not None and row["live_chunk_id"] is not None
+        )
+        document_id = int(row["document_id"]) if source_is_available else None
+        chunk_id = int(row["chunk_id"]) if source_is_available else None
+        jump_url = f"/documents/{document_id}/chunks/{chunk_id}" if source_is_available else None
+        return HistoricalSourceReference(
             document_id=document_id,
             chunk_id=chunk_id,
             file_name=row["file_name"],
@@ -166,7 +182,7 @@ class QaHistoryService:
             page_no=int(row["page_no"]) if row["page_no"] is not None else None,
             score=float(row["score"]) if row["score"] is not None else None,
             source_text=row["source_text"],
-            jump_url=f"/documents/{document_id}/chunks/{chunk_id}",
+            jump_url=jump_url,
         )
 
 

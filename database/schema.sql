@@ -105,11 +105,14 @@ CREATE TABLE IF NOT EXISTS qa_records (
 CREATE TABLE IF NOT EXISTS qa_sources (
   id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
   qa_record_id BIGINT UNSIGNED NOT NULL,
-  document_id BIGINT UNSIGNED NOT NULL,
-  chunk_id BIGINT UNSIGNED NOT NULL,
+  document_id BIGINT UNSIGNED NULL,
+  chunk_id BIGINT UNSIGNED NULL,
   rank_no INT UNSIGNED NOT NULL,
   score DECIMAL(7,6) NULL,
   source_text TEXT NOT NULL,
+  file_name VARCHAR(255) NOT NULL,
+  chunk_index INT UNSIGNED NOT NULL,
+  page_no INT UNSIGNED NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uk_qa_sources_record_chunk (qa_record_id, chunk_id),
   KEY idx_qa_sources_qa_record_id (qa_record_id),
@@ -120,10 +123,10 @@ CREATE TABLE IF NOT EXISTS qa_sources (
     ON DELETE CASCADE,
   CONSTRAINT fk_qa_sources_document
     FOREIGN KEY (document_id) REFERENCES documents(id)
-    ON DELETE CASCADE,
+    ON DELETE SET NULL,
   CONSTRAINT fk_qa_sources_chunk
     FOREIGN KEY (chunk_id) REFERENCES document_chunks(id)
-    ON DELETE CASCADE,
+    ON DELETE SET NULL,
   CONSTRAINT chk_qa_sources_score CHECK (score IS NULL OR (score >= -1 AND score <= 1))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
