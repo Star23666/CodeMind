@@ -76,6 +76,33 @@ class QaHistoryServiceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.service.get_qa_record(self.db, qa_record_id=record_id, user_id=2)
 
+    def test_source_snapshot_survives_document_deletion(self):
+        record_id = run_async(
+            self.service.save_qa_record(
+                db=self.db,
+                user_id=1,
+                request=ChatRequest(knowledge_base_id=1, question="什么是进程？"),
+                rewritten_question=None,
+                answer="进程是资源分配单位。[来源1]",
+                sources=[self._source()],
+            )
+        )
+
+        self.db.execute(text("DELETE FROM documents WHERE id = 1"))
+        self.db.commit()
+
+        detail = self.service.get_qa_record(self.db, qa_record_id=record_id, user_id=1)
+        source = detail.sources[0]
+
+        self.assertEqual(detail.source_count, 1)
+        self.assertIsNone(source.document_id)
+        self.assertIsNone(source.chunk_id)
+        self.assertIsNone(source.jump_url)
+        self.assertEqual(source.file_name, "操作系统笔记.pdf")
+        self.assertEqual(source.chunk_index, 3)
+        self.assertEqual(source.page_no, 12)
+        self.assertEqual(source.source_text, self._source().source_text)
+
     def test_source_insert_failure_rolls_back_record(self):
         invalid_source = self._source()
         invalid_source.document_id = 999
@@ -148,7 +175,7 @@ class QaHistoryServiceTest(unittest.TestCase):
             """
             CREATE TABLE document_chunks (
                 id INTEGER PRIMARY KEY,
-                document_id INTEGER NOT NULL REFERENCES documents(id),
+                document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
                 knowledge_base_id INTEGER NOT NULL REFERENCES knowledge_bases(id),
                 chunk_index INTEGER NOT NULL,
                 chunk_text TEXT NOT NULL,
@@ -171,11 +198,14 @@ class QaHistoryServiceTest(unittest.TestCase):
             CREATE TABLE qa_sources (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 qa_record_id INTEGER NOT NULL REFERENCES qa_records(id) ON DELETE CASCADE,
-                document_id INTEGER NOT NULL REFERENCES documents(id),
-                chunk_id INTEGER NOT NULL REFERENCES document_chunks(id),
+                document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+                chunk_id INTEGER REFERENCES document_chunks(id) ON DELETE SET NULL,
                 rank_no INTEGER NOT NULL,
                 score NUMERIC,
                 source_text TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                page_no INTEGER,
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """,

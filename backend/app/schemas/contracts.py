@@ -161,6 +161,17 @@ class SourceReference(BaseModel):
     jump_url: str
 
 
+class HistoricalSourceReference(BaseModel):
+    document_id: int | None = None
+    chunk_id: int | None = None
+    file_name: str
+    chunk_index: int
+    page_no: int | None = None
+    score: float | None = Field(default=None, ge=-1, le=1)
+    source_text: str
+    jump_url: str | None = None
+
+
 class SearchResponse(BaseModel):
     knowledge_base_id: int
     query: str
@@ -191,7 +202,7 @@ class QaRecordRead(BaseModel):
     rewritten_question: str | None = None
     answer: str
     source_count: int = 0
-    sources: list[SourceReference] = Field(default_factory=list)
+    sources: list[HistoricalSourceReference] = Field(default_factory=list)
     created_at: datetime | None = None
 
 

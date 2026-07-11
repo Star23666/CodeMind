@@ -20,7 +20,8 @@
         <div class="footer">
           <span>chunk {{ source.chunk_index ?? "-" }}</span>
           <span v-if="source.page_no">第 {{ source.page_no }} 页</span>
-          <RouterLink :to="sourceTo(source)">查看片段</RouterLink>
+          <RouterLink v-if="hasSourceTarget(source)" :to="sourceTo(source)">查看片段</RouterLink>
+          <span v-else class="source-unavailable">原文已删除</span>
         </div>
       </div>
     </article>
@@ -50,7 +51,17 @@ function sourceTo(source) {
     };
   }
 
-  return { name: "documents" };
+  return null;
+}
+
+function hasSourceTarget(source) {
+  return Boolean(
+    source.jump_url ||
+      (source.document_id !== null &&
+        source.document_id !== undefined &&
+        source.chunk_id !== null &&
+        source.chunk_id !== undefined),
+  );
 }
 
 function formatScore(score) {
@@ -140,6 +151,11 @@ p {
 
 .footer a {
   color: var(--cm-primary);
+  font-weight: 700;
+}
+
+.source-unavailable {
+  color: var(--cm-muted);
   font-weight: 700;
 }
 
