@@ -8,7 +8,7 @@ CodeMind 是一个面向计算机知识学习场景的 RAG 知识库问答系统
 - 后端：FastAPI
 - 业务数据库：MySQL
 - 向量数据库：Chroma
-- 大模型能力：在线 LLM API + Embedding API
+- 大模型能力：在线 LLM API + 在线 Embedding API（不使用本地模拟向量）
 
 ## 核心功能
 

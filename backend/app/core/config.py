@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     embedding_api_key: str = ""
     embedding_base_url: str = ""
     embedding_model: str = ""
+    embedding_timeout_seconds: float = 30.0
+    embedding_max_retries: int = 1
 
     # JWT
     jwt_secret_key: str = "change-me-in-production-use-a-long-random-string"

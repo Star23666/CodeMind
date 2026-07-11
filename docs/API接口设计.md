@@ -328,6 +328,10 @@ POST /api/chat
 6. 调用在线 LLM API 生成回答。
 7. 将回答写入 `qa_records`，来源写入 `qa_sources`。
 
+文档入库和问题检索均强制使用在线 Embedding API，不提供本地向量降级。
+服务端必须配置 `EMBEDDING_API_KEY` 和 `EMBEDDING_MODEL`；连接失败、认证失败或
+响应向量无效时，本次入库或检索立即失败并返回明确错误，不会写入模拟向量。
+
 响应：
 
 ```json

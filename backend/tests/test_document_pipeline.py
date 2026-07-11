@@ -2,6 +2,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy import create_engine, text
@@ -37,6 +38,25 @@ class EmptyResponseEmbeddingClient(EmbeddingClient):
         return []
 
 
+class RecordingEmbeddings:
+    def __init__(self) -> None:
+        self.kwargs = None
+
+    def create(self, **kwargs):
+        self.kwargs = kwargs
+        return SimpleNamespace(
+            data=[
+                SimpleNamespace(index=1, embedding=[0.3, 0.4]),
+                SimpleNamespace(index=0, embedding=[0.1, 0.2]),
+            ]
+        )
+
+
+class RecordingEmbeddingClient:
+    def __init__(self) -> None:
+        self.embeddings = RecordingEmbeddings()
+
+
 class FakeVectorStore:
     def delete_ids(self, ids: list[str]) -> None:
         return None
@@ -64,14 +84,46 @@ class DocumentPipelineTest(unittest.TestCase):
         self.assertLess(chunks[0].start_offset, chunks[0].end_offset)
         self.assertEqual(chunks[1].chunk_index, 1)
 
-    def test_local_embedding_is_deterministic_and_normalized(self):
-        client = EmbeddingClient()
-        first = client._embed_locally("进程和线程共享资源")
-        second = client._embed_locally("进程和线程共享资源")
+    def test_missing_online_config_never_falls_back_locally(self):
+        import app.services.embedding_client as embedding_module
 
-        self.assertEqual(first, second)
-        self.assertEqual(len(first), client.local_dimension)
-        self.assertAlmostEqual(sum(value * value for value in first), 1.0, places=6)
+        client = EmbeddingClient()
+        with (
+            patch.object(embedding_module.settings, "embedding_api_key", ""),
+            patch.object(embedding_module.settings, "embedding_model", ""),
+            patch.object(client, "_embed_with_api") as api_call,
+        ):
+            with self.assertRaises(EmbeddingServiceError) as context:
+                client.embed_texts(["进程和线程共享资源"])
+
+        api_call.assert_not_called()
+        self.assertIn("在线服务未配置", str(context.exception))
+
+    def test_online_provider_uses_timeout_retries_and_preserves_response_order(self):
+        import app.services.embedding_client as embedding_module
+
+        recording_client = RecordingEmbeddingClient()
+        constructor_kwargs = {}
+
+        def make_client(**kwargs):
+            constructor_kwargs.update(kwargs)
+            return recording_client
+
+        with (
+            patch.object(embedding_module.settings, "embedding_api_key", "test-key"),
+            patch.object(embedding_module.settings, "embedding_model", "test-model"),
+            patch.object(embedding_module.settings, "embedding_base_url", "https://example.test/v1"),
+            patch.object(embedding_module.settings, "embedding_timeout_seconds", 12.0),
+            patch.object(embedding_module.settings, "embedding_max_retries", 2),
+            patch("openai.OpenAI", side_effect=make_client),
+        ):
+            vectors = EmbeddingClient().embed_texts(["第一段", "第二段"])
+
+        self.assertEqual(vectors, [[0.1, 0.2], [0.3, 0.4]])
+        self.assertEqual(constructor_kwargs["timeout"], 12.0)
+        self.assertEqual(constructor_kwargs["max_retries"], 2)
+        self.assertEqual(recording_client.embeddings.kwargs["model"], "test-model")
+        self.assertEqual(recording_client.embeddings.kwargs["input"], ["第一段", "第二段"])
 
     def test_embedding_api_failure_returns_controlled_error(self):
         import app.services.embedding_client as embedding_module
@@ -110,7 +162,7 @@ class DocumentPipelineTest(unittest.TestCase):
             with self.assertRaises(EmbeddingServiceError) as context:
                 EmbeddingClient().embed_texts(["测试文本"])
 
-        self.assertIn("配置不完整", str(context.exception))
+        self.assertIn("在线服务未配置", str(context.exception))
 
     def test_empty_embedding_response_returns_clear_error(self):
         import app.services.embedding_client as embedding_module
@@ -122,7 +174,22 @@ class DocumentPipelineTest(unittest.TestCase):
             with self.assertRaises(EmbeddingServiceError) as context:
                 EmptyResponseEmbeddingClient().embed_texts(["测试文本"])
 
-        self.assertIn("未返回有效向量", str(context.exception))
+        self.assertIn("向量数量不正确", str(context.exception))
+
+    def test_blank_text_is_rejected_before_online_request(self):
+        import app.services.embedding_client as embedding_module
+
+        client = EmbeddingClient()
+        with (
+            patch.object(embedding_module.settings, "embedding_api_key", "test-key"),
+            patch.object(embedding_module.settings, "embedding_model", "test-model"),
+            patch.object(client, "_embed_with_api") as api_call,
+        ):
+            with self.assertRaises(EmbeddingServiceError) as context:
+                client.embed_texts(["   "])
+
+        api_call.assert_not_called()
+        self.assertIn("待向量化文本为空", str(context.exception))
 
     def test_empty_document_returns_parse_error(self):
         parser = DocumentParser()
