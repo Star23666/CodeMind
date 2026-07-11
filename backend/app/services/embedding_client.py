@@ -8,6 +8,14 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+class EmbeddingServiceError(RuntimeError):
+    """可安全返回给用户的 Embedding 服务异常。"""
+
+
+class EmbeddingAuthenticationError(EmbeddingServiceError):
+    """Embedding 服务认证失败。"""
+
+
 class EmbeddingClient:
     local_dimension = 384
 
@@ -15,23 +23,47 @@ class EmbeddingClient:
         if not texts:
             return []
 
-        if settings.embedding_api_key and settings.embedding_model:
-            try:
-                return self._embed_with_api(texts)
-            except Exception as exc:
-                logger.warning("Embedding API unavailable, falling back to local embeddings: %s", exc)
+        if not settings.embedding_api_key and not settings.embedding_model:
+            return [self._embed_locally(text) for text in texts]
 
-        return [self._embed_locally(text) for text in texts]
+        if not settings.embedding_api_key or not settings.embedding_model:
+            raise EmbeddingServiceError(
+                "Embedding 服务配置不完整，请检查服务端的 API Key 和模型名称。"
+            )
+
+        try:
+            vectors = self._embed_with_api(texts)
+            if len(vectors) != len(texts) or any(not vector for vector in vectors):
+                raise EmbeddingServiceError(
+                    "Embedding 服务未返回有效向量，请检查模型配置后重试。"
+                )
+            return vectors
+        except EmbeddingServiceError:
+            raise
+        except Exception as exc:
+            logger.exception("Embedding API request failed")
+            raise EmbeddingServiceError("Embedding 服务调用失败，请稍后重试。") from exc
 
     def _embed_with_api(self, texts: list[str]) -> list[list[float]]:
-        from openai import OpenAI
+        from openai import APIStatusError, AuthenticationError, OpenAI
 
         client_kwargs = {"api_key": settings.embedding_api_key}
         if settings.embedding_base_url:
             client_kwargs["base_url"] = settings.embedding_base_url
 
         client = OpenAI(**client_kwargs)
-        response = client.embeddings.create(model=settings.embedding_model, input=texts)
+        try:
+            response = client.embeddings.create(model=settings.embedding_model, input=texts)
+        except AuthenticationError as exc:
+            raise EmbeddingAuthenticationError(
+                "Embedding API Key 无效，请检查服务端配置。"
+            ) from exc
+        except APIStatusError as exc:
+            if exc.status_code in {401, 403}:
+                raise EmbeddingAuthenticationError(
+                    "Embedding API Key 无效或无权访问当前模型，请检查服务端配置。"
+                ) from exc
+            raise
         return [list(item.embedding) for item in response.data]
 
     def _embed_locally(self, text: str) -> list[float]:

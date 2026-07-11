@@ -8,6 +8,10 @@ from pypdf import PdfReader
 from app.services.text_splitter import TextBlock
 
 
+class DocumentParseError(ValueError):
+    """文档内容无法被解析。"""
+
+
 class _HtmlTextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -33,16 +37,31 @@ class DocumentParser:
         path = Path(file_path)
         normalized_type = file_type.lower().lstrip(".")
 
-        if normalized_type == "pdf":
-            return self._parse_pdf(path)
-        if normalized_type == "docx":
-            return self._parse_docx(path)
-        if normalized_type in {"md", "markdown"}:
-            return [TextBlock(text=self._parse_markdown(path))]
-        if normalized_type == "txt":
-            return [TextBlock(text=self._read_text(path))]
+        try:
+            if normalized_type == "pdf":
+                blocks = self._parse_pdf(path)
+            elif normalized_type == "docx":
+                blocks = self._parse_docx(path)
+            elif normalized_type in {"md", "markdown"}:
+                blocks = [TextBlock(text=self._parse_markdown(path))]
+            elif normalized_type == "txt":
+                blocks = [TextBlock(text=self._read_text(path))]
+            else:
+                raise DocumentParseError(f"不支持的文档格式：{file_type}。")
+        except DocumentParseError:
+            raise
+        except FileNotFoundError as exc:
+            raise DocumentParseError("文档解析失败：找不到已上传的文件，请重新上传。") from exc
+        except Exception as exc:
+            raise DocumentParseError(
+                "文档解析失败：文件可能已损坏、被加密或内容格式不正确。"
+            ) from exc
 
-        raise ValueError(f"Unsupported file type: {file_type}")
+        if not any(block.text.strip() for block in blocks):
+            raise DocumentParseError(
+                "文档解析失败：未提取到可用文字；扫描版 PDF 请先进行 OCR 识别。"
+            )
+        return blocks
 
     def _parse_pdf(self, path: Path) -> list[TextBlock]:
         reader = PdfReader(str(path))

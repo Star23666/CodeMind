@@ -36,7 +36,7 @@ from app.services.knowledge_base_service import knowledge_base_service
 from app.services.llm_client import LlmServiceError
 from app.services.qa_history_service import qa_history_service
 from app.services.rag_service import rag_service
-from app.services.retrieval_service import retrieval_service
+from app.services.retrieval_service import RetrievalServiceError, retrieval_service
 
 router = APIRouter()
 
@@ -274,12 +274,16 @@ async def search_documents(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在。") from exc
 
-    retrieval_result = await retrieval_service.retrieve_for_search(payload, user_id=current_user.id)
+    try:
+        retrieval_result = await retrieval_service.retrieve_for_search(payload, user_id=current_user.id)
+    except RetrievalServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     return SearchResponse(
         knowledge_base_id=payload.knowledge_base_id,
         query=payload.query,
         rewritten_query=retrieval_result.rewritten_question,
         results=retrieval_result.sources,
+        message=retrieval_result.empty_message,
     )
 
 
@@ -313,6 +317,8 @@ async def chat(
             status_code=exc.status_code,
             detail=str(exc),
         ) from exc
+    except RetrievalServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 @router.get("/qa-records", response_model=list[QaRecordRead])

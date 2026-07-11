@@ -184,9 +184,22 @@ POST /api/documents/upload
   "file_type": "pdf",
   "file_size": 204800,
   "parse_status": "pending",
+  "error_message": null,
   "chunk_count": 0
 }
 ```
+
+当后台解析、Embedding 或向量入库失败时，`parse_status` 为 `failed`，
+`error_message` 返回可直接展示给用户的失败原因；其他状态下该字段为 `null`。
+
+已有 MySQL 数据库需要在升级代码后执行一次：
+
+```sql
+ALTER TABLE documents
+ADD COLUMN error_message VARCHAR(500) NULL AFTER parse_status;
+```
+
+新建数据库会由 `database/schema.sql` 自动创建该字段，不需要重复执行。
 
 ### 5.2 查询文档列表
 
@@ -269,6 +282,7 @@ POST /api/search
   "knowledge_base_id": 1,
   "query": "进程和线程有什么区别？",
   "rewritten_query": "操作系统中进程与线程的区别是什么？",
+  "message": null,
   "results": [
     {
       "document_id": 1,

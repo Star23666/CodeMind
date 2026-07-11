@@ -10,6 +10,14 @@
       </el-breadcrumb>
 
       <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" />
+      <el-alert
+        v-if="document?.error_message"
+        title="文档处理失败"
+        :description="document.error_message"
+        type="error"
+        show-icon
+        :closable="false"
+      />
 
       <section v-loading="loading" class="reader-layout">
         <aside class="chunk-sidebar">

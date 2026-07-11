@@ -12,7 +12,7 @@
       :http-request="handleUpload"
       :show-file-list="true"
       :limit="6"
-      accept=".pdf,.doc,.docx,.md,.txt"
+      accept=".pdf,.docx,.md,.txt"
     >
       <el-icon class="upload-icon"><UploadFilled /></el-icon>
       <div class="upload-text">拖拽文件到此处，或点击选择上传</div>

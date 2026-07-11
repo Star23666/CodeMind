@@ -1,18 +1,34 @@
 import logging
 
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 
+from app.db.session import SessionLocal
 from app.schemas.contracts import ChatRequest, SearchRequest, SourceReference
-from app.services.embedding_client import embedding_client
+from app.services.embedding_client import EmbeddingServiceError, embedding_client
 from app.services.vector_store import VectorSearchHit, get_vector_store
 
 
 logger = logging.getLogger(__name__)
 
+KNOWLEDGE_BASE_EMPTY_MESSAGE = (
+    "当前知识库暂无可检索资料，请先上传文档并等待处理完成。"
+)
+NO_RELEVANT_RESULTS_MESSAGE = (
+    "知识库中未检索到相关内容，请换一个更具体的问题，或适当降低相似度阈值。"
+)
+
+
+class RetrievalServiceError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int = 503) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 class RetrievalResult(BaseModel):
     rewritten_question: str | None = None
     sources: list[SourceReference] = Field(default_factory=list)
+    empty_message: str | None = None
 
 
 class RetrievalService:
@@ -20,15 +36,33 @@ class RetrievalService:
 
     async def retrieve_for_chat(self, request: ChatRequest, user_id: int = 1) -> RetrievalResult:
         rewritten_question = self.rewrite_question(request.question) if request.enable_rewrite else None
+        if not self._has_searchable_content(request.knowledge_base_id, user_id):
+            return RetrievalResult(
+                rewritten_question=rewritten_question,
+                empty_message=KNOWLEDGE_BASE_EMPTY_MESSAGE,
+            )
         query = rewritten_question or request.question
         sources = self.retrieve_sources(query, request, user_id=user_id)
-        return RetrievalResult(rewritten_question=rewritten_question, sources=sources)
+        return RetrievalResult(
+            rewritten_question=rewritten_question,
+            sources=sources,
+            empty_message=None if sources else NO_RELEVANT_RESULTS_MESSAGE,
+        )
 
     async def retrieve_for_search(self, request: SearchRequest, user_id: int = 1) -> RetrievalResult:
         rewritten_query = self.rewrite_question(request.query) if request.enable_rewrite else None
+        if not self._has_searchable_content(request.knowledge_base_id, user_id):
+            return RetrievalResult(
+                rewritten_question=rewritten_query,
+                empty_message=KNOWLEDGE_BASE_EMPTY_MESSAGE,
+            )
         query = rewritten_query or request.query
         sources = self.retrieve_sources(query, request, user_id=user_id)
-        return RetrievalResult(rewritten_question=rewritten_query, sources=sources)
+        return RetrievalResult(
+            rewritten_question=rewritten_query,
+            sources=sources,
+            empty_message=None if sources else NO_RELEVANT_RESULTS_MESSAGE,
+        )
 
     def rewrite_question(self, question: str) -> str:
         return question.strip()
@@ -40,7 +74,11 @@ class RetrievalService:
         *,
         user_id: int,
     ) -> list[SourceReference]:
-        query_embedding = embedding_client.embed_texts([query])[0]
+        try:
+            query_embedding = embedding_client.embed_texts([query])[0]
+        except EmbeddingServiceError as exc:
+            raise RetrievalServiceError(str(exc), status_code=502) from exc
+
         try:
             hits = get_vector_store().search(
                 embedding=query_embedding,
@@ -49,8 +87,10 @@ class RetrievalService:
                 top_k=request.top_k,
             )
         except Exception as exc:
-            logger.warning("Vector store unavailable, returning empty retrieval result: %s", exc)
-            return []
+            logger.exception("Vector store search failed")
+            raise RetrievalServiceError(
+                "知识库检索服务暂时不可用，请稍后重试。"
+            ) from exc
 
         sources = [
             self._hit_to_source(hit)
@@ -67,6 +107,31 @@ class RetrievalService:
             return sources[: request.rerank_top_n]
 
         return sources[: request.top_k]
+
+    def _has_searchable_content(self, knowledge_base_id: int, user_id: int) -> bool:
+        db = SessionLocal()
+        try:
+            count = db.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM document_chunks c
+                    JOIN documents d ON d.id = c.document_id
+                    WHERE d.knowledge_base_id = :knowledge_base_id
+                      AND d.owner_id = :owner_id
+                      AND d.parse_status = 'completed'
+                    """
+                ),
+                {"knowledge_base_id": knowledge_base_id, "owner_id": user_id},
+            ).scalar_one()
+            return int(count) > 0
+        except Exception as exc:
+            logger.exception("Failed to inspect searchable knowledge base content")
+            raise RetrievalServiceError(
+                "暂时无法检查知识库资料状态，请稍后重试。"
+            ) from exc
+        finally:
+            db.close()
 
     def _hit_to_source(self, hit: VectorSearchHit) -> SourceReference:
         metadata = hit.metadata

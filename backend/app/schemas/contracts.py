@@ -121,6 +121,7 @@ class DocumentRead(BaseModel):
     file_type: str
     file_size: int = 0
     parse_status: ParseStatus = ParseStatus.PENDING
+    error_message: str | None = None
     chunk_count: int = 0
 
 
@@ -165,6 +166,7 @@ class SearchResponse(BaseModel):
     query: str
     rewritten_query: str | None = None
     results: list[SourceReference] = Field(default_factory=list)
+    message: str | None = None
 
 
 class ChatRequest(RetrievalOptions):

@@ -38,7 +38,9 @@ class RagService:
             answer = await self.llm_client.generate_answer(prompt)
             answer = sanitize_answer_citations(answer, source_count=len(sources))
         else:
-            answer = "知识库中未找到足够依据。请先上传相关资料，或换一个更具体的问题。"
+            answer = retrieval_result.empty_message or (
+                "知识库中未找到足够依据，请先上传相关资料或换一个更具体的问题。"
+            )
 
         qa_record_id = await self.history_service.save_qa_record(
             db=db,

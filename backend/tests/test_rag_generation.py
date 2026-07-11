@@ -17,7 +17,12 @@ from app.services.prompt_builder import (
 )
 from app.services.rag_service import RagService
 from app.services.retrieval_service import RetrievalService
-from app.services.retrieval_service import RetrievalResult
+from app.services.retrieval_service import (
+    KNOWLEDGE_BASE_EMPTY_MESSAGE,
+    NO_RELEVANT_RESULTS_MESSAGE,
+    RetrievalResult,
+    RetrievalServiceError,
+)
 
 
 def run_async(coro):
@@ -188,17 +193,47 @@ class RagGenerationTest(unittest.TestCase):
         self.assertTrue(sanitized.startswith("进程负责资源分配。"))
         self.assertIn("参考资料：[来源1]", sanitized)
 
-    def test_retrieval_returns_empty_sources_when_vector_store_is_unavailable(self):
+    def test_retrieval_reports_error_when_vector_store_is_unavailable(self):
         service = RetrievalService()
         request = ChatRequest(knowledge_base_id=1, question="进程和线程有什么区别？")
 
-        with patch(
-            "app.services.retrieval_service.get_vector_store",
-            side_effect=RuntimeError("chromadb is not installed"),
+        with (
+            patch(
+                "app.services.retrieval_service.get_vector_store",
+                side_effect=RuntimeError("chromadb is not installed"),
+            ),
+            patch(
+                "app.services.retrieval_service.embedding_client.embed_texts",
+                return_value=[[0.1, 0.2]],
+            ),
         ):
-            sources = service.retrieve_sources(request.question, request, user_id=1)
+            with self.assertRaises(RetrievalServiceError) as context:
+                service.retrieve_sources(request.question, request, user_id=1)
 
-        self.assertEqual(sources, [])
+        self.assertIn("检索服务暂时不可用", str(context.exception))
+
+    def test_retrieval_distinguishes_empty_knowledge_base(self):
+        service = RetrievalService()
+        request = ChatRequest(knowledge_base_id=1, question="进程是什么？")
+
+        with patch.object(service, "_has_searchable_content", return_value=False):
+            result = run_async(service.retrieve_for_chat(request, user_id=1))
+
+        self.assertEqual(result.sources, [])
+        self.assertEqual(result.empty_message, KNOWLEDGE_BASE_EMPTY_MESSAGE)
+
+    def test_retrieval_distinguishes_no_relevant_results(self):
+        service = RetrievalService()
+        request = ChatRequest(knowledge_base_id=1, question="量子计算是什么？")
+
+        with (
+            patch.object(service, "_has_searchable_content", return_value=True),
+            patch.object(service, "retrieve_sources", return_value=[]),
+        ):
+            result = run_async(service.retrieve_for_chat(request, user_id=1))
+
+        self.assertEqual(result.sources, [])
+        self.assertEqual(result.empty_message, NO_RELEVANT_RESULTS_MESSAGE)
 
 
 if __name__ == "__main__":

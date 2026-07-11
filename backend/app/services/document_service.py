@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from uuid import uuid4
 
@@ -8,11 +9,14 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.schemas.contracts import DocumentChunkRead, DocumentRead
-from app.services.document_parser import document_parser
-from app.services.embedding_client import embedding_client
+from app.services.document_parser import DocumentParseError, document_parser
+from app.services.embedding_client import EmbeddingServiceError, embedding_client
 from app.services.knowledge_base_service import knowledge_base_service
 from app.services.text_splitter import text_splitter
 from app.services.vector_store import get_vector_store
+
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentService:
@@ -86,7 +90,7 @@ class DocumentService:
             text(
                 f"""
                 SELECT id, knowledge_base_id, owner_id, file_name, file_type,
-                       file_size, parse_status, chunk_count
+                       file_size, parse_status, error_message, chunk_count
                 FROM documents
                 WHERE {" AND ".join(conditions)}
                 ORDER BY created_at DESC, id DESC
@@ -155,7 +159,7 @@ class DocumentService:
             text(
                 """
                 UPDATE documents
-                SET parse_status = 'pending', chunk_count = 0
+                SET parse_status = 'pending', error_message = NULL, chunk_count = 0
                 WHERE id = :document_id AND owner_id = :owner_id
                 """
             ),
@@ -230,13 +234,13 @@ class DocumentService:
             if document is None:
                 return
 
-            self._mark_status(db, document_id, "processing", chunk_count=0)
+            self._mark_status(db, document_id, "processing", chunk_count=0, error_message=None)
             self._clear_existing_index(db, document_id)
 
             blocks = document_parser.parse(document["file_path"], document["file_type"])
             chunks = text_splitter.split_blocks(blocks)
             if not chunks:
-                raise ValueError("No text could be extracted from the document")
+                raise DocumentParseError("文档解析失败：未提取到可用文字。")
 
             embeddings = embedding_client.embed_texts([chunk.text for chunk in chunks])
             metadatas = []
@@ -291,12 +295,31 @@ class DocumentService:
                 embeddings=embeddings,
                 metadatas=metadatas,
             )
-            self._mark_status(db, document_id, "completed", chunk_count=len(chunks), commit=False)
+            self._mark_status(
+                db,
+                document_id,
+                "completed",
+                chunk_count=len(chunks),
+                error_message=None,
+                commit=False,
+            )
             db.commit()
+        except (DocumentParseError, EmbeddingServiceError) as exc:
+            db.rollback()
+            self._safe_delete_vectors(inserted_vector_ids)
+            logger.warning("Document %s processing failed: %s", document_id, exc)
+            self._mark_status(db, document_id, "failed", chunk_count=0, error_message=str(exc))
         except Exception:
             db.rollback()
             self._safe_delete_vectors(inserted_vector_ids)
-            self._mark_status(db, document_id, "failed")
+            logger.exception("Unexpected error while processing document %s", document_id)
+            self._mark_status(
+                db,
+                document_id,
+                "failed",
+                chunk_count=0,
+                error_message="文档处理失败，请稍后重试；若问题持续，请检查后端日志。",
+            )
         finally:
             db.close()
 
@@ -363,9 +386,9 @@ class DocumentService:
     ):
         columns = (
             "id, knowledge_base_id, owner_id, file_name, file_type, file_size, "
-            "file_path, parse_status, chunk_count"
+            "file_path, parse_status, error_message, chunk_count"
             if include_path
-            else "id, knowledge_base_id, owner_id, file_name, file_type, file_size, parse_status, chunk_count"
+            else "id, knowledge_base_id, owner_id, file_name, file_type, file_size, parse_status, error_message, chunk_count"
         )
         conditions = ["id = :document_id"]
         params: dict[str, object] = {"document_id": document_id}
@@ -404,10 +427,15 @@ class DocumentService:
         parse_status: str,
         *,
         chunk_count: int | None = None,
+        error_message: str | None = None,
         commit: bool = True,
     ) -> None:
-        assignments = ["parse_status = :parse_status"]
-        params: dict[str, object] = {"document_id": document_id, "parse_status": parse_status}
+        assignments = ["parse_status = :parse_status", "error_message = :error_message"]
+        params: dict[str, object] = {
+            "document_id": document_id,
+            "parse_status": parse_status,
+            "error_message": error_message,
+        }
 
         if chunk_count is not None:
             assignments.append("chunk_count = :chunk_count")
@@ -443,6 +471,7 @@ class DocumentService:
             file_type=row["file_type"],
             file_size=int(row["file_size"] or 0),
             parse_status=row["parse_status"],
+            error_message=row["error_message"],
             chunk_count=int(row["chunk_count"] or 0),
         )
 

@@ -72,6 +72,13 @@
                 </template>
               </el-table-column>
               <el-table-column prop="chunk_count" label="片段" width="90" />
+              <el-table-column label="处理结果" min-width="280">
+                <template #default="{ row }">
+                  <span :class="row.error_message ? 'failure-message' : 'result-message'">
+                    {{ row.error_message || statusDescription(row.parse_status) }}
+                  </span>
+                </template>
+              </el-table-column>
               <el-table-column label="操作" width="230" fixed="right">
                 <template #default="{ row }">
                   <el-button link type="primary" @click="openDocument(row)">查看</el-button>
@@ -95,12 +102,12 @@
 </template>
 
 <script setup>
-import { onMounted, ref, watch } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRouter } from "vue-router";
 import { getHealth } from "../api/health";
 import { listKnowledgeBases } from "../api/knowledgeBases";
-import { deleteDocument, listDocuments, reindexDocument } from "../api/documents";
+import { deleteDocument, getDocument, listDocuments, reindexDocument } from "../api/documents";
 import UploadPanel from "../components/documents/UploadPanel.vue";
 import KnowledgeBasePanel from "../components/knowledge/KnowledgeBasePanel.vue";
 import AppHeader from "../components/layout/AppHeader.vue";
@@ -114,6 +121,7 @@ const knowledgeBases = ref([]);
 const knowledgeLoaded = ref(false);
 const documents = ref([]);
 const documentsLoading = ref(false);
+const processingTimers = new Map();
 
 onMounted(async () => {
   checkHealth();
@@ -129,6 +137,11 @@ watch(knowledgeBaseId, () => {
   if (userStore.isLoggedIn) {
     loadDocuments();
   }
+});
+
+onBeforeUnmount(() => {
+  processingTimers.forEach((timer) => window.clearTimeout(timer));
+  processingTimers.clear();
 });
 
 async function checkHealth() {
@@ -170,8 +183,51 @@ async function loadDocuments() {
   }
 }
 
-function afterUpload() {
+function afterUpload(document) {
   loadDocuments();
+  scheduleProcessingCheck(document.id);
+}
+
+function scheduleProcessingCheck(documentId, attempt = 0) {
+  const previousTimer = processingTimers.get(documentId);
+  if (previousTimer) {
+    window.clearTimeout(previousTimer);
+  }
+
+  const timer = window.setTimeout(async () => {
+    try {
+      const latest = await getDocument(documentId);
+      const index = documents.value.findIndex((item) => item.id === documentId);
+      if (index >= 0) {
+        documents.value[index] = latest;
+      } else if (latest.knowledge_base_id === knowledgeBaseId.value) {
+        documents.value.unshift(latest);
+      }
+
+      if (latest.parse_status === "failed") {
+        processingTimers.delete(documentId);
+        ElMessage.error(latest.error_message || "文档处理失败，请重建索引或重新上传。");
+        return;
+      }
+
+      if (latest.parse_status === "completed") {
+        processingTimers.delete(documentId);
+        ElMessage.success(`“${latest.file_name}”已完成解析并写入知识库。`);
+        return;
+      }
+
+      if (attempt < 29) {
+        scheduleProcessingCheck(documentId, attempt + 1);
+      } else {
+        processingTimers.delete(documentId);
+        ElMessage.warning("文档仍在后台处理中，请稍后刷新列表查看结果。");
+      }
+    } catch {
+      processingTimers.delete(documentId);
+    }
+  }, 2000);
+
+  processingTimers.set(documentId, timer);
 }
 
 async function rebuildIndex(row) {
@@ -227,6 +283,16 @@ function statusType(status) {
     failed: "danger",
   };
   return map[status] || "info";
+}
+
+function statusDescription(status) {
+  const map = {
+    pending: "等待后台处理。",
+    processing: "正在解析、切分并生成向量。",
+    completed: "文档已写入知识库，可用于检索。",
+    failed: "处理失败，请重建索引或重新上传。",
+  };
+  return map[status] || "暂无处理信息。";
 }
 
 function formatSize(size) {
@@ -351,6 +417,16 @@ function formatSize(size) {
 .file-name,
 .file-meta {
   display: block;
+}
+
+.failure-message {
+  color: var(--el-color-danger);
+  line-height: 1.5;
+}
+
+.result-message {
+  color: var(--cm-muted);
+  line-height: 1.5;
 }
 
 .file-name {

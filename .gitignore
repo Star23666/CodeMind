@@ -27,3 +27,6 @@ Thumbs.db
 .idea/
 .vscode/
 
+# Local startup notes (not committed)
+docs/本地启动指南.md
+
