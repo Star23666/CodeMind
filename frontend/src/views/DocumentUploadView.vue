@@ -130,7 +130,12 @@ function scheduleProcessingCheck(documentId, attempt = 0) {
         ElMessage.info("文档仍在后台处理，可前往文档库查看进度。");
       }
     } catch {
-      processingTimers.delete(documentId);
+      if (attempt < 29) {
+        scheduleProcessingCheck(documentId, attempt + 1);
+      } else {
+        processingTimers.delete(documentId);
+        ElMessage.info("暂时无法读取处理状态，可前往文档库稍后查看。");
+      }
     }
   }, 2000);
   processingTimers.set(documentId, timer);

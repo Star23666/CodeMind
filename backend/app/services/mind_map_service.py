@@ -42,6 +42,8 @@ class MindMapService:
 
     def __init__(self, *, client: LlmClient = llm_client) -> None:
         self.client = client
+        # 同一个服务实例共用限流器，避免多个导图任务各自并发 3 次后叠加压垮模型服务。
+        self._llm_semaphore = asyncio.Semaphore(self.llm_concurrency)
 
     async def generate(
         self,
@@ -74,34 +76,44 @@ class MindMapService:
         try:
             selected_rows = self._sample_rows(rows)
             batches = [selected_rows[index:index + 3] for index in range(0, len(selected_rows), 3)]
-            semaphore = asyncio.Semaphore(self.llm_concurrency)
 
             async def analyze_batch(batch):
-                async with semaphore:
-                    return await self.client.generate_answer(
-                        self._build_batch_prompt(batch),
-                        system_message=MIND_MAP_SYSTEM_MESSAGE,
-                        temperature=0.1,
-                        timeout_seconds=300.0,
-                        max_tokens=max(settings.llm_max_tokens, 700),
-                        max_retries=0,
-                        model=self._structure_model(),
-                    )
+                return await self._generate_answer(
+                    self._build_batch_prompt(batch),
+                    system_message=MIND_MAP_SYSTEM_MESSAGE,
+                    temperature=0.1,
+                    timeout_seconds=300.0,
+                    max_tokens=max(settings.llm_max_tokens, 700),
+                    max_retries=0,
+                    model=self._structure_model(),
+                )
 
             tasks = [asyncio.create_task(analyze_batch(batch)) for batch in batches]
             batch_notes = []
-            for completed, task in enumerate(asyncio.as_completed(tasks), start=1):
-                batch_notes.append(await task)
-                progress = 32 + round(completed / (len(batches) + 1) * 36)
-                self._notify(progress_callback, "extracting", progress, f"已提炼 {completed}/{len(batches)} 组资料")
+            try:
+                for completed, task in enumerate(asyncio.as_completed(tasks), start=1):
+                    batch_notes.append(await task)
+                    progress = 32 + round(completed / (len(batches) + 1) * 36)
+                    self._notify(
+                        progress_callback,
+                        "extracting",
+                        progress,
+                        f"已提炼 {completed}/{len(batches)} 组资料",
+                    )
+            except BaseException:
+                # 某一批失败或任务被取消时，立即停止其余请求，避免失败后继续消耗 API。
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
             self._notify(progress_callback, "merging", 72, "正在合并各章节知识点并生成层级")
-            async with semaphore:
-                raw = await self.client.generate_answer(
-                    self._build_merge_prompt(batch_notes, request=request, title=fallback_title),
-                    system_message=MIND_MAP_SYSTEM_MESSAGE, temperature=0.1,
-                    timeout_seconds=300.0, max_tokens=max(settings.llm_max_tokens, 2000), max_retries=0,
-                    model=self._structure_model(),
-                )
+            raw = await self._generate_answer(
+                self._build_merge_prompt(batch_notes, request=request, title=fallback_title),
+                system_message=MIND_MAP_SYSTEM_MESSAGE, temperature=0.1,
+                timeout_seconds=300.0, max_tokens=max(settings.llm_max_tokens, 2000), max_retries=0,
+                model=self._structure_model(),
+            )
             self._notify(progress_callback, "validating", 80, "正在校验节点层级和原文来源")
             root = self._parse_ai_tree(
                 raw,
@@ -177,7 +189,7 @@ class MindMapService:
             sources=sources,
         )
         try:
-            answer = await self.client.generate_answer(
+            answer = await self._generate_answer(
                 prompt,
                 timeout_seconds=300.0,
                 max_tokens=max(settings.llm_max_tokens, 1200),
@@ -206,9 +218,16 @@ class MindMapService:
                                   "owner_id": owner_id}).mappings().all()
         if {int(row["chunk_id"]) for row in rows} != set(ids):
             raise ValueError("Mind map source not found")
+
+        if not settings.llm_api_key or not settings.llm_model:
+            raise MindMapGenerationError(
+                "节点展开需要在线大模型，请先完成服务端 LLM 配置。",
+                status_code=503,
+            )
+
         blocks = [f"[chunk_id={row['chunk_id']}] {self._normalize(row['chunk_text'])[:1200]}" for row in rows]
         try:
-            raw = await self.client.generate_answer(
+            raw = await self._generate_answer(
                 f"""仅根据资料，把知识点“{request.node_title}”展开为 {request.child_count} 个更具体的子知识点。
 仅返回 JSON：{{"title":"{request.node_title}","summary":"概述","source_chunk_ids":{ids},"children":[{{"title":"子知识点","summary":"简述","source_chunk_ids":[真实编号],"children":[]}}]}}
 资料：\n{chr(10).join(blocks)}""",
@@ -216,11 +235,26 @@ class MindMapService:
                 timeout_seconds=300, max_tokens=max(settings.llm_max_tokens, 700), max_retries=0,
                 model=self._structure_model(),
             )
+            source_map = {int(row["chunk_id"]): self._to_source(row) for row in rows}
+            return self._parse_ai_tree(
+                raw,
+                source_map=source_map,
+                fallback_title=request.node_title,
+                max_depth=1,
+                max_nodes=request.child_count + 1,
+            )
         except LlmServiceError as exc:
             raise MindMapGenerationError(str(exc), status_code=exc.status_code) from exc
-        source_map = {int(row["chunk_id"]): self._to_source(row) for row in rows}
-        return self._parse_ai_tree(raw, source_map=source_map, fallback_title=request.node_title,
-                                   max_depth=1, max_nodes=request.child_count + 1)
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            logger.warning("Mind map node expansion returned invalid structured data: %s", exc)
+            raise MindMapGenerationError(
+                "大模型未返回有效的节点展开结构，请重新尝试。",
+                status_code=502,
+            ) from exc
+
+    async def _generate_answer(self, prompt: str, **kwargs) -> str:
+        async with self._llm_semaphore:
+            return await self.client.generate_answer(prompt, **kwargs)
 
     def _get_document_scope(self, db: Session, *, owner_id: int, request: MindMapGenerateRequest):
         if request.document_id is None:

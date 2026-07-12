@@ -17,12 +17,15 @@ from app.api.dependencies import get_current_user
 from app.db.session import get_db
 from app.main import create_app
 from app.schemas.contracts import (
+    MindMapExpandRequest,
     MindMapGenerateRequest,
     MindMapNode,
     MindMapQuestionRequest,
     MindMapResponse,
     UserRead,
 )
+from app.services.llm_client import LlmServiceError
+from app.services.mind_map_history_service import MindMapHistoryService
 from app.services.mind_map_job_service import MindMapJobService
 from app.services.mind_map_service import MindMapGenerationError, MindMapService
 
@@ -68,6 +71,24 @@ class ConcurrencyTrackingLlmClient:
             }"""
         finally:
             self.active_calls -= 1
+
+
+class FailingBatchLlmClient:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.cancelled_calls = 0
+
+    async def generate_answer(self, prompt: str, **kwargs) -> str:
+        self.calls += 1
+        if self.calls == 1:
+            await asyncio.sleep(0.01)
+            raise LlmServiceError("provider failed", status_code=503)
+        try:
+            await asyncio.sleep(10)
+            return "unused"
+        except asyncio.CancelledError:
+            self.cancelled_calls += 1
+            raise
 
 
 class MindMapServiceTest(unittest.TestCase):
@@ -174,6 +195,51 @@ class MindMapServiceTest(unittest.TestCase):
 
         self.assertEqual(client.max_active_calls, 3)
 
+    def test_service_limits_concurrency_across_operations(self) -> None:
+        client = ConcurrencyTrackingLlmClient()
+        service = MindMapService(client=client)
+
+        async def call_many() -> None:
+            await asyncio.gather(
+                *(service._generate_answer(f"prompt-{index}") for index in range(8))
+            )
+
+        run_async(call_many())
+
+        self.assertEqual(client.max_active_calls, 3)
+
+    def test_generation_cancels_remaining_batches_after_failure(self) -> None:
+        for chunk_id in range(13, 26):
+            self.db.execute(
+                text(
+                    "INSERT INTO document_chunks "
+                    "(id, document_id, chunk_index, chunk_text, page_no) "
+                    "VALUES (:id, 20, :chunk_index, :chunk_text, 1)"
+                ),
+                {
+                    "id": chunk_id,
+                    "chunk_index": chunk_id - 11,
+                    "chunk_text": f"失败取消测试片段 {chunk_id}",
+                },
+            )
+        self.db.commit()
+        client = FailingBatchLlmClient()
+
+        with (
+            patch("app.services.mind_map_service.settings.llm_api_key", "test-key"),
+            patch("app.services.mind_map_service.settings.llm_model", "test-model"),
+            self.assertRaises(MindMapGenerationError),
+        ):
+            run_async(
+                MindMapService(client=client).generate(
+                    self.db,
+                    owner_id=1,
+                    request=MindMapGenerateRequest(knowledge_base_id=10),
+                )
+            )
+
+        self.assertGreaterEqual(client.cancelled_calls, 1)
+
     def test_document_must_be_completed(self) -> None:
         self.db.execute(text("UPDATE documents SET parse_status = 'processing' WHERE id = 20"))
         self.db.commit()
@@ -228,6 +294,68 @@ class MindMapServiceTest(unittest.TestCase):
                     ),
                 )
             )
+
+    def test_expand_node_requires_config_after_source_validation(self) -> None:
+        request = MindMapExpandRequest(
+            knowledge_base_id=10,
+            node_title="进程",
+            source_chunk_ids=[11],
+        )
+        with (
+            patch("app.services.mind_map_service.settings.llm_api_key", ""),
+            patch("app.services.mind_map_service.settings.llm_model", ""),
+            self.assertRaises(MindMapGenerationError) as context,
+        ):
+            run_async(MindMapService().expand_node(self.db, owner_id=1, request=request))
+
+        self.assertEqual(context.exception.status_code, 503)
+
+    def test_expand_node_maps_invalid_model_json_to_502(self) -> None:
+        request = MindMapExpandRequest(
+            knowledge_base_id=10,
+            node_title="进程",
+            source_chunk_ids=[11],
+        )
+        with (
+            patch("app.services.mind_map_service.settings.llm_api_key", "test-key"),
+            patch("app.services.mind_map_service.settings.llm_model", "test-model"),
+            self.assertRaises(MindMapGenerationError) as context,
+        ):
+            run_async(
+                MindMapService(client=FakeLlmClient("not-json")).expand_node(
+                    self.db,
+                    owner_id=1,
+                    request=request,
+                )
+            )
+
+        self.assertEqual(context.exception.status_code, 502)
+
+    def test_history_insert_and_embedded_id_are_atomic(self) -> None:
+        self.db.execute(
+            text(
+                """
+                CREATE TRIGGER fail_history_update
+                BEFORE UPDATE ON mind_map_histories
+                BEGIN
+                    SELECT RAISE(FAIL, 'update failed');
+                END
+                """
+            )
+        )
+        result = MindMapResponse(
+            knowledge_base_id=10,
+            generation_mode="ai",
+            node_count=1,
+            message="done",
+            root=MindMapNode(id="root", title="操作系统"),
+        )
+
+        with self.assertRaises(Exception):
+            MindMapHistoryService().save_generated(self.db, owner_id=1, result=result)
+
+        count = self.db.execute(text("SELECT COUNT(*) FROM mind_map_histories")).scalar_one()
+        self.assertEqual(count, 0)
 
     def test_background_job_persists_progress_and_result(self) -> None:
         service = MindMapJobService()
@@ -323,7 +451,11 @@ class MindMapServiceTest(unittest.TestCase):
                         knowledge_base_id INTEGER NOT NULL,
                         owner_id INTEGER NOT NULL,
                         file_name VARCHAR(255) NOT NULL,
-                        parse_status VARCHAR(20) NOT NULL
+                        file_type VARCHAR(20) NOT NULL DEFAULT 'txt',
+                        file_size INTEGER NOT NULL DEFAULT 0,
+                        parse_status VARCHAR(20) NOT NULL,
+                        error_message TEXT,
+                        chunk_count INTEGER NOT NULL DEFAULT 0
                     )
                     """
                 )
@@ -461,6 +593,47 @@ class MindMapApiTest(unittest.TestCase):
             response.json(),
             {"status": "accepted", "message": "思维导图历史记录已删除。"},
         )
+
+    def test_create_history_rejects_document_from_another_knowledge_base(self) -> None:
+        with self.SessionLocal() as db:
+            db.execute(
+                text(
+                    "INSERT INTO knowledge_bases (id, owner_id, name, description, visibility) "
+                    "VALUES (11, 1, '计算机网络', NULL, 'private')"
+                )
+            )
+            db.commit()
+
+        response = self.client.post(
+            "/api/mind-maps/histories",
+            json={
+                "knowledge_base_id": 11,
+                "document_id": 20,
+                "title": "错误归属",
+                "generation_mode": "ai",
+                "root": {"id": "root", "title": "错误归属"},
+                "view_state": {},
+            },
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "知识库或文档不存在。")
+
+    def test_create_history_accepts_owned_document_in_same_knowledge_base(self) -> None:
+        response = self.client.post(
+            "/api/mind-maps/histories",
+            json={
+                "knowledge_base_id": 10,
+                "document_id": 20,
+                "title": "操作系统",
+                "generation_mode": "ai",
+                "root": {"id": "root", "title": "操作系统"},
+                "view_state": {},
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["document_id"], 20)
 
 
 if __name__ == "__main__":

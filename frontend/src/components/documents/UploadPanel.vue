@@ -12,7 +12,7 @@
       :http-request="handleUpload"
       :show-file-list="true"
       :limit="6"
-      accept=".pdf,.docx,.md,.txt"
+      accept=".pdf,.docx,.md,.markdown,.txt"
     >
       <el-icon class="upload-icon"><UploadFilled /></el-icon>
       <div class="upload-text">拖拽文件到此处，或点击选择上传</div>
@@ -78,6 +78,11 @@ async function handleUpload(options) {
     const document = await uploadDocument({
       knowledgeBaseId: props.knowledgeBaseId,
       file: options.file,
+      onUploadProgress: (event) => {
+        if (!event.total) return;
+        const percent = Math.min(100, Math.round((event.loaded / event.total) * 100));
+        options.onProgress?.({ percent });
+      },
     });
     lastDocument.value = document;
     emit("uploaded", document);
@@ -85,7 +90,10 @@ async function handleUpload(options) {
     ElMessage.success("文件已提交到后端处理");
   } catch (error) {
     options.onError?.(error);
-    ElMessage.error(error.message);
+    const message = /timeout|超时/i.test(error.message)
+      ? "上传响应超时，请先到文档库确认是否已经上传成功，避免重复提交。"
+      : error.message;
+    ElMessage.error(message);
   }
 }
 </script>

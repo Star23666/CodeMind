@@ -303,6 +303,8 @@ const relatedError = ref("");
 const relatedCache = new Map();
 let pollTimer = null;
 let elapsedTimer = null;
+let pollAttempt = 0;
+let trackingVersion = 0;
 const stageSteps = [
   { key: "queued", label: "排队" },
   { key: "collecting", label: "读取资料" },
@@ -396,6 +398,7 @@ async function handleKnowledgeBaseChange() {
   relatedError.value = "";
   relatedCache.clear();
   stopTracking();
+  generating.value = false;
   generationJob.value = null;
   loadError.value = "";
   await router.replace({
@@ -404,6 +407,7 @@ async function handleKnowledgeBaseChange() {
   });
   await loadDocuments();
   await loadHistories();
+  await resumeActiveJob();
 }
 
 async function loadHistories() {
@@ -656,18 +660,22 @@ async function resumeActiveJob() {
     } else if (generationJob.value.status === "failed") {
       loadError.value = generationJob.value.error_message || "知识地图生成失败。";
       clearActiveJob();
+      generating.value = false;
     } else {
       generating.value = true;
       startTracking();
     }
   } catch {
     clearActiveJob();
+    generating.value = false;
   }
 }
 
 function startTracking() {
   stopTracking();
   generating.value = true;
+  pollAttempt = 0;
+  const version = trackingVersion;
   // 以任务真实开始时刻为基准计算已等待时间，切走再回来也能接续显示、不归零。
   const startedAt = Number(sessionStorage.getItem(startedAtKey())) || Date.now();
   const tick = () => {
@@ -675,18 +683,31 @@ function startTracking() {
   };
   tick();
   elapsedTimer = window.setInterval(tick, 1000);
-  schedulePoll(300);
+  schedulePoll(300, version);
 }
 
-function schedulePoll(delay = 1500) {
+function nextPollDelay() {
+  if (pollAttempt < 10) return 1500;
+  if (pollAttempt < 30) return 3000;
+  return 5000;
+}
+
+function schedulePoll(delay = nextPollDelay(), version = trackingVersion) {
   window.clearTimeout(pollTimer);
-  pollTimer = window.setTimeout(pollJob, delay);
+  pollTimer = window.setTimeout(() => pollJob(version), delay);
 }
 
-async function pollJob() {
-  if (!generationJob.value?.job_id) return;
+async function pollJob(version) {
+  if (version !== trackingVersion) return;
+  const jobId = generationJob.value?.job_id;
+  if (!jobId) return;
   try {
-    generationJob.value = await getMindMapJob(generationJob.value.job_id);
+    const latestJob = await getMindMapJob(jobId);
+    // 切换知识库或开始了新任务后，丢弃旧请求迟到的响应，避免状态串线。
+    if (version !== trackingVersion || generationJob.value?.job_id !== jobId) return;
+    generationJob.value = latestJob;
+    pollAttempt += 1;
+    if (loadError.value.startsWith("无法读取生成进度：")) loadError.value = "";
     if (generationJob.value.status === "completed") {
       applyCompletedJob();
       return;
@@ -698,14 +719,23 @@ async function pollJob() {
       generating.value = false;
       return;
     }
-    schedulePoll();
+    schedulePoll(nextPollDelay(), version);
   } catch (error) {
+    if (version !== trackingVersion) return;
     loadError.value = `无法读取生成进度：${error.message}`;
-    schedulePoll(3000);
+    pollAttempt += 1;
+    schedulePoll(Math.max(3000, nextPollDelay()), version);
   }
 }
 
 function applyCompletedJob() {
+  if (!generationJob.value?.result?.root) {
+    loadError.value = "生成任务已结束，但没有返回有效的知识地图，请重新生成。";
+    clearActiveJob();
+    stopTracking();
+    generating.value = false;
+    return;
+  }
   mapData.value = generationJob.value.result;
   activeHistoryId.value = mapData.value.history_id;
   relatedCache.clear();
@@ -714,11 +744,12 @@ function applyCompletedJob() {
   stopTracking();
   generating.value = false;
   // 生成时后端已自动存了一份历史，这里刷新清单，让新地图立刻出现在历史下拉框里。
-  loadHistories();
+  loadHistories().catch((error) => ElMessage.warning(`历史列表刷新失败：${error.message}`));
   ElMessage.success("知识地图已生成");
 }
 
 function stopTracking() {
+  trackingVersion += 1;
   window.clearTimeout(pollTimer);
   window.clearInterval(elapsedTimer);
   pollTimer = null;

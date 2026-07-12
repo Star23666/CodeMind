@@ -18,7 +18,7 @@ export function getDocumentContent(documentId) {
   });
 }
 
-export function uploadDocument({ knowledgeBaseId = 1, file }) {
+export function uploadDocument({ knowledgeBaseId = 1, file, onUploadProgress }) {
   const formData = new FormData();
   formData.append("knowledge_base_id", knowledgeBaseId);
   formData.append("file", file);
@@ -28,6 +28,7 @@ export function uploadDocument({ knowledgeBaseId = 1, file }) {
       "Content-Type": "multipart/form-data",
     },
     timeout: UPLOAD_TIMEOUT,
+    onUploadProgress,
   });
 }
 
