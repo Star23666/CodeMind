@@ -13,23 +13,25 @@ CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented
 - 在线 Embedding API 和 Chroma 向量入库
 - 问题重写、topK 检索、相似度过滤和 rerank
 - 在线 LLM RAG 回答和来源编号校验
-- 文档片段查看与来源跳转
-- 问答历史保存和历史来源快照
+- 文档库、原始文档预览、片段查看与来源跳转
+- 问答历史列表、详情查看和历史来源快照
+- 知识库思维导图异步生成、进度展示和历史管理
+- 思维导图节点追问、节点扩展和画布交互
 - 文档、向量、原始文件和知识库级联清理
 - Docker Compose 本地及服务器部署
 
-仍在完善：
+后续计划：
 
-- 问答历史前端页面
 - 用户反馈持久化和管理员反馈页面
 - 基于固定测试集的相似度阈值评估
-- 更完整的端到端测试和质量评估
+- RAG 问答与思维导图的真实模型端到端测试
+- 前端产物体积优化和项目成果物整理
 
 ## 技术栈
 
 | 层次       | 技术                               |
 | ---------- | ---------------------------------- |
-| 前端       | Vue 3、Vite、Element Plus、Axios   |
+| 前端       | Vue 3、Vite、Element Plus、AntV G6、Axios |
 | 后端       | FastAPI、Pydantic、SQLAlchemy      |
 | 业务数据库 | MySQL 8.0                          |
 | 向量数据库 | Chroma                             |
@@ -48,6 +50,8 @@ flowchart LR
     Backend --> Uploads[("上传文件")]
     Backend --> Embedding["Embedding API"]
     Backend --> LLM["在线 LLM API"]
+    Backend --> MindMap["RAG 回答与思维导图生成"]
+    MindMap --> LLM
 ```
 
 MySQL 保存用户、知识库、文档、片段、问答历史和反馈等结构化数据；Chroma 保存片段向量与检索 metadata；Docker 命名卷保存 MySQL 数据、原始文件和 Chroma 数据。
@@ -230,7 +234,9 @@ Get-Content -Raw database\migrations\20260711_preserve_qa_source_snapshots.sql |
 4. 等待文档状态变为 `completed`。
 5. 返回“AI 问答”页面选择知识库并提问。
 6. 查看回答中的来源片段和相关度。
-7. 点击“查看片段”核对原文。
+7. 点击“查看片段”或进入“文档库”核对原文。
+8. 在“问答历史”中回看回答；原文被删除后仍保留来源快照。
+9. 进入“知识地图”异步生成思维导图，并对节点追问或继续扩展。
 
 如果检索不到资料，请先确认文档处理状态、Embedding 配置和相似度阈值。阈值与 Embedding 模型及切分粒度有关，更换模型后必须重新评估。
 
@@ -253,11 +259,20 @@ Authorization: Bearer <access_token>
 | `PATCH/DELETE` | `/api/knowledge-bases/{id}` | 修改或删除知识库 |
 | `POST`         | `/api/documents/upload`     | 上传文档         |
 | `GET`          | `/api/documents`            | 查询文档列表     |
+| `GET`          | `/api/documents/{id}`        | 查询文档详情     |
+| `GET`          | `/api/documents/{id}/content` | 读取原始文档   |
+| `POST`         | `/api/documents/{id}/reindex` | 重建文档索引   |
 | `DELETE`       | `/api/documents/{id}`       | 删除文档及向量   |
 | `POST`         | `/api/search`               | 语义检索         |
 | `POST`         | `/api/chat`                 | RAG 问答         |
 | `GET`          | `/api/qa-records`           | 问答历史列表     |
 | `GET`          | `/api/qa-records/{id}`      | 问答历史详情     |
+| `POST`         | `/api/mind-maps/jobs`       | 创建导图生成任务 |
+| `GET`          | `/api/mind-maps/jobs/{id}`  | 查询任务进度     |
+| `POST`         | `/api/mind-maps/ask`        | 对导图节点追问   |
+| `POST`         | `/api/mind-maps/expand`     | 扩展导图节点     |
+| `GET/POST`     | `/api/mind-maps/histories`  | 查询或保存导图历史 |
+| `GET/PUT/DELETE` | `/api/mind-maps/histories/{id}` | 查看、更新或删除导图历史 |
 
 完整请求和响应模型以 Swagger 为准。
 
@@ -271,7 +286,7 @@ python -m pip install pytest==8.3.5
 python -m pytest -q
 ```
 
-测试覆盖认证、权限、文档处理、删除清理、检索降级、Prompt、LLM 异常、RAG 编排和问答历史。
+当前后端测试共 46 项，覆盖认证、权限、文档处理、删除清理、检索降级、Prompt、LLM 异常、RAG 编排、问答历史和思维导图服务。
 
 前端生产构建检查：
 
@@ -334,6 +349,8 @@ Docker Compose 使用三个命名卷：
 ### 上传后文档状态为 failed
 
 查看后端日志和文档的 `error_message`。重点检查文件格式、文件内容、Embedding API Key、模型名称和网络连接。
+
+若浏览器直接提示上传超时，请先执行 `npm ci` 并重新构建前端，确保已包含最新的上传超时配置。
 
 ### 问题没有召回来源
 
