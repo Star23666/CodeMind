@@ -7,7 +7,7 @@
         <div>
           <el-tag effect="plain">个人中心</el-tag>
           <h1>我的知识库</h1>
-          <p>这里先放账户信息、知识库管理入口和当前资料统计，后续可以继续扩展历史问答和偏好设置。</p>
+          <p>创建和维护你的私人知识库，也可以随时修改名称与描述。</p>
         </div>
         <el-button type="primary" plain @click="goDocuments">去文档上传</el-button>
       </section>
@@ -20,7 +20,6 @@
             <h2>{{ userStore.displayName }}</h2>
             <span>{{ userStore.user?.email || "暂未填写邮箱" }}</span>
           </div>
-          <el-button @click="logout">退出登录</el-button>
         </article>
 
         <article class="panel stat-panel">
@@ -31,10 +30,6 @@
           <div>
             <span>文档</span>
             <strong>{{ documents.length }}</strong>
-          </div>
-          <div>
-            <span>后端</span>
-            <strong>{{ healthOnline ? "在线" : "未连接" }}</strong>
           </div>
         </article>
       </section>
@@ -76,6 +71,7 @@
               </div>
               <div class="kb-actions">
                 <el-tag effect="plain">私人</el-tag>
+                <el-button link type="primary" @click="openEditDialog(base)">编辑</el-button>
                 <el-button
                   link
                   type="danger"
@@ -91,6 +87,28 @@
         </article>
       </section>
     </main>
+
+    <el-dialog v-model="editDialogVisible" title="编辑知识库" width="min(520px, 92vw)">
+      <el-form label-position="top" @submit.prevent>
+        <el-form-item label="名称" required>
+          <el-input v-model="editForm.name" maxlength="100" show-word-limit />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input
+            v-model="editForm.description"
+            type="textarea"
+            :rows="4"
+            maxlength="500"
+            show-word-limit
+            placeholder="说明这个知识库主要存放什么资料"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="updating" @click="saveKnowledgeBase">保存修改</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -98,10 +116,14 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRouter } from "vue-router";
-import { logoutUser } from "../api/auth";
 import { getHealth } from "../api/health";
 import { listDocuments } from "../api/documents";
-import { createKnowledgeBase, deleteKnowledgeBase, listKnowledgeBases } from "../api/knowledgeBases";
+import {
+  createKnowledgeBase,
+  deleteKnowledgeBase,
+  listKnowledgeBases,
+  updateKnowledgeBase,
+} from "../api/knowledgeBases";
 import AppHeader from "../components/layout/AppHeader.vue";
 import { useUserStore } from "../stores/user";
 
@@ -111,8 +133,15 @@ const healthOnline = ref(false);
 const knowledgeBases = ref([]);
 const documents = ref([]);
 const creating = ref(false);
+const updating = ref(false);
+const editDialogVisible = ref(false);
 const deletingKnowledgeBaseId = ref(null);
 const kbForm = reactive({
+  name: "",
+  description: "",
+});
+const editForm = reactive({
+  id: null,
   name: "",
   description: "",
 });
@@ -192,20 +221,43 @@ async function removeKnowledgeBase(base) {
   }
 }
 
+function openEditDialog(base) {
+  editForm.id = base.id;
+  editForm.name = base.name;
+  editForm.description = base.description || "";
+  editDialogVisible.value = true;
+}
+
+async function saveKnowledgeBase() {
+  const name = editForm.name.trim();
+  if (!name) {
+    ElMessage.warning("知识库名称不能为空。");
+    return;
+  }
+
+  updating.value = true;
+  try {
+    const updated = await updateKnowledgeBase(editForm.id, {
+      name,
+      description: editForm.description.trim(),
+    });
+    const index = knowledgeBases.value.findIndex((base) => base.id === updated.id);
+    if (index >= 0) {
+      knowledgeBases.value[index] = updated;
+    }
+    editDialogVisible.value = false;
+    ElMessage.success("知识库信息已更新。");
+  } catch (error) {
+    ElMessage.error(error.message);
+  } finally {
+    updating.value = false;
+  }
+}
+
 function goDocuments() {
   router.push({ name: "documents" });
 }
 
-async function logout() {
-  try {
-    await logoutUser();
-  } catch {
-    // 本地退出优先保证用户状态正确。
-  } finally {
-    userStore.clearAuth();
-    router.push({ name: "login" });
-  }
-}
 </script>
 
 <style scoped>

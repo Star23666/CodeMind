@@ -17,12 +17,33 @@ const routes = [
     name: "document-detail",
     component: () => import("../views/DocumentDetailView.vue"),
     props: true,
+    meta: { requiresAuth: true },
   },
   {
     path: "/documents/:documentId/chunks/:chunkId",
     name: "document-chunk",
     component: () => import("../views/DocumentDetailView.vue"),
     props: true,
+    meta: { requiresAuth: true },
+  },
+  {
+    path: "/library",
+    name: "document-library",
+    component: () => import("../views/DocumentLibraryView.vue"),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: "/documents/:documentId/view",
+    name: "document-viewer",
+    component: () => import("../views/DocumentViewerView.vue"),
+    props: true,
+    meta: { requiresAuth: true },
+  },
+  {
+    path: "/history",
+    name: "qa-history",
+    component: () => import("../views/QaHistoryView.vue"),
+    meta: { requiresAuth: true },
   },
   {
     path: "/me",

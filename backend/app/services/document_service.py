@@ -106,6 +106,22 @@ class DocumentService:
             raise ValueError("Document not found")
         return self._to_document_read(row)
 
+    def get_owned_file(self, db: Session, *, document_id: int, owner_id: int) -> dict[str, object]:
+        row = self._get_document_row(db, document_id, owner_id, include_path=True)
+        if row is None:
+            raise ValueError("Document not found")
+
+        upload_root = settings.upload_dir_path.resolve()
+        file_path = Path(row["file_path"]).resolve()
+        if not file_path.is_relative_to(upload_root) or not file_path.is_file():
+            raise ValueError("Document file not found")
+
+        return {
+            "path": file_path,
+            "file_name": row["file_name"],
+            "file_type": row["file_type"],
+        }
+
     def list_chunks(self, db: Session, *, document_id: int, owner_id: int) -> list[DocumentChunkRead]:
         self.get_owned_document(db, document_id, owner_id)
         rows = db.execute(

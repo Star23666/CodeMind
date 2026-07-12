@@ -5,7 +5,7 @@
     <main class="page">
       <el-breadcrumb separator="/" class="breadcrumb">
         <el-breadcrumb-item :to="{ name: 'home' }">AI 问答</el-breadcrumb-item>
-        <el-breadcrumb-item :to="{ name: 'documents' }">文档上传</el-breadcrumb-item>
+        <el-breadcrumb-item :to="{ name: 'document-library' }">文档库</el-breadcrumb-item>
         <el-breadcrumb-item>{{ document?.file_name || "文档详情" }}</el-breadcrumb-item>
       </el-breadcrumb>
 
@@ -27,6 +27,9 @@
             </el-tag>
             <h1>{{ document?.file_name || "正在读取文档" }}</h1>
             <p>{{ document?.file_type || "-" }} · {{ document?.chunk_count || 0 }} 个片段</p>
+            <el-button v-if="document" class="source-view-button" type="primary" plain @click="openOriginal">
+              查看完整文档
+            </el-button>
           </div>
 
           <div class="chunk-list">
@@ -56,7 +59,14 @@
             </el-tag>
           </div>
 
-          <p v-if="selectedChunk" class="chunk-text">{{ selectedChunk.chunk_text }}</p>
+          <div v-if="selectedChunk" class="chunk-body">
+            <p class="chunk-text" :class="{ collapsed: !chunkExpanded }">
+              {{ selectedChunk.chunk_text }}
+            </p>
+            <el-button link type="primary" @click="chunkExpanded = !chunkExpanded">
+              {{ chunkExpanded ? "收起" : "展开全文" }}
+            </el-button>
+          </div>
           <el-empty v-else description="请选择左侧片段查看内容。" />
         </article>
       </section>
@@ -79,6 +89,7 @@ const error = ref("");
 const document = ref(null);
 const chunks = ref([]);
 const selectedChunk = ref(null);
+const chunkExpanded = ref(false);
 
 onMounted(() => {
   checkHealth();
@@ -107,6 +118,7 @@ async function loadDocumentDetail() {
 
   loading.value = true;
   error.value = "";
+  chunkExpanded.value = false;
   try {
     const [documentData, chunkList] = await Promise.all([
       getDocument(documentId),
@@ -139,6 +151,10 @@ function openChunk(chunk) {
       chunkId: chunk.id,
     },
   });
+}
+
+function openOriginal() {
+  router.push({ name: "document-viewer", params: { documentId: document.value.id } });
 }
 
 function previewText(text = "") {
@@ -216,6 +232,10 @@ function statusType(status) {
   color: var(--cm-muted);
 }
 
+.source-view-button {
+  margin-top: 14px;
+}
+
 .chunk-list {
   display: grid;
   gap: 10px;
@@ -285,6 +305,20 @@ function statusType(status) {
   font-size: 16px;
   line-height: 1.9;
   white-space: pre-wrap;
+}
+
+.chunk-text.collapsed {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  white-space: normal;
+}
+
+.chunk-body {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
 }
 
 @media (max-width: 880px) {
