@@ -137,6 +137,80 @@ class DocumentChunkRead(BaseModel):
     vector_id: str
 
 
+class MindMapGenerateRequest(BaseModel):
+    knowledge_base_id: int = Field(..., ge=1)
+    document_id: int | None = Field(default=None, ge=1)
+    max_depth: int = Field(default=3, ge=2, le=4)
+    max_nodes: int = Field(default=36, ge=8, le=60)
+
+
+class MindMapSource(BaseModel):
+    chunk_id: int
+    document_id: int
+    file_name: str
+    chunk_index: int
+    page_no: int | None = None
+    source_text: str
+    jump_url: str
+
+
+class MindMapNode(BaseModel):
+    id: str
+    title: str
+    summary: str = ""
+    depth: int = 0
+    sources: list[MindMapSource] = Field(default_factory=list)
+    children: list["MindMapNode"] = Field(default_factory=list)
+
+
+class MindMapResponse(BaseModel):
+    history_id: int | None = None
+    knowledge_base_id: int
+    document_id: int | None = None
+    generation_mode: str
+    node_count: int
+    message: str
+    root: MindMapNode
+
+
+class MindMapHistoryUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+    root: MindMapNode | None = None
+    view_state: dict = Field(default_factory=dict)
+
+
+class MindMapHistoryRead(BaseModel):
+    id: int
+    knowledge_base_id: int
+    document_id: int | None = None
+    title: str
+    node_count: int
+    result: MindMapResponse | None = None
+    view_state: dict = Field(default_factory=dict)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class MindMapExpandRequest(BaseModel):
+    knowledge_base_id: int = Field(..., ge=1)
+    node_title: str = Field(..., min_length=1, max_length=100)
+    node_summary: str = Field(default="", max_length=500)
+    source_chunk_ids: list[int] = Field(..., min_length=1, max_length=8)
+    child_count: int = Field(default=4, ge=2, le=8)
+
+
+class MindMapJobRead(BaseModel):
+    job_id: str
+    status: str
+    stage: str
+    progress: int = Field(..., ge=0, le=100)
+    message: str
+    result: MindMapResponse | None = None
+    error_message: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class RetrievalOptions(BaseModel):
     top_k: int = Field(default=4, ge=1, le=10)
     score_threshold: float = Field(default=0.77, ge=-1, le=1)
@@ -159,6 +233,21 @@ class SourceReference(BaseModel):
     score: float | None = Field(default=None, ge=-1, le=1)
     source_text: str
     jump_url: str
+
+
+class MindMapQuestionRequest(BaseModel):
+    knowledge_base_id: int = Field(..., ge=1)
+    node_title: str = Field(..., min_length=1, max_length=100)
+    question: str = Field(..., min_length=1, max_length=500)
+    source_chunk_ids: list[int] = Field(..., min_length=1, max_length=8)
+
+
+class MindMapQuestionResponse(BaseModel):
+    knowledge_base_id: int
+    node_title: str
+    question: str
+    answer: str
+    sources: list[SourceReference] = Field(default_factory=list)
 
 
 class HistoricalSourceReference(BaseModel):

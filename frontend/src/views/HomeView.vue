@@ -30,6 +30,15 @@
             :value="base.id"
           />
         </el-select>
+        <el-button
+          v-if="knowledgeBases.length"
+          type="primary"
+          plain
+          :disabled="!knowledgeBaseId"
+          @click="openMindMap"
+        >
+          打开知识地图
+        </el-button>
         <el-button v-if="!knowledgeBases.length" type="primary" plain @click="goCreateKnowledgeBase">
           创建知识库
         </el-button>
@@ -89,6 +98,13 @@ async function loadDefaultKnowledgeBase() {
 
 function goCreateKnowledgeBase() {
   router.push({ name: "me" });
+}
+
+function openMindMap() {
+  router.push({
+    name: "mind-map",
+    query: { knowledge_base_id: knowledgeBaseId.value },
+  });
 }
 </script>
 

@@ -18,6 +18,15 @@ from app.schemas.contracts import (
     KnowledgeBaseRead,
     KnowledgeBaseUpdate,
     LoginRequest,
+    MindMapGenerateRequest,
+    MindMapExpandRequest,
+    MindMapNode,
+    MindMapHistoryRead,
+    MindMapHistoryUpdate,
+    MindMapJobRead,
+    MindMapQuestionRequest,
+    MindMapQuestionResponse,
+    MindMapResponse,
     QaRecordRead,
     SearchRequest,
     SearchResponse,
@@ -34,6 +43,9 @@ from app.services.auth_service import (
 from app.services.document_service import document_service
 from app.services.knowledge_base_service import knowledge_base_service
 from app.services.llm_client import LlmServiceError
+from app.services.mind_map_service import MindMapGenerationError, mind_map_service
+from app.services.mind_map_job_service import mind_map_job_service
+from app.services.mind_map_history_service import mind_map_history_service
 from app.services.qa_history_service import qa_history_service
 from app.services.rag_service import rag_service
 from app.services.retrieval_service import RetrievalServiceError, retrieval_service
@@ -261,6 +273,122 @@ async def get_chunk(
         return document_service.get_owned_chunk(db, chunk_id=chunk_id, owner_id=current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="片段不存在。") from exc
+
+
+@router.post("/mind-maps/generate", response_model=MindMapResponse)
+async def generate_mind_map(
+    payload: MindMapGenerateRequest,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MindMapResponse:
+    try:
+        return await mind_map_service.generate(
+            db,
+            owner_id=current_user.id,
+            request=payload,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库或文档不存在。") from exc
+    except MindMapGenerationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.post("/mind-maps/jobs", response_model=MindMapJobRead, status_code=status.HTTP_202_ACCEPTED)
+async def create_mind_map_job(
+    payload: MindMapGenerateRequest,
+    background_tasks: BackgroundTasks,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MindMapJobRead:
+    try:
+        job = mind_map_job_service.create_job(db, owner_id=current_user.id, request=payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库或文档不存在。") from exc
+    background_tasks.add_task(mind_map_job_service.process_job, job.job_id)
+    return job
+
+
+@router.get("/mind-maps/jobs/{job_id}", response_model=MindMapJobRead)
+async def get_mind_map_job(
+    job_id: str,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MindMapJobRead:
+    try:
+        return mind_map_job_service.get_job(db, job_id=job_id, owner_id=current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="思维导图任务不存在。") from exc
+
+
+@router.post("/mind-maps/ask", response_model=MindMapQuestionResponse)
+async def ask_mind_map_node(
+    payload: MindMapQuestionRequest,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MindMapQuestionResponse:
+    try:
+        return await mind_map_service.answer_node_question(
+            db,
+            owner_id=current_user.id,
+            request=payload,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="节点来源不存在或不属于当前用户。") from exc
+    except MindMapGenerationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.post("/mind-maps/expand", response_model=MindMapNode)
+async def expand_mind_map_node(
+    payload: MindMapExpandRequest, current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        return await mind_map_service.expand_node(db, owner_id=current_user.id, request=payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="节点来源不存在或无权访问。") from exc
+    except MindMapGenerationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.get("/mind-maps/histories", response_model=list[MindMapHistoryRead])
+async def list_mind_map_histories(
+    knowledge_base_id: int | None = None,
+    current_user: UserRead = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    return mind_map_history_service.list(db, owner_id=current_user.id, knowledge_base_id=knowledge_base_id)
+
+
+@router.get("/mind-maps/histories/{history_id}", response_model=MindMapHistoryRead)
+async def get_mind_map_history(
+    history_id: int, current_user: UserRead = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    try:
+        return mind_map_history_service.get(db, history_id=history_id, owner_id=current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="思维导图历史记录不存在。") from exc
+
+
+@router.put("/mind-maps/histories/{history_id}", response_model=MindMapHistoryRead)
+async def update_mind_map_history(
+    history_id: int, payload: MindMapHistoryUpdate,
+    current_user: UserRead = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    try:
+        return mind_map_history_service.update(db, history_id=history_id, owner_id=current_user.id, payload=payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="思维导图历史记录不存在。") from exc
+
+
+@router.delete("/mind-maps/histories/{history_id}", response_model=ActionResponse)
+async def delete_mind_map_history(
+    history_id: int, current_user: UserRead = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    try:
+        mind_map_history_service.delete(db, history_id=history_id, owner_id=current_user.id)
+        return ActionResponse(message="思维导图历史记录已删除。")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="思维导图历史记录不存在。") from exc
 
 
 @router.post("/search", response_model=SearchResponse)

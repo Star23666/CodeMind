@@ -14,7 +14,17 @@ class LlmServiceError(RuntimeError):
 
 
 class LlmClient:
-    async def generate_answer(self, prompt: str) -> str:
+    async def generate_answer(
+        self,
+        prompt: str,
+        *,
+        system_message: str = RAG_SYSTEM_MESSAGE,
+        temperature: float = 0.2,
+        timeout_seconds: float | None = None,
+        max_tokens: int | None = None,
+        max_retries: int | None = None,
+        model: str | None = None,
+    ) -> str:
         if not settings.llm_api_key or not settings.llm_model:
             return self.generate_local_fallback(prompt)
 
@@ -29,8 +39,8 @@ class LlmClient:
 
         client_kwargs = {
             "api_key": settings.llm_api_key,
-            "timeout": settings.llm_timeout_seconds,
-            "max_retries": settings.llm_max_retries,
+            "timeout": timeout_seconds if timeout_seconds is not None else settings.llm_timeout_seconds,
+            "max_retries": max_retries if max_retries is not None else settings.llm_max_retries,
         }
         if settings.llm_base_url:
             client_kwargs["base_url"] = settings.llm_base_url
@@ -38,13 +48,13 @@ class LlmClient:
         try:
             client = AsyncOpenAI(**client_kwargs)
             response = await client.chat.completions.create(
-                model=settings.llm_model,
+                model=model or settings.llm_model,
                 messages=[
-                    {"role": "system", "content": RAG_SYSTEM_MESSAGE},
+                    {"role": "system", "content": system_message},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.2,
-                max_tokens=settings.llm_max_tokens,
+                temperature=temperature,
+                max_tokens=max_tokens if max_tokens is not None else settings.llm_max_tokens,
             )
             content = response.choices[0].message.content
             if not content or not content.strip():
