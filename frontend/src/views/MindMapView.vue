@@ -1,6 +1,6 @@
 <template>
   <div class="mind-map-view">
-    <AppHeader :show-health="false" />
+    <AppHeader :health-online="healthOnline" />
 
     <main class="map-page">
       <header class="page-intro">
@@ -65,13 +65,31 @@
         </el-button>
       </section>
 
+      <section v-if="histories.length" class="history-bar" aria-label="历史知识地图">
+        <label>
+          <span>历史知识地图</span>
+          <el-select
+            v-model="activeHistoryId"
+            placeholder="选择一张已保存的地图打开"
+            @change="openHistory"
+          >
+            <el-option
+              v-for="item in histories"
+              :key="item.id"
+              :value="item.id"
+              :label="`${item.title} · ${formatTime(item.updated_at)}`"
+            />
+          </el-select>
+        </label>
+      </section>
+
       <p v-if="loadError" class="state-message error-state">{{ loadError }}</p>
 
       <section v-if="generationJob && generating" class="generation-status" aria-live="polite">
         <div class="status-copy">
           <span>{{ stageLabel }}</span>
           <strong>{{ generationJob.message }}</strong>
-          <small>已等待 {{ elapsedSeconds }} 秒，可查看当前真实处理阶段</small>
+          <small>已等待 {{ elapsedSeconds }} 秒 · 可切换到其他页面，返回后进度和计时会自动接续</small>
         </div>
         <el-progress
           :percentage="generationJob.progress"
@@ -98,11 +116,7 @@
 
       <section v-if="mapData" class="map-actions" aria-label="导图文件操作">
         <el-input v-model="searchTerm" clearable placeholder="搜索并定位知识节点" />
-        <el-select v-model="activeHistoryId" placeholder="历史版本" @change="openHistory">
-          <el-option v-for="item in histories" :key="item.id" :value="item.id"
-            :label="`${item.title} · ${formatTime(item.updated_at)}`" />
-        </el-select>
-        <el-button :loading="saving" @click="saveCurrent">保存当前布局</el-button>
+        <el-button type="primary" :loading="saving" @click="saveCurrent">保存到历史</el-button>
         <el-dropdown @command="exportMap">
           <el-button>导出 <span class="el-icon--right">⌄</span></el-button>
           <template #dropdown><el-dropdown-menu>
@@ -118,7 +132,7 @@
       <section v-if="mapData" class="atlas-workspace">
         <MindMapCanvas ref="canvasRef" :root="mapData.root" :search-term="searchTerm" @select="selectNode" />
 
-        <aside class="evidence-panel">
+        <aside ref="evidenceRef" class="evidence-panel">
           <div class="evidence-kicker">
             <span>SELECTED NODE</span>
             <i></i>
@@ -137,7 +151,7 @@
             <section class="node-question">
               <div>
                 <strong>问这个知识点</strong>
-                <span>回答只使用该节点绑定的原文</span>
+                <span>{{ hasOwnSources ? "回答只使用该节点绑定的原文" : "回答使用下方检索到的相关资料" }}</span>
               </div>
               <el-input
                 v-model="nodeQuestion"
@@ -146,17 +160,20 @@
                 maxlength="500"
                 show-word-limit
                 :placeholder="`例如：${selectedNode.title} 最容易混淆的地方是什么？`"
-                :disabled="!selectedNode.sources?.length"
+                :disabled="!questionChunkIds.length"
                 @keydown.ctrl.enter="askNode"
               />
               <el-button
                 type="primary"
                 :loading="askingNode"
-                :disabled="!selectedNode.sources?.length || !nodeQuestion.trim()"
+                :disabled="!questionChunkIds.length || !nodeQuestion.trim()"
                 @click="askNode"
               >
                 针对性提问
               </el-button>
+              <p v-if="!questionChunkIds.length" class="question-hint">
+                正在为该节点检索可用资料，稍候即可提问。
+              </p>
               <div v-if="nodeAnswer" class="node-answer">
                 <span>LLM 回答</span>
                 <p>{{ nodeAnswer.answer }}</p>
@@ -191,7 +208,30 @@
               </article>
             </div>
 
-            <el-empty v-else :image-size="72" description="这个结构节点继承自下级来源" />
+            <el-empty v-else :image-size="60" description="该节点没有直接绑定原文，可参考下方检索到的相关资料" />
+
+            <div class="source-heading related-heading">
+              <strong>知识库相关资料</strong>
+              <span v-if="relatedLoading" class="related-spinner">检索中…</span>
+              <span v-else>{{ relatedSources.length }}</span>
+            </div>
+
+            <div v-if="relatedSources.length" class="source-cards related">
+              <article v-for="source in relatedSources" :key="`rel-${source.chunk_id}`">
+                <div>
+                  <strong>{{ source.file_name }}</strong>
+                  <span>
+                    片段 {{ source.chunk_index + 1 }}
+                    <template v-if="source.page_no"> · 第 {{ source.page_no }} 页</template>
+                    <template v-if="source.score != null"> · 相关度 {{ Math.round(source.score * 100) }}%</template>
+                  </span>
+                </div>
+                <p>{{ source.source_text }}</p>
+                <RouterLink :to="source.jump_url">查看完整原文 →</RouterLink>
+              </article>
+            </div>
+            <p v-else-if="relatedLoading" class="related-hint">正在从整个知识库检索与该节点相关的资料…</p>
+            <p v-else class="related-hint">{{ relatedError || "暂无检索到的相关资料。" }}</p>
           </template>
         </aside>
       </section>
@@ -217,15 +257,17 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { ElMessage } from "element-plus";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
+import { getHealth } from "../api/health";
 import { listDocuments } from "../api/documents";
 import { listKnowledgeBases } from "../api/knowledgeBases";
 import {
-  askMindMapNode, createMindMapJob, deleteMindMapHistory, expandMindMapNode, getMindMapHistory,
-  getMindMapJob, listMindMapHistories, updateMindMapHistory,
+  askMindMapNode, createMindMapHistory, createMindMapJob, deleteMindMapHistory,
+  expandMindMapNode, getMindMapHistory, getMindMapJob, listMindMapHistories, updateMindMapHistory,
 } from "../api/mindMaps";
+import { searchKnowledge } from "../api/search";
 import MindMapCanvas from "../components/mindmap/MindMapCanvas.vue";
 import AppHeader from "../components/layout/AppHeader.vue";
 
@@ -247,11 +289,18 @@ const nodeAnswer = ref(null);
 const askingNode = ref(false);
 const loadError = ref("");
 const canvasRef = ref(null);
+const evidenceRef = ref(null);
 const searchTerm = ref("");
 const histories = ref([]);
 const activeHistoryId = ref(null);
 const saving = ref(false);
 const expandingNode = ref(false);
+const healthOnline = ref(false);
+const relatedLoading = ref(false);
+const relatedSources = ref([]);
+const relatedError = ref("");
+// 节点标题 -> 检索结果缓存，避免同一节点反复点击时重复请求。
+const relatedCache = new Map();
 let pollTimer = null;
 let elapsedTimer = null;
 const stageSteps = [
@@ -284,8 +333,29 @@ const stageLabel = computed(() => {
   return current?.label || "正在处理";
 });
 
-onMounted(loadInitialData);
+// 节点自带原文时优先用自带来源；否则回退到实时检索到的相关资料，
+// 让没有直接来源的“章节类”节点也能提问。
+const hasOwnSources = computed(() => Boolean(selectedNode.value?.sources?.length));
+const questionChunkIds = computed(() => {
+  const own = selectedNode.value?.sources?.map((source) => source.chunk_id) || [];
+  if (own.length) return own.slice(0, 8);
+  return relatedSources.value.map((source) => source.chunk_id).slice(0, 8);
+});
+
+onMounted(() => {
+  checkHealth();
+  loadInitialData();
+});
 onBeforeUnmount(stopTracking);
+
+async function checkHealth() {
+  try {
+    const data = await getHealth();
+    healthOnline.value = data.status === "ok";
+  } catch {
+    healthOnline.value = false;
+  }
+}
 
 async function loadInitialData() {
   loadingBases.value = true;
@@ -321,6 +391,10 @@ async function loadDocuments() {
 async function handleKnowledgeBaseChange() {
   mapData.value = null;
   selectedNode.value = null;
+  activeHistoryId.value = null;
+  relatedSources.value = [];
+  relatedError.value = "";
+  relatedCache.clear();
   stopTracking();
   generationJob.value = null;
   loadError.value = "";
@@ -337,22 +411,52 @@ async function loadHistories() {
 }
 
 async function openHistory(historyId) {
-  const history = await getMindMapHistory(historyId);
-  mapData.value = history.result;
-  selectedNode.value = mapData.value.root;
+  if (!historyId) return;
+  try {
+    const history = await getMindMapHistory(historyId);
+    mapData.value = history.result;
+    activeHistoryId.value = history.id;
+    relatedCache.clear();
+    selectNode(mapData.value.root);
+  } catch (error) {
+    ElMessage.error(`打开历史版本失败：${error.message}`);
+  }
 }
 
 async function saveCurrent() {
-  if (!activeHistoryId.value || !mapData.value) return;
+  if (!mapData.value) {
+    ElMessage.warning("请先生成或打开一张知识地图");
+    return;
+  }
   saving.value = true;
   try {
-    await updateMindMapHistory(activeHistoryId.value, {
-      title: mapData.value.root.title, root: mapData.value.root,
-      view_state: canvasRef.value?.getViewState() || {},
-    });
+    const viewState = canvasRef.value?.getViewState() || {};
+    if (activeHistoryId.value) {
+      await updateMindMapHistory(activeHistoryId.value, {
+        title: mapData.value.root.title,
+        root: mapData.value.root,
+        view_state: viewState,
+      });
+      ElMessage.success("已更新当前历史版本");
+    } else {
+      const created = await createMindMapHistory({
+        knowledge_base_id: knowledgeBaseId.value,
+        document_id: documentId.value || null,
+        title: mapData.value.root.title,
+        generation_mode: mapData.value.generation_mode || "ai",
+        root: mapData.value.root,
+        view_state: viewState,
+      });
+      activeHistoryId.value = created.id;
+      mapData.value.history_id = created.id;
+      ElMessage.success("已保存为新的历史版本");
+    }
     await loadHistories();
-    ElMessage.success("当前导图和布局已保存");
-  } finally { saving.value = false; }
+  } catch (error) {
+    ElMessage.error(`保存失败：${error.message}`);
+  } finally {
+    saving.value = false;
+  }
 }
 
 async function removeHistory() {
@@ -393,6 +497,17 @@ function formatTime(value) { return value ? new Date(value).toLocaleString("zh-C
 
 async function generate() {
   if (!knowledgeBaseId.value) return;
+  if (mapData.value) {
+    try {
+      await ElMessageBox.confirm(
+        "重新生成会覆盖当前正在查看的知识地图（已保存的历史版本不受影响）。确定继续吗？",
+        "重新生成确认",
+        { confirmButtonText: "重新生成", cancelButtonText: "取消", type: "warning" },
+      );
+    } catch {
+      return;
+    }
+  }
   generating.value = true;
   loadError.value = "";
   nodeAnswer.value = null;
@@ -404,6 +519,7 @@ async function generate() {
       max_nodes: 28,
     });
     sessionStorage.setItem(activeJobKey(), generationJob.value.job_id);
+    sessionStorage.setItem(startedAtKey(), String(Date.now()));
     startTracking();
   } catch (error) {
     loadError.value = error.message;
@@ -415,19 +531,62 @@ function selectNode(node) {
   selectedNode.value = node;
   nodeQuestion.value = "";
   nodeAnswer.value = null;
+  fetchRelated(node);
+  scrollToDetail();
+}
+
+// 点击节点后，用“标题 + 简介”去整个知识库检索相关片段，作为节点自带原文之外的补充。
+async function fetchRelated(node) {
+  relatedError.value = "";
+  relatedSources.value = [];
+  if (!node || !knowledgeBaseId.value) return;
+  const query = [node.title, node.summary].filter(Boolean).join(" ").trim();
+  if (!query) return;
+  const cacheKey = `${knowledgeBaseId.value}:${node.id}`;
+  if (relatedCache.has(cacheKey)) {
+    relatedSources.value = relatedCache.get(cacheKey);
+    return;
+  }
+  relatedLoading.value = true;
+  try {
+    const data = await searchKnowledge({
+      knowledge_base_id: knowledgeBaseId.value,
+      query,
+      top_k: 6,
+    });
+    const results = data.results || [];
+    relatedCache.set(cacheKey, results);
+    // 用户可能已经切到别的节点，只有仍停留在当前节点时才写入，避免结果错位。
+    if (selectedNode.value?.id === node.id) {
+      relatedSources.value = results;
+      if (!results.length) relatedError.value = data.message || "没有检索到相关资料。";
+    }
+  } catch (error) {
+    if (selectedNode.value?.id === node.id) relatedError.value = error.message;
+  } finally {
+    relatedLoading.value = false;
+  }
+}
+
+// 小屏（右侧详情栏堆到下方）时，点节点后自动滚到详情，避免用户以为“点了没反应”。
+function scrollToDetail() {
+  if (window.innerWidth > 1080) return;
+  nextTick(() => {
+    evidenceRef.value?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 }
 
 async function askNode() {
   const question = nodeQuestion.value.trim();
-  const sources = selectedNode.value?.sources || [];
-  if (!question || !sources.length) return;
+  const chunkIds = questionChunkIds.value;
+  if (!question || !chunkIds.length) return;
   askingNode.value = true;
   try {
     nodeAnswer.value = await askMindMapNode({
       knowledge_base_id: knowledgeBaseId.value,
       node_title: selectedNode.value.title,
       question,
-      source_chunk_ids: sources.map((source) => source.chunk_id).slice(0, 8),
+      source_chunk_ids: chunkIds,
     });
   } catch (error) {
     ElMessage.error(error.message);
@@ -445,7 +604,13 @@ async function expandSelectedNode() {
       node_summary: selectedNode.value.summary || "", child_count: 4,
       source_chunk_ids: selectedNode.value.sources.map((source) => source.chunk_id).slice(0, 8),
     });
-    selectedNode.value.children = expanded.children;
+    // 后端展开接口返回的子节点 id 从 mind-node-0 起重新编号，会与主树已有节点 id 撞车，
+    // G6 画布遇到重复 id 会渲染失败、导致整张导图消失。这里按选中节点重新编号，保证全树唯一。
+    selectedNode.value.children = relabelBranch(
+      expanded.children || [],
+      selectedNode.value.id,
+      selectedNode.value.depth,
+    );
     mapData.value.node_count = countNodes(mapData.value.root);
     ElMessage.success("已根据原文展开该分支，确认后请保存当前版本");
   } catch (error) { ElMessage.error(error.message); }
@@ -454,8 +619,31 @@ async function expandSelectedNode() {
 
 function countNodes(node) { return 1 + node.children.reduce((total, child) => total + countNodes(child), 0); }
 
+// 递归重编号展开得到的分支：以父节点 id 作前缀加 "-e序号"，避开主树的纯数字路径 id，
+// 同时把 depth 接续到父节点之下，保证画布层级配色正确。
+function relabelBranch(nodes, parentId, parentDepth) {
+  return nodes.map((node, index) => {
+    const id = `${parentId}-e${index}`;
+    return {
+      ...node,
+      id,
+      depth: parentDepth + 1,
+      children: relabelBranch(node.children || [], id, parentDepth + 1),
+    };
+  });
+}
+
 function activeJobKey() {
   return `codemind_mind_map_job_${knowledgeBaseId.value}`;
+}
+
+function startedAtKey() {
+  return `codemind_mind_map_started_${knowledgeBaseId.value}`;
+}
+
+function clearActiveJob() {
+  sessionStorage.removeItem(activeJobKey());
+  sessionStorage.removeItem(startedAtKey());
 }
 
 async function resumeActiveJob() {
@@ -467,23 +655,26 @@ async function resumeActiveJob() {
       applyCompletedJob();
     } else if (generationJob.value.status === "failed") {
       loadError.value = generationJob.value.error_message || "知识地图生成失败。";
-      sessionStorage.removeItem(activeJobKey());
+      clearActiveJob();
     } else {
       generating.value = true;
       startTracking();
     }
   } catch {
-    sessionStorage.removeItem(activeJobKey());
+    clearActiveJob();
   }
 }
 
 function startTracking() {
   stopTracking();
   generating.value = true;
-  elapsedSeconds.value = 0;
-  elapsedTimer = window.setInterval(() => {
-    elapsedSeconds.value += 1;
-  }, 1000);
+  // 以任务真实开始时刻为基准计算已等待时间，切走再回来也能接续显示、不归零。
+  const startedAt = Number(sessionStorage.getItem(startedAtKey())) || Date.now();
+  const tick = () => {
+    elapsedSeconds.value = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+  };
+  tick();
+  elapsedTimer = window.setInterval(tick, 1000);
   schedulePoll(300);
 }
 
@@ -502,7 +693,7 @@ async function pollJob() {
     }
     if (generationJob.value.status === "failed") {
       loadError.value = generationJob.value.error_message || "知识地图生成失败。";
-      sessionStorage.removeItem(activeJobKey());
+      clearActiveJob();
       stopTracking();
       generating.value = false;
       return;
@@ -516,12 +707,14 @@ async function pollJob() {
 
 function applyCompletedJob() {
   mapData.value = generationJob.value.result;
-  selectedNode.value = mapData.value.root;
   activeHistoryId.value = mapData.value.history_id;
-  loadHistories();
-  sessionStorage.removeItem(activeJobKey());
+  relatedCache.clear();
+  selectNode(mapData.value.root);
+  clearActiveJob();
   stopTracking();
   generating.value = false;
+  // 生成时后端已自动存了一份历史，这里刷新清单，让新地图立刻出现在历史下拉框里。
+  loadHistories();
   ElMessage.success("知识地图已生成");
 }
 
@@ -655,13 +848,30 @@ function stageClass(stageKey) {
 
 .map-actions {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.2fr) auto auto auto;
+  grid-template-columns: minmax(220px, 1fr) auto auto auto;
   gap: 10px;
   align-items: center;
   padding: 12px;
   border: 1px solid var(--cm-border);
   border-radius: 12px;
   background: var(--cm-surface);
+}
+
+.history-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 440px);
+  padding: 0 4px;
+}
+
+.history-bar label {
+  display: grid;
+  gap: 7px;
+}
+
+.history-bar label > span {
+  color: var(--cm-muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .map-meta p {
@@ -830,6 +1040,12 @@ function stageClass(stageKey) {
   font-size: 12px;
 }
 
+.question-hint {
+  margin: 0;
+  color: var(--cm-muted);
+  font-size: 12px;
+}
+
 .node-answer {
   display: grid;
   gap: 8px;
@@ -881,6 +1097,18 @@ function stageClass(stageKey) {
   font-weight: 800;
 }
 
+.related-heading {
+  margin-top: 22px;
+}
+
+.related-heading .related-spinner {
+  width: auto;
+  height: auto;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+
 .source-cards {
   display: grid;
   gap: 12px;
@@ -892,6 +1120,11 @@ function stageClass(stageKey) {
   border: 1px solid var(--cm-border);
   border-radius: 10px;
   background: var(--cm-surface-soft);
+}
+
+.source-cards.related article {
+  border-color: color-mix(in srgb, var(--cm-primary) 26%, var(--cm-border));
+  background: color-mix(in srgb, var(--cm-primary-soft) 32%, var(--cm-surface));
 }
 
 .source-cards article > div {
@@ -926,6 +1159,13 @@ function stageClass(stageKey) {
   color: var(--cm-primary);
   font-size: 13px;
   font-weight: 800;
+}
+
+.related-hint {
+  margin: 12px 0 0;
+  color: var(--cm-muted);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .empty-atlas {

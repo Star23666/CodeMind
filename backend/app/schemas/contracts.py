@@ -173,6 +173,15 @@ class MindMapResponse(BaseModel):
     root: MindMapNode
 
 
+class MindMapHistoryCreate(BaseModel):
+    knowledge_base_id: int = Field(..., ge=1)
+    document_id: int | None = Field(default=None, ge=1)
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+    generation_mode: str = "ai"
+    root: MindMapNode
+    view_state: dict = Field(default_factory=dict)
+
+
 class MindMapHistoryUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=120)
     root: MindMapNode | None = None

@@ -21,6 +21,7 @@ from app.schemas.contracts import (
     MindMapGenerateRequest,
     MindMapExpandRequest,
     MindMapNode,
+    MindMapHistoryCreate,
     MindMapHistoryRead,
     MindMapHistoryUpdate,
     MindMapJobRead,
@@ -349,6 +350,18 @@ async def expand_mind_map_node(
         raise HTTPException(status_code=404, detail="节点来源不存在或无权访问。") from exc
     except MindMapGenerationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.post("/mind-maps/histories", response_model=MindMapHistoryRead, status_code=status.HTTP_201_CREATED)
+async def create_mind_map_history(
+    payload: MindMapHistoryCreate,
+    current_user: UserRead = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    try:
+        knowledge_base_service.get_owned(db, payload.knowledge_base_id, current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="知识库不存在。") from exc
+    return mind_map_history_service.create(db, owner_id=current_user.id, payload=payload)
 
 
 @router.get("/mind-maps/histories", response_model=list[MindMapHistoryRead])

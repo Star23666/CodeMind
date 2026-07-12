@@ -3,7 +3,12 @@ import json
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.schemas.contracts import MindMapHistoryRead, MindMapHistoryUpdate, MindMapResponse
+from app.schemas.contracts import (
+    MindMapHistoryCreate,
+    MindMapHistoryRead,
+    MindMapHistoryUpdate,
+    MindMapResponse,
+)
 
 
 class MindMapHistoryService:
@@ -18,6 +23,38 @@ class MindMapHistoryService:
             "user_id": owner_id, "knowledge_base_id": result.knowledge_base_id,
             "document_id": result.document_id, "title": title, "node_count": result.node_count,
             "result_json": result.model_dump_json(),
+        })
+        db.commit()
+        history_id = int(cursor.lastrowid)
+        result.history_id = history_id
+        db.execute(text("UPDATE mind_map_histories SET result_json=:result WHERE id=:id"), {
+            "id": history_id, "result": result.model_dump_json(),
+        })
+        db.commit()
+        return self.get(db, history_id=history_id, owner_id=owner_id)
+
+    def create(self, db: Session, *, owner_id: int, payload: MindMapHistoryCreate) -> MindMapHistoryRead:
+        self._ensure_table(db)
+        node_count = self._count(payload.root)
+        title = (payload.title or payload.root.title).strip()[:120] or "未命名知识地图"
+        result = MindMapResponse(
+            history_id=None,
+            knowledge_base_id=payload.knowledge_base_id,
+            document_id=payload.document_id,
+            generation_mode=payload.generation_mode,
+            node_count=node_count,
+            message="用户保存的知识地图版本。",
+            root=payload.root,
+        )
+        cursor = db.execute(text("""
+            INSERT INTO mind_map_histories
+                (user_id, knowledge_base_id, document_id, title, node_count, result_json, view_state_json)
+            VALUES (:user_id, :knowledge_base_id, :document_id, :title, :node_count, :result_json, :view_state)
+        """), {
+            "user_id": owner_id, "knowledge_base_id": payload.knowledge_base_id,
+            "document_id": payload.document_id, "title": title, "node_count": node_count,
+            "result_json": result.model_dump_json(),
+            "view_state": json.dumps(payload.view_state, ensure_ascii=False),
         })
         db.commit()
         history_id = int(cursor.lastrowid)
