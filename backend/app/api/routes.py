@@ -390,8 +390,12 @@ async def create_mind_map_history(
 ):
     try:
         knowledge_base_service.get_owned(db, payload.knowledge_base_id, current_user.id)
+        if payload.document_id is not None:
+            document = document_service.get_owned_document(db, payload.document_id, current_user.id)
+            if document.knowledge_base_id != payload.knowledge_base_id:
+                raise ValueError("Document not found")
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail="知识库不存在。") from exc
+        raise HTTPException(status_code=404, detail="知识库或文档不存在。") from exc
     return mind_map_history_service.create(db, owner_id=current_user.id, payload=payload)
 
 
