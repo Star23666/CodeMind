@@ -23,7 +23,6 @@ class MindMapJobService:
         owner_id: int,
         request: MindMapGenerateRequest,
     ) -> MindMapJobRead:
-        self._ensure_table(db)
         knowledge_base_service.get_owned(db, request.knowledge_base_id, owner_id)
         if request.document_id is not None:
             document = document_service.get_owned_document(db, request.document_id, owner_id)
@@ -106,7 +105,6 @@ class MindMapJobService:
             db.close()
 
     def get_job(self, db: Session, *, job_id: str, owner_id: int) -> MindMapJobRead:
-        self._ensure_table(db)
         row = self._get_row(db, job_id=job_id, owner_id=owner_id)
         if row is None:
             raise ValueError("Mind map job not found")
@@ -186,31 +184,5 @@ class MindMapJobService:
         except Exception:
             db.rollback()
             logger.exception("Unable to persist mind map job failure: %s", job_id)
-
-    def _ensure_table(self, db: Session) -> None:
-        db.execute(
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS mind_map_jobs (
-                    id VARCHAR(32) PRIMARY KEY,
-                    user_id BIGINT NOT NULL,
-                    knowledge_base_id BIGINT NOT NULL,
-                    document_id BIGINT NULL,
-                    max_depth INTEGER NOT NULL DEFAULT 3,
-                    max_nodes INTEGER NOT NULL DEFAULT 28,
-                    status VARCHAR(20) NOT NULL,
-                    stage VARCHAR(30) NOT NULL,
-                    progress INTEGER NOT NULL DEFAULT 0,
-                    message VARCHAR(255) NOT NULL,
-                    result_json LONGTEXT NULL,
-                    error_message TEXT NULL,
-                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-        )
-        db.commit()
-
 
 mind_map_job_service = MindMapJobService()

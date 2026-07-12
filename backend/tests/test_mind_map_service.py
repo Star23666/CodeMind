@@ -45,6 +45,31 @@ class FakeLlmClient:
         return self.response
 
 
+class ConcurrencyTrackingLlmClient:
+    def __init__(self) -> None:
+        self.active_calls = 0
+        self.max_active_calls = 0
+
+    async def generate_answer(self, prompt: str, **kwargs) -> str:
+        self.active_calls += 1
+        self.max_active_calls = max(self.max_active_calls, self.active_calls)
+        try:
+            await asyncio.sleep(0.01)
+            return """{
+              "title": "操作系统",
+              "summary": "课程知识结构",
+              "source_chunk_ids": [],
+              "children": [{
+                "title": "进程与线程",
+                "summary": "并发基础",
+                "source_chunk_ids": [11],
+                "children": []
+              }]
+            }"""
+        finally:
+            self.active_calls -= 1
+
+
 class MindMapServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.engine = create_engine("sqlite+pysqlite:///:memory:")
@@ -117,6 +142,37 @@ class MindMapServiceTest(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 503)
         self.assertIn("必须经过大模型分析", str(context.exception))
+
+    def test_generation_limits_parallel_llm_calls(self) -> None:
+        for chunk_id in range(13, 26):
+            self.db.execute(
+                text(
+                    "INSERT INTO document_chunks "
+                    "(id, document_id, chunk_index, chunk_text, page_no) "
+                    "VALUES (:id, 20, :chunk_index, :chunk_text, 1)"
+                ),
+                {
+                    "id": chunk_id,
+                    "chunk_index": chunk_id - 11,
+                    "chunk_text": f"并发控制资料片段 {chunk_id}",
+                },
+            )
+        self.db.commit()
+        client = ConcurrencyTrackingLlmClient()
+
+        with (
+            patch("app.services.mind_map_service.settings.llm_api_key", "test-key"),
+            patch("app.services.mind_map_service.settings.llm_model", "test-model"),
+        ):
+            run_async(
+                MindMapService(client=client).generate(
+                    self.db,
+                    owner_id=1,
+                    request=MindMapGenerateRequest(knowledge_base_id=10),
+                )
+            )
+
+        self.assertEqual(client.max_active_calls, 3)
 
     def test_document_must_be_completed(self) -> None:
         self.db.execute(text("UPDATE documents SET parse_status = 'processing' WHERE id = 20"))
@@ -215,6 +271,46 @@ class MindMapServiceTest(unittest.TestCase):
                         name VARCHAR(100) NOT NULL,
                         description TEXT,
                         visibility VARCHAR(20) NOT NULL DEFAULT 'private'
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE mind_map_histories (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        knowledge_base_id INTEGER NOT NULL,
+                        document_id INTEGER,
+                        title VARCHAR(120) NOT NULL,
+                        node_count INTEGER NOT NULL,
+                        result_json TEXT NOT NULL,
+                        view_state_json TEXT NOT NULL,
+                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE mind_map_jobs (
+                        id VARCHAR(32) PRIMARY KEY,
+                        user_id INTEGER NOT NULL,
+                        knowledge_base_id INTEGER NOT NULL,
+                        document_id INTEGER,
+                        max_depth INTEGER NOT NULL DEFAULT 3,
+                        max_nodes INTEGER NOT NULL DEFAULT 28,
+                        status VARCHAR(20) NOT NULL,
+                        stage VARCHAR(30) NOT NULL,
+                        progress INTEGER NOT NULL DEFAULT 0,
+                        message VARCHAR(255) NOT NULL,
+                        result_json TEXT,
+                        error_message TEXT,
+                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                     )
                     """
                 )
@@ -343,6 +439,28 @@ class MindMapApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertIn("已解析片段", response.json()["detail"])
+
+    def test_delete_history_returns_action_status(self) -> None:
+        with self.SessionLocal() as db:
+            db.execute(
+                text(
+                    """
+                    INSERT INTO mind_map_histories (
+                        id, user_id, knowledge_base_id, document_id, title,
+                        node_count, result_json, view_state_json
+                    ) VALUES (1, 1, 10, 20, '操作系统', 1, '{}', '{}')
+                    """
+                )
+            )
+            db.commit()
+
+        response = self.client.delete("/api/mind-maps/histories/1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"status": "accepted", "message": "思维导图历史记录已删除。"},
+        )
 
 
 if __name__ == "__main__":

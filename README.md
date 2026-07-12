@@ -164,6 +164,24 @@ docker compose logs -f mysql
 
 `database/schema.sql` 只会在 MySQL 数据卷第一次初始化时执行。拉取包含数据库结构变更的新代码后，不能只重建镜像，还需要执行对应迁移。
 
+### 2026-07-12：思维导图历史与后台任务表
+
+该迁移创建 `mind_map_histories` 和 `mind_map_jobs`，包含业务所需的外键、索引和检查约束。已有 VPS 数据库需要在部署新版后端前执行一次：
+
+Linux、macOS 或 WSL：
+
+```bash
+docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' \
+  < database/migrations/20260712_create_mind_map_tables.sql
+```
+
+Windows PowerShell：
+
+```powershell
+Get-Content -Raw database\migrations\20260712_create_mind_map_tables.sql |
+  docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
+```
+
 ### 2026-07-11：文档处理错误信息
 
 最新文档处理流程会在 `documents.error_message` 中保存可展示的失败原因。已有数据库先执行：

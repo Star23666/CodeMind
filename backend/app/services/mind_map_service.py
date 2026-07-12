@@ -38,6 +38,7 @@ class MindMapGenerationError(RuntimeError):
 class MindMapService:
     prompt_char_budget = 42_000
     prompt_chunk_chars = 900
+    llm_concurrency = 3
 
     def __init__(self, *, client: LlmClient = llm_client) -> None:
         self.client = client
@@ -73,24 +74,34 @@ class MindMapService:
         try:
             selected_rows = self._sample_rows(rows)
             batches = [selected_rows[index:index + 3] for index in range(0, len(selected_rows), 3)]
-            tasks = [asyncio.create_task(self.client.generate_answer(
-                    self._build_batch_prompt(batch), system_message=MIND_MAP_SYSTEM_MESSAGE,
-                    temperature=0.1, timeout_seconds=300.0,
-                    max_tokens=max(settings.llm_max_tokens, 700), max_retries=0,
-                    model=self._structure_model(),
-                )) for batch in batches]
+            semaphore = asyncio.Semaphore(self.llm_concurrency)
+
+            async def analyze_batch(batch):
+                async with semaphore:
+                    return await self.client.generate_answer(
+                        self._build_batch_prompt(batch),
+                        system_message=MIND_MAP_SYSTEM_MESSAGE,
+                        temperature=0.1,
+                        timeout_seconds=300.0,
+                        max_tokens=max(settings.llm_max_tokens, 700),
+                        max_retries=0,
+                        model=self._structure_model(),
+                    )
+
+            tasks = [asyncio.create_task(analyze_batch(batch)) for batch in batches]
             batch_notes = []
             for completed, task in enumerate(asyncio.as_completed(tasks), start=1):
                 batch_notes.append(await task)
                 progress = 32 + round(completed / (len(batches) + 1) * 36)
                 self._notify(progress_callback, "extracting", progress, f"已提炼 {completed}/{len(batches)} 组资料")
             self._notify(progress_callback, "merging", 72, "正在合并各章节知识点并生成层级")
-            raw = await self.client.generate_answer(
-                self._build_merge_prompt(batch_notes, request=request, title=fallback_title),
-                system_message=MIND_MAP_SYSTEM_MESSAGE, temperature=0.1,
-                timeout_seconds=300.0, max_tokens=max(settings.llm_max_tokens, 2000), max_retries=0,
-                model=self._structure_model(),
-            )
+            async with semaphore:
+                raw = await self.client.generate_answer(
+                    self._build_merge_prompt(batch_notes, request=request, title=fallback_title),
+                    system_message=MIND_MAP_SYSTEM_MESSAGE, temperature=0.1,
+                    timeout_seconds=300.0, max_tokens=max(settings.llm_max_tokens, 2000), max_retries=0,
+                    model=self._structure_model(),
+                )
             self._notify(progress_callback, "validating", 80, "正在校验节点层级和原文来源")
             root = self._parse_ai_tree(
                 raw,
@@ -128,12 +139,6 @@ class MindMapService:
         request: MindMapQuestionRequest,
     ) -> MindMapQuestionResponse:
         knowledge_base_service.get_owned(db, request.knowledge_base_id, owner_id)
-        if not settings.llm_api_key or not settings.llm_model:
-            raise MindMapGenerationError(
-                "节点问答需要在线大模型，请先完成服务端 LLM 配置。",
-                status_code=503,
-            )
-
         requested_ids = list(dict.fromkeys(request.source_chunk_ids))
         query = text(
             """
@@ -158,6 +163,12 @@ class MindMapService:
         row_map = {int(row["chunk_id"]): row for row in rows}
         if set(row_map) != set(requested_ids):
             raise ValueError("Mind map source not found")
+
+        if not settings.llm_api_key or not settings.llm_model:
+            raise MindMapGenerationError(
+                "节点问答需要在线大模型，请先完成服务端 LLM 配置。",
+                status_code=503,
+            )
 
         sources = [self._to_reference(row_map[chunk_id]) for chunk_id in requested_ids]
         prompt = build_rag_prompt(

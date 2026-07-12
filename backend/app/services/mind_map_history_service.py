@@ -13,7 +13,6 @@ from app.schemas.contracts import (
 
 class MindMapHistoryService:
     def save_generated(self, db: Session, *, owner_id: int, result: MindMapResponse) -> MindMapHistoryRead:
-        self._ensure_table(db)
         title = result.root.title[:120]
         cursor = db.execute(text("""
             INSERT INTO mind_map_histories
@@ -34,7 +33,6 @@ class MindMapHistoryService:
         return self.get(db, history_id=history_id, owner_id=owner_id)
 
     def create(self, db: Session, *, owner_id: int, payload: MindMapHistoryCreate) -> MindMapHistoryRead:
-        self._ensure_table(db)
         node_count = self._count(payload.root)
         title = (payload.title or payload.root.title).strip()[:120] or "未命名知识地图"
         result = MindMapResponse(
@@ -66,7 +64,6 @@ class MindMapHistoryService:
         return self.get(db, history_id=history_id, owner_id=owner_id)
 
     def list(self, db: Session, *, owner_id: int, knowledge_base_id: int | None = None):
-        self._ensure_table(db)
         clause = "AND knowledge_base_id=:knowledge_base_id" if knowledge_base_id else ""
         rows = db.execute(text(f"""
             SELECT * FROM mind_map_histories WHERE user_id=:owner_id {clause}
@@ -75,7 +72,6 @@ class MindMapHistoryService:
         return [self._read(row, include_result=False) for row in rows]
 
     def get(self, db: Session, *, history_id: int, owner_id: int) -> MindMapHistoryRead:
-        self._ensure_table(db)
         row = db.execute(text("SELECT * FROM mind_map_histories WHERE id=:id AND user_id=:owner_id"), {
             "id": history_id, "owner_id": owner_id,
         }).mappings().first()
@@ -119,20 +115,5 @@ class MindMapHistoryService:
 
     def _count(self, node):
         return 1 + sum(self._count(child) for child in node.children)
-
-    def _ensure_table(self, db: Session):
-        id_column = "INTEGER PRIMARY KEY AUTOINCREMENT" if db.bind.dialect.name == "sqlite" else "BIGINT PRIMARY KEY AUTO_INCREMENT"
-        db.execute(text(f"""
-            CREATE TABLE IF NOT EXISTS mind_map_histories (
-                id {id_column}, user_id BIGINT NOT NULL,
-                knowledge_base_id BIGINT NOT NULL, document_id BIGINT NULL,
-                title VARCHAR(120) NOT NULL, node_count INTEGER NOT NULL,
-                result_json LONGTEXT NOT NULL, view_state_json LONGTEXT NOT NULL,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        """))
-        db.commit()
-
 
 mind_map_history_service = MindMapHistoryService()

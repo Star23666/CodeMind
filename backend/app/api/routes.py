@@ -430,7 +430,7 @@ async def delete_mind_map_history(
 ):
     try:
         mind_map_history_service.delete(db, history_id=history_id, owner_id=current_user.id)
-        return ActionResponse(message="思维导图历史记录已删除。")
+        return ActionResponse(status="accepted", message="思维导图历史记录已删除。")
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="思维导图历史记录不存在。") from exc
 
