@@ -11,6 +11,8 @@
       <RouterLink to="/">AI 问答</RouterLink>
       <RouterLink to="/documents">文档上传</RouterLink>
       <RouterLink to="/mind-map">知识地图</RouterLink>
+      <RouterLink to="/library">文档库</RouterLink>
+      <RouterLink to="/history">问答历史</RouterLink>
       <RouterLink to="/me">我的</RouterLink>
     </nav>
 
@@ -21,7 +23,7 @@
 
       <template v-if="userStore.isLoggedIn">
         <RouterLink class="user-link" to="/me">{{ userStore.displayName }}</RouterLink>
-        <el-button text @click="logout">退出</el-button>
+        <el-button text @click="logout">退出登录</el-button>
       </template>
       <el-button v-else type="primary" plain @click="goLogin">登录</el-button>
 
@@ -37,6 +39,7 @@
 
 <script setup>
 import { Cpu, Moon, Sunny } from "@element-plus/icons-vue";
+import { ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { logoutUser } from "../../api/auth";
 import { useTheme } from "../../composables/useTheme";
@@ -66,6 +69,20 @@ function goLogin() {
 }
 
 async function logout() {
+  try {
+    await ElMessageBox.confirm(
+      "确定要退出当前账号吗？",
+      "确认退出登录",
+      {
+        confirmButtonText: "退出登录",
+        cancelButtonText: "取消",
+        type: "warning",
+      },
+    );
+  } catch {
+    return;
+  }
+
   try {
     await logoutUser();
   } catch {

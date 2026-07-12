@@ -30,7 +30,14 @@ request.interceptors.response.use(
       unauthorizedHandler?.();
     }
 
-    const detail = error.response?.data?.detail;
+    let detail = error.response?.data?.detail;
+    if (!detail && error.response?.data instanceof ArrayBuffer) {
+      try {
+        detail = JSON.parse(new TextDecoder("utf-8").decode(error.response.data)).detail;
+      } catch {
+        detail = null;
+      }
+    }
     const message = Array.isArray(detail)
       ? detail.map((item) => item.msg || item.message || String(item)).join("；")
       : detail || error.message || "请求失败，请稍后重试。";

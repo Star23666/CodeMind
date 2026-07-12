@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -202,6 +203,36 @@ async def get_document(
         return document_service.get_owned_document(db, document_id, current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在。") from exc
+
+
+@router.get("/documents/{document_id}/content", response_class=FileResponse)
+async def get_document_content(
+    document_id: int,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    try:
+        file_info = document_service.get_owned_file(
+            db,
+            document_id=document_id,
+            owner_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在或原文件已丢失。") from exc
+
+    media_types = {
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "md": "text/markdown; charset=utf-8",
+        "markdown": "text/markdown; charset=utf-8",
+        "txt": "text/plain; charset=utf-8",
+    }
+    return FileResponse(
+        path=file_info["path"],
+        filename=file_info["file_name"],
+        media_type=media_types.get(str(file_info["file_type"]), "application/octet-stream"),
+        content_disposition_type="inline",
+    )
 
 
 @router.delete("/documents/{document_id}", response_model=ActionResponse)

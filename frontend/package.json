@@ -12,7 +12,10 @@
     "@antv/g6": "^5.1.1",
     "@element-plus/icons-vue": "^2.3.1",
     "axios": "^1.7.9",
+    "dompurify": "^3.2.6",
     "element-plus": "^2.9.1",
+    "mammoth": "^1.9.1",
+    "marked": "^15.0.12",
     "vue": "^3.5.13",
     "vue-router": "^4.6.4"
   },
