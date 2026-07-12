@@ -1,5 +1,8 @@
 import { request } from "./request";
 
+// 上传需要把整个文件传到服务器并写入磁盘，不能沿用普通接口的 20 秒超时。
+const UPLOAD_TIMEOUT = 300_000;
+
 export function listDocuments(params = {}) {
   return request.get("/documents", { params });
 }
@@ -24,6 +27,7 @@ export function uploadDocument({ knowledgeBaseId = 1, file }) {
     headers: {
       "Content-Type": "multipart/form-data",
     },
+    timeout: UPLOAD_TIMEOUT,
   });
 }
 
