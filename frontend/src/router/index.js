@@ -46,6 +46,12 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: "/mind-map",
+    name: "mind-map",
+    component: () => import("../views/MindMapView.vue"),
+    meta: { requiresAuth: true },
+  },
+  {
     path: "/me",
     name: "me",
     component: () => import("../views/MeView.vue"),

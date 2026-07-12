@@ -148,3 +148,52 @@ CREATE TABLE IF NOT EXISTS feedbacks (
     ON DELETE CASCADE,
   CONSTRAINT chk_feedbacks_rating CHECK (rating BETWEEN 1 AND 5)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS mind_map_histories (
+  id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT UNSIGNED NOT NULL,
+  knowledge_base_id BIGINT UNSIGNED NOT NULL,
+  document_id BIGINT UNSIGNED NULL,
+  title VARCHAR(120) NOT NULL,
+  node_count INT UNSIGNED NOT NULL,
+  result_json LONGTEXT NOT NULL,
+  view_state_json LONGTEXT NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_mind_map_history_user_updated (user_id, updated_at),
+  CONSTRAINT fk_mind_map_history_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_mind_map_history_kb FOREIGN KEY (knowledge_base_id) REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+  CONSTRAINT fk_mind_map_history_document FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS mind_map_jobs (
+  id VARCHAR(32) PRIMARY KEY,
+  user_id BIGINT UNSIGNED NOT NULL,
+  knowledge_base_id BIGINT UNSIGNED NOT NULL,
+  document_id BIGINT UNSIGNED NULL,
+  max_depth INT UNSIGNED NOT NULL DEFAULT 3,
+  max_nodes INT UNSIGNED NOT NULL DEFAULT 28,
+  status VARCHAR(20) NOT NULL,
+  stage VARCHAR(30) NOT NULL,
+  progress TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  message VARCHAR(255) NOT NULL,
+  result_json LONGTEXT NULL,
+  error_message TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_mind_map_jobs_user_created (user_id, created_at),
+  KEY idx_mind_map_jobs_status (status),
+  CONSTRAINT fk_mind_map_jobs_user
+    FOREIGN KEY (user_id) REFERENCES users(id)
+    ON DELETE CASCADE,
+  CONSTRAINT fk_mind_map_jobs_knowledge_base
+    FOREIGN KEY (knowledge_base_id) REFERENCES knowledge_bases(id)
+    ON DELETE CASCADE,
+  CONSTRAINT fk_mind_map_jobs_document
+    FOREIGN KEY (document_id) REFERENCES documents(id)
+    ON DELETE SET NULL,
+  CONSTRAINT chk_mind_map_jobs_status
+    CHECK (status IN ('queued', 'processing', 'completed', 'failed')),
+  CONSTRAINT chk_mind_map_jobs_progress
+    CHECK (progress BETWEEN 0 AND 100)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

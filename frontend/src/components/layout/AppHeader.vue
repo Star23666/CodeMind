@@ -10,6 +10,7 @@
     <nav class="nav-links" aria-label="主导航">
       <RouterLink to="/">AI 问答</RouterLink>
       <RouterLink to="/documents">文档上传</RouterLink>
+      <RouterLink to="/mind-map">知识地图</RouterLink>
       <RouterLink to="/library">文档库</RouterLink>
       <RouterLink to="/history">问答历史</RouterLink>
       <RouterLink to="/me">我的</RouterLink>

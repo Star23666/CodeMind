@@ -1,0 +1,512 @@
+import asyncio
+import json
+import logging
+from collections.abc import Callable
+
+from sqlalchemy import bindparam, text
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.schemas.contracts import (
+    MindMapGenerateRequest,
+    MindMapExpandRequest,
+    MindMapNode,
+    MindMapQuestionRequest,
+    MindMapQuestionResponse,
+    MindMapResponse,
+    MindMapSource,
+    SourceReference,
+)
+from app.services.knowledge_base_service import knowledge_base_service
+from app.services.llm_client import LlmClient, LlmServiceError, llm_client
+from app.services.prompt_builder import build_rag_prompt, sanitize_answer_citations
+
+
+logger = logging.getLogger(__name__)
+
+MIND_MAP_SYSTEM_MESSAGE = """你是 CodeMind 的知识结构整理助手。
+你的任务是把用户提供的学习资料整理成可核对原文的思维导图。
+只能使用给定资料，不得补充资料外事实。必须严格返回 JSON，不要输出 Markdown。"""
+
+
+class MindMapGenerationError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int = 409) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class MindMapService:
+    prompt_char_budget = 42_000
+    prompt_chunk_chars = 900
+    llm_concurrency = 3
+
+    def __init__(self, *, client: LlmClient = llm_client) -> None:
+        self.client = client
+
+    async def generate(
+        self,
+        db: Session,
+        *,
+        owner_id: int,
+        request: MindMapGenerateRequest,
+        progress_callback: Callable[[str, int, str], None] | None = None,
+    ) -> MindMapResponse:
+        knowledge_base = knowledge_base_service.get_owned(db, request.knowledge_base_id, owner_id)
+        self._notify(progress_callback, "collecting", 10, "正在确认知识库和资料范围")
+        document = self._get_document_scope(db, owner_id=owner_id, request=request)
+        rows = self._load_completed_chunks(db, owner_id=owner_id, request=request)
+        if not rows:
+            scope_name = "该文档" if request.document_id else "该知识库"
+            raise MindMapGenerationError(
+                f"{scope_name}还没有可用于生成导图的已解析片段，请先完成文档上传和解析。"
+            )
+        self._notify(progress_callback, "preparing", 25, f"已读取 {len(rows)} 个资料片段")
+
+        source_map = {int(row["chunk_id"]): self._to_source(row) for row in rows}
+        fallback_title = document["file_name"] if document else knowledge_base.name
+
+        if not settings.llm_api_key or not settings.llm_model:
+            raise MindMapGenerationError(
+                "思维导图必须经过大模型分析，请先完成服务端 LLM 配置。",
+                status_code=503,
+            )
+
+        try:
+            selected_rows = self._sample_rows(rows)
+            batches = [selected_rows[index:index + 3] for index in range(0, len(selected_rows), 3)]
+            semaphore = asyncio.Semaphore(self.llm_concurrency)
+
+            async def analyze_batch(batch):
+                async with semaphore:
+                    return await self.client.generate_answer(
+                        self._build_batch_prompt(batch),
+                        system_message=MIND_MAP_SYSTEM_MESSAGE,
+                        temperature=0.1,
+                        timeout_seconds=300.0,
+                        max_tokens=max(settings.llm_max_tokens, 700),
+                        max_retries=0,
+                        model=self._structure_model(),
+                    )
+
+            tasks = [asyncio.create_task(analyze_batch(batch)) for batch in batches]
+            batch_notes = []
+            for completed, task in enumerate(asyncio.as_completed(tasks), start=1):
+                batch_notes.append(await task)
+                progress = 32 + round(completed / (len(batches) + 1) * 36)
+                self._notify(progress_callback, "extracting", progress, f"已提炼 {completed}/{len(batches)} 组资料")
+            self._notify(progress_callback, "merging", 72, "正在合并各章节知识点并生成层级")
+            async with semaphore:
+                raw = await self.client.generate_answer(
+                    self._build_merge_prompt(batch_notes, request=request, title=fallback_title),
+                    system_message=MIND_MAP_SYSTEM_MESSAGE, temperature=0.1,
+                    timeout_seconds=300.0, max_tokens=max(settings.llm_max_tokens, 2000), max_retries=0,
+                    model=self._structure_model(),
+                )
+            self._notify(progress_callback, "validating", 80, "正在校验节点层级和原文来源")
+            root = self._parse_ai_tree(
+                raw,
+                source_map=source_map,
+                fallback_title=fallback_title,
+                max_depth=request.max_depth,
+                max_nodes=request.max_nodes,
+            )
+            self._notify(progress_callback, "assembling", 92, "正在整理画布节点和连线")
+        except LlmServiceError as exc:
+            logger.warning("Mind map LLM analysis failed: %s", exc)
+            raise MindMapGenerationError(
+                f"思维导图分析失败：{exc}",
+                status_code=exc.status_code,
+            ) from exc
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            logger.warning("Mind map LLM returned invalid structured data: %s", exc)
+            raise MindMapGenerationError(
+                "大模型未返回有效的导图结构，请重新生成。",
+                status_code=502,
+            ) from exc
+
+        return self._response(
+            request=request,
+            mode="ai",
+            message="已由大模型分析资料并生成知识结构，点击节点可核对原文依据。",
+            root=root,
+        )
+
+    async def answer_node_question(
+        self,
+        db: Session,
+        *,
+        owner_id: int,
+        request: MindMapQuestionRequest,
+    ) -> MindMapQuestionResponse:
+        knowledge_base_service.get_owned(db, request.knowledge_base_id, owner_id)
+        requested_ids = list(dict.fromkeys(request.source_chunk_ids))
+        query = text(
+            """
+            SELECT c.id AS chunk_id, c.document_id, c.chunk_index, c.chunk_text,
+                   c.page_no, d.file_name
+            FROM document_chunks c
+            JOIN documents d ON d.id = c.document_id
+            WHERE c.id IN :chunk_ids
+              AND d.knowledge_base_id = :knowledge_base_id
+              AND d.owner_id = :owner_id
+              AND d.parse_status = 'completed'
+            """
+        ).bindparams(bindparam("chunk_ids", expanding=True))
+        rows = db.execute(
+            query,
+            {
+                "chunk_ids": requested_ids,
+                "knowledge_base_id": request.knowledge_base_id,
+                "owner_id": owner_id,
+            },
+        ).mappings().all()
+        row_map = {int(row["chunk_id"]): row for row in rows}
+        if set(row_map) != set(requested_ids):
+            raise ValueError("Mind map source not found")
+
+        if not settings.llm_api_key or not settings.llm_model:
+            raise MindMapGenerationError(
+                "节点问答需要在线大模型，请先完成服务端 LLM 配置。",
+                status_code=503,
+            )
+
+        sources = [self._to_reference(row_map[chunk_id]) for chunk_id in requested_ids]
+        prompt = build_rag_prompt(
+            question=f"围绕知识点“{request.node_title}”回答：{request.question}",
+            rewritten_question=None,
+            sources=sources,
+        )
+        try:
+            answer = await self.client.generate_answer(
+                prompt,
+                timeout_seconds=300.0,
+                max_tokens=max(settings.llm_max_tokens, 1200),
+            )
+        except LlmServiceError as exc:
+            raise MindMapGenerationError(str(exc), status_code=exc.status_code) from exc
+
+        return MindMapQuestionResponse(
+            knowledge_base_id=request.knowledge_base_id,
+            node_title=request.node_title,
+            question=request.question,
+            answer=sanitize_answer_citations(answer, source_count=len(sources)),
+            sources=sources,
+        )
+
+    async def expand_node(self, db: Session, *, owner_id: int, request: MindMapExpandRequest) -> MindMapNode:
+        knowledge_base_service.get_owned(db, request.knowledge_base_id, owner_id)
+        ids = list(dict.fromkeys(request.source_chunk_ids))
+        query = text("""
+            SELECT c.id AS chunk_id, c.document_id, c.chunk_index, c.chunk_text, c.page_no, d.file_name
+            FROM document_chunks c JOIN documents d ON d.id=c.document_id
+            WHERE c.id IN :chunk_ids AND d.knowledge_base_id=:knowledge_base_id
+              AND d.owner_id=:owner_id AND d.parse_status='completed'
+        """).bindparams(bindparam("chunk_ids", expanding=True))
+        rows = db.execute(query, {"chunk_ids": ids, "knowledge_base_id": request.knowledge_base_id,
+                                  "owner_id": owner_id}).mappings().all()
+        if {int(row["chunk_id"]) for row in rows} != set(ids):
+            raise ValueError("Mind map source not found")
+        blocks = [f"[chunk_id={row['chunk_id']}] {self._normalize(row['chunk_text'])[:1200]}" for row in rows]
+        try:
+            raw = await self.client.generate_answer(
+                f"""仅根据资料，把知识点“{request.node_title}”展开为 {request.child_count} 个更具体的子知识点。
+仅返回 JSON：{{"title":"{request.node_title}","summary":"概述","source_chunk_ids":{ids},"children":[{{"title":"子知识点","summary":"简述","source_chunk_ids":[真实编号],"children":[]}}]}}
+资料：\n{chr(10).join(blocks)}""",
+                system_message=MIND_MAP_SYSTEM_MESSAGE, temperature=0.1,
+                timeout_seconds=300, max_tokens=max(settings.llm_max_tokens, 700), max_retries=0,
+                model=self._structure_model(),
+            )
+        except LlmServiceError as exc:
+            raise MindMapGenerationError(str(exc), status_code=exc.status_code) from exc
+        source_map = {int(row["chunk_id"]): self._to_source(row) for row in rows}
+        return self._parse_ai_tree(raw, source_map=source_map, fallback_title=request.node_title,
+                                   max_depth=1, max_nodes=request.child_count + 1)
+
+    def _get_document_scope(self, db: Session, *, owner_id: int, request: MindMapGenerateRequest):
+        if request.document_id is None:
+            return None
+
+        row = db.execute(
+            text(
+                """
+                SELECT id, file_name, parse_status
+                FROM documents
+                WHERE id = :document_id
+                  AND knowledge_base_id = :knowledge_base_id
+                  AND owner_id = :owner_id
+                """
+            ),
+            {
+                "document_id": request.document_id,
+                "knowledge_base_id": request.knowledge_base_id,
+                "owner_id": owner_id,
+            },
+        ).mappings().first()
+        if row is None:
+            raise ValueError("Document not found")
+        if row["parse_status"] != "completed":
+            raise MindMapGenerationError("该文档尚未完成解析，暂时不能生成思维导图。")
+        return row
+
+    def _load_completed_chunks(self, db: Session, *, owner_id: int, request: MindMapGenerateRequest):
+        document_filter = "AND d.id = :document_id" if request.document_id is not None else ""
+        params = {
+            "knowledge_base_id": request.knowledge_base_id,
+            "owner_id": owner_id,
+        }
+        if request.document_id is not None:
+            params["document_id"] = request.document_id
+
+        return db.execute(
+            text(
+                f"""
+                SELECT c.id AS chunk_id, c.document_id, c.chunk_index, c.chunk_text,
+                       c.page_no, d.file_name
+                FROM document_chunks c
+                JOIN documents d ON d.id = c.document_id
+                WHERE d.knowledge_base_id = :knowledge_base_id
+                  AND d.owner_id = :owner_id
+                  AND d.parse_status = 'completed'
+                  {document_filter}
+                ORDER BY d.id ASC, c.chunk_index ASC
+                """
+            ),
+            params,
+        ).mappings().all()
+
+    def _build_prompt(self, rows, *, request: MindMapGenerateRequest, title: str) -> str:
+        selected_rows = self._sample_rows(rows)
+        source_blocks = []
+        for row in selected_rows:
+            page = row["page_no"] if row["page_no"] is not None else "未知"
+            content = self._normalize(row["chunk_text"])[: self.prompt_chunk_chars]
+            source_blocks.append(
+                f"[chunk_id={row['chunk_id']} | 文件={row['file_name']} | 页码={page}]\n{content}"
+            )
+
+        return f"""请为“{title}”生成思维导图。
+
+约束：
+1. 最大层级为 {request.max_depth}，根节点深度为 0。
+2. 总节点数不超过 {request.max_nodes}。
+3. 每个非根节点必须引用下方真实存在的 chunk_id。
+4. 节点标题不超过 24 个汉字，summary 不超过 100 个汉字。
+5. 合并重复概念，优先表达“章节—主题—要点”的学习结构。
+6. 仅返回以下结构的 JSON，不要代码块和解释文字：
+{{
+  "title": "根节点标题",
+  "summary": "一句话总览",
+  "source_chunk_ids": [],
+  "children": [
+    {{
+      "title": "知识点",
+      "summary": "知识点简介",
+      "source_chunk_ids": [123],
+      "children": []
+    }}
+  ]
+}}
+
+资料片段：
+{chr(10).join(source_blocks)}"""
+
+    def _build_batch_prompt(self, rows) -> str:
+        blocks = []
+        for row in rows:
+            content = self._normalize(row["chunk_text"])[:450]
+            blocks.append(f"[chunk_id={row['chunk_id']} | 文件={row['file_name']}]\n{content}")
+        return """提炼下面资料中的知识点，合并重复内容，不要按文本切片逐条罗列。
+仅返回 JSON 数组，每项格式为：
+{"topic":"知识主题","summary":"准确简述","source_chunk_ids":[真实编号],"points":["子知识点"]}
+每组最多 6 个主题，topic 不超过 20 个汉字，禁止补充资料以外的事实。
+
+资料：
+""" + "\n\n".join(blocks)
+
+    def _build_merge_prompt(self, notes, *, request: MindMapGenerateRequest, title: str) -> str:
+        return f"""根据下面多组知识提炼结果，为“{title}”组织一张思维导图。
+不要按批次或切片划分节点，应按概念关系合并同类知识。
+最大深度 {request.max_depth}，总节点不超过 {request.max_nodes}；每个非根节点必须保留真实 source_chunk_ids。
+仅返回 JSON 对象：
+{{"title":"根主题","summary":"总览","source_chunk_ids":[],"children":[{{"title":"主题","summary":"简述","source_chunk_ids":[1],"children":[]}}]}}
+
+分组提炼结果：
+{chr(10).join(notes)}"""
+
+    def _sample_rows(self, rows):
+        per_item = self.prompt_chunk_chars + 120
+        max_items = max(8, self.prompt_char_budget // per_item)
+        if len(rows) <= max_items:
+            return rows
+
+        indexes = {
+            round(position * (len(rows) - 1) / (max_items - 1))
+            for position in range(max_items)
+        }
+        return [row for index, row in enumerate(rows) if index in indexes]
+
+    def _parse_ai_tree(
+        self,
+        raw: str,
+        *,
+        source_map: dict[int, MindMapSource],
+        fallback_title: str,
+        max_depth: int,
+        max_nodes: int,
+    ) -> MindMapNode:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start < 0 or end <= start:
+            raise ValueError("模型未返回 JSON 对象")
+        payload = json.loads(raw[start : end + 1])
+        if not isinstance(payload, dict):
+            raise ValueError("导图根节点格式错误")
+
+        counter = [0]
+        root = self._build_node(
+            payload,
+            path="0",
+            depth=0,
+            counter=counter,
+            source_map=source_map,
+            max_depth=max_depth,
+            max_nodes=max_nodes,
+        )
+        if root is None or not root.children:
+            raise ValueError("模型返回的导图缺少有效子节点")
+        if not root.title:
+            root.title = fallback_title
+        return root
+
+    def _build_node(
+        self,
+        payload,
+        *,
+        path: str,
+        depth: int,
+        counter: list[int],
+        source_map: dict[int, MindMapSource],
+        max_depth: int,
+        max_nodes: int,
+    ) -> MindMapNode | None:
+        if not isinstance(payload, dict) or depth > max_depth or counter[0] >= max_nodes:
+            return None
+
+        title = self._normalize(str(payload.get("title") or ""))[:48]
+        if not title:
+            return None
+
+        counter[0] += 1
+        source_ids = []
+        for value in payload.get("source_chunk_ids") or []:
+            try:
+                chunk_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if chunk_id in source_map and chunk_id not in source_ids:
+                source_ids.append(chunk_id)
+            if len(source_ids) >= 4:
+                break
+
+        children = []
+        if depth < max_depth:
+            for index, child_payload in enumerate(payload.get("children") or []):
+                child = self._build_node(
+                    child_payload,
+                    path=f"{path}-{index}",
+                    depth=depth + 1,
+                    counter=counter,
+                    source_map=source_map,
+                    max_depth=max_depth,
+                    max_nodes=max_nodes,
+                )
+                if child is not None:
+                    children.append(child)
+
+        sources = [source_map[chunk_id] for chunk_id in source_ids]
+        if not sources:
+            for child in children:
+                for source in child.sources:
+                    if all(existing.chunk_id != source.chunk_id for existing in sources):
+                        sources.append(source)
+                    if len(sources) >= 3:
+                        break
+                if len(sources) >= 3:
+                    break
+
+        return MindMapNode(
+            id=f"mind-node-{path}",
+            title=title,
+            summary=self._normalize(str(payload.get("summary") or ""))[:240],
+            depth=depth,
+            sources=sources,
+            children=children,
+        )
+
+    def _to_source(self, row) -> MindMapSource:
+        document_id = int(row["document_id"])
+        chunk_id = int(row["chunk_id"])
+        return MindMapSource(
+            chunk_id=chunk_id,
+            document_id=document_id,
+            file_name=row["file_name"],
+            chunk_index=int(row["chunk_index"]),
+            page_no=int(row["page_no"]) if row["page_no"] is not None else None,
+            source_text=row["chunk_text"],
+            jump_url=f"/documents/{document_id}/chunks/{chunk_id}",
+        )
+
+    def _to_reference(self, row) -> SourceReference:
+        document_id = int(row["document_id"])
+        chunk_id = int(row["chunk_id"])
+        return SourceReference(
+            document_id=document_id,
+            chunk_id=chunk_id,
+            file_name=row["file_name"],
+            chunk_index=int(row["chunk_index"]),
+            page_no=int(row["page_no"]) if row["page_no"] is not None else None,
+            score=None,
+            source_text=row["chunk_text"],
+            jump_url=f"/documents/{document_id}/chunks/{chunk_id}",
+        )
+
+    def _response(
+        self,
+        *,
+        request: MindMapGenerateRequest,
+        mode: str,
+        message: str,
+        root: MindMapNode,
+    ) -> MindMapResponse:
+        return MindMapResponse(
+            knowledge_base_id=request.knowledge_base_id,
+            document_id=request.document_id,
+            generation_mode=mode,
+            node_count=self._count_nodes(root),
+            message=message,
+            root=root,
+        )
+
+    def _count_nodes(self, node: MindMapNode) -> int:
+        return 1 + sum(self._count_nodes(child) for child in node.children)
+
+    def _normalize(self, value: str) -> str:
+        return " ".join(value.split())
+
+    def _structure_model(self) -> str:
+        if settings.llm_base_url and "siliconflow" in settings.llm_base_url and settings.llm_model == "deepseek-ai/DeepSeek-V4-Pro":
+            return "deepseek-ai/DeepSeek-V3.2"
+        return settings.llm_model
+
+    def _notify(
+        self,
+        callback: Callable[[str, int, str], None] | None,
+        stage: str,
+        progress: int,
+        message: str,
+    ) -> None:
+        if callback is not None:
+            callback(stage, progress, message)
+
+
+mind_map_service = MindMapService()
