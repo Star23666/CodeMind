@@ -8,6 +8,13 @@ export function getDocument(documentId) {
   return request.get(`/documents/${documentId}`);
 }
 
+export function getDocumentContent(documentId) {
+  return request.get(`/documents/${documentId}/content`, {
+    responseType: "arraybuffer",
+    timeout: 60000,
+  });
+}
+
 export function uploadDocument({ knowledgeBaseId = 1, file }) {
   const formData = new FormData();
   formData.append("knowledge_base_id", knowledgeBaseId);
