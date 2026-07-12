@@ -109,11 +109,17 @@ class MindMapServiceTest(unittest.TestCase):
             {
               "title": "操作系统",
               "summary": "核心知识结构",
+              "node_type": "overview",
+              "key_points": ["先理解资源管理"],
+              "learning_tip": "先浏览章节",
               "source_chunk_ids": [],
               "children": [
                 {
                   "title": "进程与线程",
                   "summary": "并发执行的基本抽象",
+                  "node_type": "concept",
+                  "key_points": ["进程隔离资源", "线程共享资源", "比较切换成本", "该项应被截断"],
+                  "learning_tip": "画表比较两者",
                   "source_chunk_ids": [11, 999],
                   "children": []
                 }
@@ -138,8 +144,13 @@ class MindMapServiceTest(unittest.TestCase):
         self.assertEqual(response.generation_mode, "ai")
         self.assertEqual(response.node_count, 2)
         self.assertEqual([item.chunk_id for item in response.root.children[0].sources], [11])
+        self.assertEqual(response.root.node_type.value, "overview")
+        self.assertEqual(response.root.children[0].node_type.value, "concept")
+        self.assertEqual(len(response.root.children[0].key_points), 3)
+        self.assertEqual(response.root.children[0].learning_tip, "画表比较两者")
         self.assertTrue(any("chunk_id=11" in prompt for prompt in client.prompts))
         self.assertIn("严格返回 JSON", client.last_system_message)
+        self.assertIn("learning_tip", client.last_prompt)
 
     def test_missing_model_returns_explicit_error(self) -> None:
         service = MindMapService(client=FakeLlmClient("unused"))
