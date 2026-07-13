@@ -114,6 +114,30 @@
         <p>{{ mapData.message }}</p>
       </section>
 
+      <section v-if="mapData" class="learning-overview" aria-label="学习概览">
+        <div class="overview-title">
+          <div>
+            <span>LEARNING ROUTE</span>
+            <strong>这张地图的学习轮廓</strong>
+          </div>
+          <div class="mastery-progress">
+            <span>本机掌握进度</span>
+            <strong>{{ masteryProgress }}%</strong>
+          </div>
+        </div>
+        <div class="overview-metrics">
+          <article><strong>{{ mapStats.maxDepth }}</strong><span>知识层级</span></article>
+          <article><strong>{{ mapStats.leafCount }}</strong><span>核心落点</span></article>
+          <article><strong>{{ mapStats.evidenceCoverage }}%</strong><span>原文覆盖</span></article>
+          <article><strong>{{ masteredCount }}/{{ learnableNodes.length }}</strong><span>已掌握节点</span></article>
+        </div>
+        <button v-if="nextLearningNode" type="button" class="next-learning" @click="focusLearningNode(nextLearningNode)">
+          <span>继续学习</span>
+          <strong>{{ nextLearningNode.title }}</strong>
+          <i>→</i>
+        </button>
+      </section>
+
       <section v-if="mapData" class="map-actions" aria-label="导图文件操作">
         <el-input v-model="searchTerm" clearable placeholder="搜索并定位知识节点" />
         <el-button type="primary" :loading="saving" @click="saveCurrent">保存到历史</el-button>
@@ -139,11 +163,53 @@
           </div>
 
           <template v-if="selectedNode">
-            <p class="node-depth">第 {{ selectedNode.depth + 1 }} 层</p>
+            <nav class="node-breadcrumb" aria-label="当前知识路径">
+              <button
+                v-for="node in selectedPath"
+                :key="node.id"
+                type="button"
+                @click="focusLearningNode(node)"
+              >{{ node.title }}</button>
+            </nav>
+            <div class="node-meta-row">
+              <p class="node-depth">第 {{ selectedNode.depth + 1 }} 层 · {{ selectedNodeTypeLabel }}</p>
+              <button
+                v-if="selectedNode.depth > 0"
+                type="button"
+                class="mastery-toggle"
+                :class="{ mastered: isSelectedMastered }"
+                @click="toggleSelectedMastery"
+              >{{ isSelectedMastered ? "已掌握 ✓" : "标记已掌握" }}</button>
+            </div>
             <h2>{{ selectedNode.title }}</h2>
+            <span class="section-caption">核心理解</span>
             <p class="node-summary">
               {{ selectedNode.summary || "该节点用于组织下级知识点，可继续展开查看。" }}
             </p>
+
+            <section v-if="selectedNode.key_points?.length" class="key-points">
+              <span class="section-caption">关键记忆点</span>
+              <ul>
+                <li v-for="point in selectedNode.key_points" :key="point">{{ point }}</li>
+              </ul>
+            </section>
+
+            <section class="learning-tip">
+              <span>学习动作</span>
+              <p>{{ selectedLearningTip }}</p>
+            </section>
+
+            <section v-if="selectedNode.children?.length" class="child-navigation">
+              <span class="section-caption">继续深入</span>
+              <div>
+                <button
+                  v-for="child in selectedNode.children"
+                  :key="child.id"
+                  type="button"
+                  @click="focusLearningNode(child)"
+                >{{ child.title }} <i>→</i></button>
+              </div>
+            </section>
             <el-button plain :loading="expandingNode" :disabled="!selectedNode.sources?.length" @click="expandSelectedNode">
               AI 展开这个分支
             </el-button>
@@ -299,6 +365,7 @@ const healthOnline = ref(false);
 const relatedLoading = ref(false);
 const relatedSources = ref([]);
 const relatedError = ref("");
+const masteredNodeIds = ref(new Set());
 // 节点标题 -> 检索结果缓存，避免同一节点反复点击时重复请求。
 const relatedCache = new Map();
 let pollTimer = null;
@@ -342,6 +409,65 @@ const questionChunkIds = computed(() => {
   const own = selectedNode.value?.sources?.map((source) => source.chunk_id) || [];
   if (own.length) return own.slice(0, 8);
   return relatedSources.value.map((source) => source.chunk_id).slice(0, 8);
+});
+
+const allMapNodes = computed(() => {
+  if (!mapData.value?.root) return [];
+  const nodes = [];
+  const walk = (node) => {
+    nodes.push(node);
+    node.children?.forEach(walk);
+  };
+  walk(mapData.value.root);
+  return nodes;
+});
+const learnableNodes = computed(() => allMapNodes.value.filter((node) => node.depth > 0));
+const masteredCount = computed(() =>
+  learnableNodes.value.filter((node) => masteredNodeIds.value.has(node.id)).length,
+);
+const masteryProgress = computed(() =>
+  learnableNodes.value.length ? Math.round((masteredCount.value / learnableNodes.value.length) * 100) : 0,
+);
+const nextLearningNode = computed(() => {
+  const unmastered = learnableNodes.value.filter((node) => !masteredNodeIds.value.has(node.id));
+  return unmastered.find((node) => !node.children?.length) || unmastered[0] || null;
+});
+const mapStats = computed(() => {
+  const nodes = allMapNodes.value;
+  const learnable = learnableNodes.value;
+  const evidenced = learnable.filter((node) => node.sources?.length).length;
+  return {
+    maxDepth: nodes.length ? Math.max(...nodes.map((node) => Number(node.depth || 0))) + 1 : 0,
+    leafCount: nodes.filter((node) => !node.children?.length).length,
+    evidenceCoverage: learnable.length ? Math.round((evidenced / learnable.length) * 100) : 0,
+  };
+});
+const selectedPath = computed(() => {
+  if (!mapData.value?.root || !selectedNode.value) return [];
+  const findPath = (node, targetId, path = []) => {
+    const nextPath = [...path, node];
+    if (node.id === targetId) return nextPath;
+    for (const child of node.children || []) {
+      const match = findPath(child, targetId, nextPath);
+      if (match) return match;
+    }
+    return null;
+  };
+  return findPath(mapData.value.root, selectedNode.value.id) || [];
+});
+const selectedNodeTypeLabel = computed(() => ({
+  overview: "知识总览",
+  chapter: "学习章节",
+  concept: "核心概念",
+  detail: "知识细节",
+}[selectedNode.value?.node_type] || "知识节点"));
+const isSelectedMastered = computed(() =>
+  Boolean(selectedNode.value && masteredNodeIds.value.has(selectedNode.value.id)),
+);
+const selectedLearningTip = computed(() => {
+  if (selectedNode.value?.learning_tip) return selectedNode.value.learning_tip;
+  if (selectedNode.value?.children?.length) return "先用一句话复述本节点，再依次学习下方子知识点。";
+  return "合上原文尝试复述定义，并举一个例子检验是否真正理解。";
 });
 
 onMounted(() => {
@@ -394,6 +520,7 @@ async function handleKnowledgeBaseChange() {
   mapData.value = null;
   selectedNode.value = null;
   activeHistoryId.value = null;
+  masteredNodeIds.value = new Set();
   relatedSources.value = [];
   relatedError.value = "";
   relatedCache.clear();
@@ -420,6 +547,7 @@ async function openHistory(historyId) {
     const history = await getMindMapHistory(historyId);
     mapData.value = history.result;
     activeHistoryId.value = history.id;
+    loadMastery();
     relatedCache.clear();
     selectNode(mapData.value.root);
   } catch (error) {
@@ -453,6 +581,7 @@ async function saveCurrent() {
       });
       activeHistoryId.value = created.id;
       mapData.value.history_id = created.id;
+      saveMastery();
       ElMessage.success("已保存为新的历史版本");
     }
     await loadHistories();
@@ -479,7 +608,10 @@ function download(content, type, extension) {
 }
 
 function toMarkdown(node, depth = 0) {
-  return `${"  ".repeat(depth)}- ${node.title}${node.summary ? `：${node.summary}` : ""}\n${node.children.map((child) => toMarkdown(child, depth + 1)).join("")}`;
+  const indent = "  ".repeat(depth);
+  const points = (node.key_points || []).map((point) => `${indent}  - 记忆点：${point}\n`).join("");
+  const tip = node.learning_tip ? `${indent}  - 学习建议：${node.learning_tip}\n` : "";
+  return `${indent}- ${node.title}${node.summary ? `：${node.summary}` : ""}\n${points}${tip}${node.children.map((child) => toMarkdown(child, depth + 1)).join("")}`;
 }
 
 function toSvg(root) {
@@ -520,7 +652,7 @@ async function generate() {
       knowledge_base_id: knowledgeBaseId.value,
       document_id: documentId.value || null,
       max_depth: maxDepth.value,
-      max_nodes: 28,
+      max_nodes: maxDepth.value >= 4 ? 48 : maxDepth.value === 3 ? 38 : 26,
     });
     sessionStorage.setItem(activeJobKey(), generationJob.value.job_id);
     sessionStorage.setItem(startedAtKey(), String(Date.now()));
@@ -537,6 +669,52 @@ function selectNode(node) {
   nodeAnswer.value = null;
   fetchRelated(node);
   scrollToDetail();
+}
+
+async function focusLearningNode(node) {
+  if (!node) return;
+  if (canvasRef.value?.focusNode) {
+    await canvasRef.value.focusNode(node.id);
+  } else {
+    selectNode(node);
+  }
+}
+
+function masteryStorageKey() {
+  if (!mapData.value?.root) return "";
+  const identity = activeHistoryId.value
+    || mapData.value.history_id
+    || `${knowledgeBaseId.value}-${documentId.value || "all"}-${mapData.value.root.id}`;
+  return `codemind_mind_map_mastery_${identity}`;
+}
+
+function loadMastery() {
+  const key = masteryStorageKey();
+  if (!key) {
+    masteredNodeIds.value = new Set();
+    return;
+  }
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) || "[]");
+    const validIds = new Set(learnableNodes.value.map((node) => node.id));
+    masteredNodeIds.value = new Set(saved.filter((id) => validIds.has(id)));
+  } catch {
+    masteredNodeIds.value = new Set();
+  }
+}
+
+function saveMastery() {
+  const key = masteryStorageKey();
+  if (key) localStorage.setItem(key, JSON.stringify([...masteredNodeIds.value]));
+}
+
+function toggleSelectedMastery() {
+  if (!selectedNode.value || selectedNode.value.depth === 0) return;
+  const next = new Set(masteredNodeIds.value);
+  if (next.has(selectedNode.value.id)) next.delete(selectedNode.value.id);
+  else next.add(selectedNode.value.id);
+  masteredNodeIds.value = next;
+  saveMastery();
 }
 
 // 点击节点后，用“标题 + 简介”去整个知识库检索相关片段，作为节点自带原文之外的补充。
@@ -738,6 +916,7 @@ function applyCompletedJob() {
   }
   mapData.value = generationJob.value.result;
   activeHistoryId.value = mapData.value.history_id;
+  loadMastery();
   relatedCache.clear();
   selectNode(mapData.value.root);
   clearActiveJob();
@@ -802,6 +981,7 @@ function stageClass(stageKey) {
   max-width: 760px;
   margin: 0;
   color: var(--cm-heading);
+  font-family: "Songti SC", "STSong", "Noto Serif SC", serif;
   font-size: clamp(32px, 4.3vw, 62px);
   font-weight: 780;
   letter-spacing: -0.045em;
@@ -911,6 +1091,114 @@ function stageClass(stageKey) {
   text-align: right;
 }
 
+.learning-overview {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(420px, 1.6fr) minmax(220px, 0.8fr);
+  align-items: stretch;
+  gap: 18px;
+  padding: 18px 20px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--cm-primary) 18%, var(--cm-border));
+  border-radius: 16px;
+  background:
+    linear-gradient(110deg, color-mix(in srgb, var(--cm-primary-soft) 48%, var(--cm-surface)), var(--cm-surface) 42%);
+  box-shadow: 0 16px 44px rgba(15, 29, 53, 0.08);
+}
+
+.overview-title,
+.overview-title > div,
+.mastery-progress,
+.next-learning {
+  display: grid;
+}
+
+.overview-title {
+  align-content: space-between;
+  gap: 16px;
+  padding-right: 18px;
+  border-right: 1px solid var(--cm-border);
+}
+
+.overview-title > div:first-child { gap: 5px; }
+.overview-title > div:first-child span,
+.section-caption {
+  color: var(--cm-primary);
+  font-family: Consolas, "Microsoft YaHei", monospace;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.overview-title > div:first-child strong {
+  color: var(--cm-heading);
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 20px;
+}
+
+.mastery-progress {
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 10px;
+  color: var(--cm-muted);
+  font-size: 11px;
+}
+
+.mastery-progress strong {
+  color: var(--cm-primary);
+  font-family: Consolas, monospace;
+  font-size: 24px;
+}
+
+.overview-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  align-items: center;
+}
+
+.overview-metrics article {
+  display: grid;
+  gap: 4px;
+  padding: 4px 18px;
+  border-right: 1px solid var(--cm-border);
+}
+
+.overview-metrics article:last-child { border-right: 0; }
+.overview-metrics strong {
+  color: var(--cm-heading);
+  font-family: Consolas, "Microsoft YaHei", monospace;
+  font-size: clamp(22px, 2.4vw, 34px);
+  line-height: 1;
+}
+.overview-metrics span { color: var(--cm-muted); font-size: 11px; }
+
+.next-learning {
+  position: relative;
+  align-content: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 15px 44px 15px 17px;
+  border: 1px solid color-mix(in srgb, var(--cm-primary) 28%, var(--cm-border));
+  border-radius: 12px;
+  color: inherit;
+  background: var(--cm-surface);
+  text-align: left;
+  cursor: pointer;
+}
+
+.next-learning span { color: var(--cm-muted); font-size: 11px; }
+.next-learning strong { overflow: hidden; color: var(--cm-heading); text-overflow: ellipsis; white-space: nowrap; }
+.next-learning i {
+  position: absolute;
+  top: 50%;
+  right: 17px;
+  color: var(--cm-primary);
+  font-size: 22px;
+  font-style: normal;
+  transform: translateY(-50%);
+}
+.next-learning:hover { border-color: var(--cm-primary); }
+
 .mode-chip {
   border-radius: 999px;
   padding: 5px 10px;
@@ -991,8 +1279,8 @@ function stageClass(stageKey) {
 
 .atlas-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) 390px;
+  gap: 18px;
   align-items: stretch;
 }
 
@@ -1000,7 +1288,7 @@ function stageClass(stageKey) {
   position: relative;
   max-height: 650px;
   overflow: auto;
-  padding: 22px;
+  padding: 22px 24px 30px;
   border: 1px solid var(--cm-border);
   border-radius: 14px;
   background: var(--cm-surface);
@@ -1032,7 +1320,7 @@ function stageClass(stageKey) {
 }
 
 .node-depth {
-  margin: 26px 0 7px;
+  margin: 0;
   color: var(--cm-muted);
   font-size: 12px;
 }
@@ -1040,15 +1328,133 @@ function stageClass(stageKey) {
 .evidence-panel h2 {
   margin: 0;
   color: var(--cm-heading);
-  font-size: 26px;
+  font-family: "Songti SC", "STSong", "Noto Serif SC", serif;
+  font-size: 28px;
   line-height: 1.25;
 }
 
 .node-summary {
-  margin: 15px 0 24px;
+  margin: 8px 0 22px;
   color: var(--cm-text);
   line-height: 1.78;
 }
+
+.node-breadcrumb {
+  display: flex;
+  gap: 6px;
+  margin: 20px 0 12px;
+  overflow-x: auto;
+}
+
+.node-breadcrumb button {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 0 14px 0 0;
+  border: 0;
+  color: var(--cm-muted);
+  background: transparent;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.node-breadcrumb button::after {
+  position: absolute;
+  right: 4px;
+  color: var(--cm-border);
+  content: "/";
+}
+.node-breadcrumb button:last-child { color: var(--cm-primary); font-weight: 800; }
+.node-breadcrumb button:last-child::after { display: none; }
+
+.node-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 7px;
+}
+
+.mastery-toggle {
+  padding: 6px 10px;
+  border: 1px solid var(--cm-border);
+  border-radius: 999px;
+  color: var(--cm-muted);
+  background: var(--cm-surface-soft);
+  font-size: 11px;
+  cursor: pointer;
+}
+.mastery-toggle.mastered {
+  border-color: color-mix(in srgb, var(--cm-success) 46%, var(--cm-border));
+  color: var(--cm-success);
+  background: color-mix(in srgb, var(--cm-success) 9%, var(--cm-surface));
+}
+
+.section-caption {
+  display: block;
+  margin-top: 18px;
+}
+
+.key-points { margin-bottom: 20px; }
+.key-points ul {
+  display: grid;
+  gap: 9px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.key-points li {
+  position: relative;
+  padding-left: 18px;
+  color: var(--cm-text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.key-points li::before {
+  position: absolute;
+  top: 0.68em;
+  left: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--cm-primary);
+  box-shadow: 0 0 0 4px var(--cm-primary-soft);
+  content: "";
+}
+
+.learning-tip {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 13px 14px;
+  border: 1px solid color-mix(in srgb, #f4c95d 44%, var(--cm-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, #f4c95d 10%, var(--cm-surface));
+}
+.learning-tip span { color: #9a6713; font-size: 11px; font-weight: 800; white-space: nowrap; }
+.learning-tip p { margin: 0; color: var(--cm-text); font-size: 12px; line-height: 1.6; }
+
+.child-navigation { margin-bottom: 20px; }
+.child-navigation > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+.child-navigation button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border: 1px solid var(--cm-border);
+  border-radius: 8px;
+  color: var(--cm-text);
+  background: var(--cm-surface-soft);
+  font-size: 11px;
+  cursor: pointer;
+}
+.child-navigation button:hover { border-color: var(--cm-primary); color: var(--cm-primary); }
+.child-navigation i { color: var(--cm-primary); font-style: normal; }
 
 .node-question {
   display: grid;
@@ -1287,6 +1693,14 @@ function stageClass(stageKey) {
   .evidence-panel {
     max-height: none;
   }
+  .learning-overview { grid-template-columns: 1fr; }
+  .overview-title {
+    grid-template-columns: 1fr auto;
+    align-items: end;
+    padding: 0 0 14px;
+    border-right: 0;
+    border-bottom: 1px solid var(--cm-border);
+  }
   .map-actions { grid-template-columns: 1fr 1fr auto; }
 }
 
@@ -1308,6 +1722,12 @@ function stageClass(stageKey) {
     grid-template-columns: 1fr;
   }
   .map-actions { grid-template-columns: 1fr; }
+
+  .learning-overview { padding: 16px; }
+  .overview-title { grid-template-columns: 1fr; }
+  .overview-metrics { grid-template-columns: 1fr 1fr; gap: 16px 0; }
+  .overview-metrics article:nth-child(2) { border-right: 0; }
+  .overview-metrics article { padding-left: 8px; }
 
   .status-copy {
     grid-template-columns: 1fr;

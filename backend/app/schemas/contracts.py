@@ -154,10 +154,20 @@ class MindMapSource(BaseModel):
     jump_url: str
 
 
+class MindMapNodeType(str, Enum):
+    OVERVIEW = "overview"
+    CHAPTER = "chapter"
+    CONCEPT = "concept"
+    DETAIL = "detail"
+
+
 class MindMapNode(BaseModel):
     id: str
     title: str
     summary: str = ""
+    node_type: MindMapNodeType = MindMapNodeType.CONCEPT
+    key_points: list[str] = Field(default_factory=list, max_length=3)
+    learning_tip: str = ""
     depth: int = 0
     sources: list[MindMapSource] = Field(default_factory=list)
     children: list["MindMapNode"] = Field(default_factory=list)

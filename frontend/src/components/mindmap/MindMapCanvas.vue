@@ -56,8 +56,8 @@
 
     <div class="canvas-legend" aria-hidden="true">
       <span><i class="root-dot"></i>主题</span>
-      <span><i class="branch-dot"></i>章节</span>
-      <span><i class="leaf-dot"></i>要点</span>
+      <span><i class="branch-dot"></i>学习分支</span>
+      <span><i class="leaf-dot"></i>知识细节</span>
     </div>
 
     <div
@@ -100,12 +100,19 @@ const selectedHasChildren = computed(() => {
   return Boolean(node?.children?.length);
 });
 
-const depthPalette = [
-  { fill: "#1d4ed8", stroke: "#93c5fd", label: "#ffffff" },
-  { fill: "#12385a", stroke: "#38bdf8", label: "#e8f8ff" },
-  { fill: "#172554", stroke: "#818cf8", label: "#eef2ff" },
-  { fill: "#22233f", stroke: "#a78bfa", label: "#f5f3ff" },
-  { fill: "#2b2035", stroke: "#f0abfc", label: "#fdf4ff" },
+const rootPalette = {
+  fill: "#123f88",
+  deepFill: "#123f88",
+  stroke: "#93c5fd",
+  label: "#ffffff",
+  glow: "rgba(37, 99, 235, 0.48)",
+};
+const branchPalettes = [
+  { fill: "#0d4a61", deepFill: "#102f43", stroke: "#22d3ee", label: "#ecfeff", glow: "rgba(34, 211, 238, 0.32)" },
+  { fill: "#3c3270", deepFill: "#26284f", stroke: "#a78bfa", label: "#f5f3ff", glow: "rgba(167, 139, 250, 0.32)" },
+  { fill: "#66451d", deepFill: "#3e321f", stroke: "#f4c95d", label: "#fffbea", glow: "rgba(244, 201, 93, 0.3)" },
+  { fill: "#174f46", deepFill: "#173932", stroke: "#5eead4", label: "#ecfdf5", glow: "rgba(94, 234, 212, 0.28)" },
+  { fill: "#633046", deepFill: "#412638", stroke: "#f9a8d4", label: "#fff1f7", glow: "rgba(249, 168, 212, 0.28)" },
 ];
 
 function flattenTree(root) {
@@ -113,14 +120,18 @@ function flattenTree(root) {
   const edges = [];
   nodeLookup = new Map();
 
-  function visit(node, parentId = null) {
+  function visit(node, parentId = null, branchIndex = -1) {
     nodeLookup.set(node.id, node);
     nodes.push({
       id: node.id,
       data: {
         title: node.title,
+        summary: node.summary || "",
         depth: node.depth,
         sourceCount: node.sources?.length || 0,
+        childCount: node.children?.length || 0,
+        nodeType: node.node_type || "concept",
+        branchIndex,
       },
     });
 
@@ -129,11 +140,13 @@ function flattenTree(root) {
         id: `edge-${parentId}-${node.id}`,
         source: parentId,
         target: node.id,
-        data: { depth: node.depth },
+        data: { depth: node.depth, branchIndex },
       });
     }
 
-    node.children?.forEach((child) => visit(child, node.id));
+    node.children?.forEach((child, index) => {
+      visit(child, node.id, Number(node.depth || 0) === 0 ? index : branchIndex);
+    });
   }
 
   visit(root);
@@ -142,12 +155,27 @@ function flattenTree(root) {
 
 function paletteFor(datum) {
   const depth = Number(datum?.data?.depth || 0);
-  return depthPalette[Math.min(depth, depthPalette.length - 1)];
+  if (depth === 0) return rootPalette;
+  const index = Math.max(0, Number(datum?.data?.branchIndex || 0));
+  const palette = branchPalettes[index % branchPalettes.length];
+  return {
+    ...palette,
+    fill: depth === 1 ? palette.fill : palette.deepFill,
+  };
 }
 
-function truncateLabel(value) {
+function truncateLabel(value, length = 20) {
   const text = String(value || "");
-  return text.length > 20 ? `${text.slice(0, 20)}…` : text;
+  return text.length > length ? `${text.slice(0, length)}…` : text;
+}
+
+function nodeLabel(datum) {
+  const depth = Number(datum.data?.depth || 0);
+  const title = truncateLabel(datum.data?.title, depth === 0 ? 22 : 18);
+  if (depth === 0) return `${title}\n${datum.data?.childCount || 0} 个学习分支`;
+  const summary = truncateLabel(datum.data?.summary, 20);
+  const detail = summary || `${datum.data?.sourceCount || 0} 条原文依据`;
+  return `${title}\n${detail}`;
 }
 
 async function renderGraph() {
@@ -165,29 +193,35 @@ async function renderGraph() {
     layout: {
       type: "mindmap",
       direction: "H",
-      getWidth: () => 184,
-      getHeight: () => 52,
-      getHGap: () => 86,
-      getVGap: () => 22,
+      getWidth: () => 228,
+      getHeight: () => 76,
+      getHGap: () => 108,
+      getVGap: () => 28,
     },
     node: {
       type: "rect",
       style: {
-        size: (datum) => (Number(datum.data?.depth || 0) === 0 ? [210, 62] : [184, 52]),
-        radius: (datum) => (Number(datum.data?.depth || 0) === 0 ? 18 : 11),
+        size: (datum) => {
+          const depth = Number(datum.data?.depth || 0);
+          if (depth === 0) return [252, 88];
+          if (depth === 1) return [232, 78];
+          return [214, 70];
+        },
+        radius: (datum) => (Number(datum.data?.depth || 0) === 0 ? 24 : Number(datum.data?.depth || 0) === 1 ? 16 : 11),
         fill: (datum) => paletteFor(datum).fill,
         stroke: (datum) => paletteFor(datum).stroke,
         lineWidth: (datum) => (Number(datum.data?.depth || 0) === 0 ? 2.4 : 1.4),
-        shadowColor: "rgba(56, 189, 248, 0.24)",
-        shadowBlur: (datum) => (Number(datum.data?.depth || 0) === 0 ? 22 : 8),
+        shadowColor: (datum) => paletteFor(datum).glow,
+        shadowBlur: (datum) => (Number(datum.data?.depth || 0) === 0 ? 28 : 12),
         cursor: "pointer",
-        labelText: (datum) => truncateLabel(datum.data?.title),
+        labelText: nodeLabel,
         labelPlacement: "center",
         labelFill: (datum) => paletteFor(datum).label,
-        labelFontFamily: 'Inter, "Microsoft YaHei", sans-serif',
-        labelFontSize: (datum) => (Number(datum.data?.depth || 0) === 0 ? 16 : 13),
+        labelFontFamily: '"PingFang SC", "Microsoft YaHei", sans-serif',
+        labelFontSize: (datum) => (Number(datum.data?.depth || 0) === 0 ? 15 : 12),
         labelFontWeight: (datum) => (Number(datum.data?.depth || 0) <= 1 ? 700 : 600),
-        labelMaxWidth: 156,
+        labelLineHeight: 18,
+        labelMaxWidth: 194,
       },
       state: {
         selected: {
@@ -208,9 +242,9 @@ async function renderGraph() {
     edge: {
       type: "cubic-horizontal",
       style: {
-        stroke: (datum) => depthPalette[Math.min(Number(datum.data?.depth || 1), 4)].stroke,
-        lineWidth: 1.5,
-        opacity: 0.66,
+        stroke: (datum) => paletteFor(datum).stroke,
+        lineWidth: (datum) => (Number(datum.data?.depth || 1) === 1 ? 2.4 : 1.5),
+        opacity: 0.72,
       },
       state: {
         related: {
@@ -294,12 +328,25 @@ async function redo() {
 async function focusSearch(value) {
   if (!graph || !value?.trim()) return;
   const term = value.trim().toLowerCase();
-  const match = [...nodeLookup.values()].find((node) => node.title.toLowerCase().includes(term));
+  const match = [...nodeLookup.values()].find((node) =>
+    [node.title, node.summary, ...(node.key_points || [])]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .includes(term),
+  );
   if (!match) return;
-  selectedNodeId.value = match.id;
-  await graph.setElementState(match.id, ["selected"]);
-  await graph.focusElement(match.id, { duration: 350 });
-  emit("select", match);
+  await focusNode(match.id);
+}
+
+async function focusNode(nodeId) {
+  if (!graph) return;
+  const node = nodeLookup.get(nodeId);
+  if (!node) return;
+  selectedNodeId.value = nodeId;
+  await graph.setElementState(nodeId, ["selected"]);
+  await graph.focusElement(nodeId, { duration: 350 });
+  emit("select", node);
 }
 
 function exportPng() {
@@ -310,7 +357,7 @@ function getViewState() {
   return { positions: currentLayout(), collapsed_node_ids: [...collapsedNodeIds] };
 }
 
-defineExpose({ exportPng, getViewState, focusSearch });
+defineExpose({ exportPng, getViewState, focusSearch, focusNode });
 
 async function zoom(ratio) {
   if (graph) await graph.zoomBy(ratio);
@@ -375,14 +422,47 @@ onBeforeUnmount(() => {
   min-height: 650px;
   overflow: hidden;
   border: 1px solid rgba(125, 211, 252, 0.2);
-  border-radius: 14px;
+  border-radius: 18px;
   background:
-    linear-gradient(rgba(56, 189, 248, 0.055) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(56, 189, 248, 0.055) 1px, transparent 1px),
-    radial-gradient(circle at 50% 45%, rgba(29, 78, 216, 0.22), transparent 46%),
-    #07111f;
-  background-size: 32px 32px, 32px 32px, auto, auto;
-  box-shadow: inset 0 0 90px rgba(3, 7, 18, 0.72);
+    linear-gradient(rgba(125, 211, 252, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(125, 211, 252, 0.04) 1px, transparent 1px),
+    radial-gradient(circle at 44% 42%, rgba(37, 99, 235, 0.2), transparent 38%),
+    linear-gradient(145deg, #0a1a31, #07111f 58%, #09172a);
+  background-size: 36px 36px, 36px 36px, auto, auto;
+  box-shadow:
+    inset 0 0 110px rgba(3, 7, 18, 0.74),
+    0 22px 50px rgba(8, 20, 38, 0.2);
+}
+
+.map-shell::before,
+.map-shell::after {
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  content: "";
+}
+
+.map-shell::before {
+  inset: 0;
+  opacity: 0.62;
+  background-image:
+    radial-gradient(circle, rgba(226, 245, 255, 0.7) 0 1px, transparent 1.4px),
+    radial-gradient(circle, rgba(125, 211, 252, 0.45) 0 1px, transparent 1.5px);
+  background-position: 12px 18px, 74px 92px;
+  background-size: 118px 118px, 164px 164px;
+}
+
+.map-shell::after {
+  width: 520px;
+  height: 520px;
+  top: 50%;
+  left: 43%;
+  border: 1px solid rgba(147, 197, 253, 0.08);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 86px rgba(147, 197, 253, 0.035),
+    0 0 0 172px rgba(147, 197, 253, 0.022);
+  transform: translate(-50%, -50%);
 }
 
 .map-shell:fullscreen {
@@ -394,6 +474,8 @@ onBeforeUnmount(() => {
 }
 
 .canvas-host {
+  position: relative;
+  z-index: 1;
   width: 100%;
   height: 650px;
   outline: none;
@@ -459,7 +541,7 @@ onBeforeUnmount(() => {
   gap: 14px;
   padding: 9px 12px;
   border-radius: 999px;
-  color: #b7c7db;
+  color: #c4d5e9;
   font-size: 12px;
 }
 
@@ -475,9 +557,9 @@ onBeforeUnmount(() => {
   border-radius: 50%;
 }
 
-.root-dot { background: #60a5fa; }
-.branch-dot { background: #38bdf8; }
-.leaf-dot { background: #a78bfa; }
+.root-dot { background: #93c5fd; }
+.branch-dot { background: linear-gradient(90deg, #22d3ee, #a78bfa); }
+.leaf-dot { background: #f4c95d; }
 
 .canvas-hint {
   position: absolute;

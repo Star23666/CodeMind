@@ -229,7 +229,8 @@ class MindMapService:
         try:
             raw = await self._generate_answer(
                 f"""仅根据资料，把知识点“{request.node_title}”展开为 {request.child_count} 个更具体的子知识点。
-仅返回 JSON：{{"title":"{request.node_title}","summary":"概述","source_chunk_ids":{ids},"children":[{{"title":"子知识点","summary":"简述","source_chunk_ids":[真实编号],"children":[]}}]}}
+每个子节点都要给出准确 summary、1～3 条 key_points 和一个具体 learning_tip，不要补充资料外事实。
+仅返回 JSON：{{"title":"{request.node_title}","summary":"概述","node_type":"concept","key_points":["关键点"],"learning_tip":"复述后核对原文","source_chunk_ids":{ids},"children":[{{"title":"子知识点","summary":"定义、作用与关系","node_type":"detail","key_points":["记忆点"],"learning_tip":"用一个例子解释它","source_chunk_ids":[真实编号],"children":[]}}]}}
 资料：\n{chr(10).join(blocks)}""",
                 system_message=MIND_MAP_SYSTEM_MESSAGE, temperature=0.1,
                 timeout_seconds=300, max_tokens=max(settings.llm_max_tokens, 700), max_retries=0,
@@ -324,17 +325,25 @@ class MindMapService:
 1. 最大层级为 {request.max_depth}，根节点深度为 0。
 2. 总节点数不超过 {request.max_nodes}。
 3. 每个非根节点必须引用下方真实存在的 chunk_id。
-4. 节点标题不超过 24 个汉字，summary 不超过 100 个汉字。
-5. 合并重复概念，优先表达“章节—主题—要点”的学习结构。
-6. 仅返回以下结构的 JSON，不要代码块和解释文字：
+4. 资料足够时形成“总览—章节—概念—细节”的层次，禁止为了凑层级虚构内容。
+5. summary 用 40～140 个汉字解释“是什么、与上下级有什么关系、为什么重要”。
+6. key_points 提炼 1～3 条可复述的记忆点；learning_tip 给出一个具体学习动作。
+7. node_type 只能是 overview、chapter、concept、detail。
+8. 仅返回以下结构的 JSON，不要代码块和解释文字：
 {{
   "title": "根节点标题",
-  "summary": "一句话总览",
+  "summary": "知识范围和学习主线",
+  "node_type": "overview",
+  "key_points": ["整体记忆点"],
+  "learning_tip": "先浏览一级章节，再逐层深入",
   "source_chunk_ids": [],
   "children": [
     {{
       "title": "知识点",
-      "summary": "知识点简介",
+      "summary": "定义、作用以及与上下级节点的关系",
+      "node_type": "concept",
+      "key_points": ["关键事实", "易混淆点"],
+      "learning_tip": "用自己的话复述后对照原文",
       "source_chunk_ids": [123],
       "children": []
     }}
@@ -351,18 +360,22 @@ class MindMapService:
             blocks.append(f"[chunk_id={row['chunk_id']} | 文件={row['file_name']}]\n{content}")
         return """提炼下面资料中的知识点，合并重复内容，不要按文本切片逐条罗列。
 仅返回 JSON 数组，每项格式为：
-{"topic":"知识主题","summary":"准确简述","source_chunk_ids":[真实编号],"points":["子知识点"]}
-每组最多 6 个主题，topic 不超过 20 个汉字，禁止补充资料以外的事实。
+{"topic":"知识主题","summary":"定义、作用与关系","key_points":["记忆点"],"source_chunk_ids":[真实编号],"points":["子知识点"]}
+每组最多 6 个主题；summary 要能帮助理解，不要只换一种方式重复标题；禁止补充资料以外的事实。
 
 资料：
 """ + "\n\n".join(blocks)
 
     def _build_merge_prompt(self, notes, *, request: MindMapGenerateRequest, title: str) -> str:
-        return f"""根据下面多组知识提炼结果，为“{title}”组织一张思维导图。
+        return f"""根据下面多组知识提炼结果，为“{title}”组织一张适合学习和复习的思维导图。
 不要按批次或切片划分节点，应按概念关系合并同类知识。
 最大深度 {request.max_depth}，总节点不超过 {request.max_nodes}；每个非根节点必须保留真实 source_chunk_ids。
+资料足够时使用“总览—章节—概念—细节”结构；每个非叶节点优先保留 2～5 个有意义的子节点。
+不要用“其他”“补充”等空泛节点，不要为了达到深度而虚构资料中不存在的内容。
+summary 用 40～140 个汉字说明定义、作用和关系；key_points 给出 1～3 条记忆点；learning_tip 给出复述、对比、举例或回看原文等具体动作。
+node_type 只能是 overview、chapter、concept、detail，根节点必须是 overview。
 仅返回 JSON 对象：
-{{"title":"根主题","summary":"总览","source_chunk_ids":[],"children":[{{"title":"主题","summary":"简述","source_chunk_ids":[1],"children":[]}}]}}
+{{"title":"根主题","summary":"知识范围与学习主线","node_type":"overview","key_points":["总览记忆点"],"learning_tip":"先浏览章节再逐层深入","source_chunk_ids":[],"children":[{{"title":"章节","summary":"本章讨论什么以及为什么重要","node_type":"chapter","key_points":["关键点"],"learning_tip":"先复述定义，再比较相邻概念","source_chunk_ids":[1],"children":[]}}]}}
 
 分组提炼结果：
 {chr(10).join(notes)}"""
@@ -468,10 +481,36 @@ class MindMapService:
                 if len(sources) >= 3:
                     break
 
+        allowed_types = {"overview", "chapter", "concept", "detail"}
+        requested_type = self._normalize(str(payload.get("node_type") or "")).lower()
+        if depth == 0:
+            node_type = "overview"
+        elif requested_type in allowed_types - {"overview"}:
+            node_type = requested_type
+        elif depth == 1:
+            node_type = "chapter"
+        elif children:
+            node_type = "concept"
+        else:
+            node_type = "detail"
+
+        key_points = []
+        raw_key_points = payload.get("key_points")
+        if isinstance(raw_key_points, list):
+            for value in raw_key_points:
+                point = self._normalize(str(value))[:90]
+                if point and point not in key_points:
+                    key_points.append(point)
+                if len(key_points) >= 3:
+                    break
+
         return MindMapNode(
             id=f"mind-node-{path}",
             title=title,
-            summary=self._normalize(str(payload.get("summary") or ""))[:240],
+            summary=self._normalize(str(payload.get("summary") or ""))[:320],
+            node_type=node_type,
+            key_points=key_points,
+            learning_tip=self._normalize(str(payload.get("learning_tip") or ""))[:180],
             depth=depth,
             sources=sources,
             children=children,
