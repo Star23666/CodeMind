@@ -5,8 +5,7 @@
 - 基础路径：`/api`
 - 数据格式：除文件上传外，请求和响应均使用 `application/json`
 - 文件上传：`multipart/form-data`
-- 正式认证：受保护接口使用 `Authorization: Bearer <token>`
-- 当前后端参考代码：临时使用 `X-User-Id` 表示当前用户，后续由 JWT 鉴权替换
+- 认证：除健康检查、注册和登录外，受保护接口使用 `Authorization: Bearer <token>`
 - 时间格式：ISO 8601 字符串
 - 相似度分数：余弦相似度范围为 `[-1, 1]`，默认过滤阈值为 `0.77`
 
@@ -34,6 +33,7 @@
 | 文档     | GET    | `/api/documents`                                 | 查询文档列表           |
 | 文档     | POST   | `/api/documents/upload`                          | 上传文档               |
 | 文档     | GET    | `/api/documents/{document_id}`                   | 查询文档详情           |
+| 文档     | GET    | `/api/documents/{document_id}/content`           | 内联读取原始文档       |
 | 文档     | DELETE | `/api/documents/{document_id}`                   | 删除文档和向量索引     |
 | 文档     | POST   | `/api/documents/{document_id}/reindex`           | 重新入库文档           |
 | 文档     | GET    | `/api/documents/{document_id}/chunks`            | 查询文档片段           |
@@ -41,6 +41,16 @@
 | 文档     | GET    | `/api/chunks/{chunk_id}`                         | 查询单个片段           |
 | 检索     | POST   | `/api/search`                                    | 语义检索或文档直接检索 |
 | 问答     | POST   | `/api/chat`                                      | RAG 问答               |
+| 知识地图 | POST   | `/api/mind-maps/generate`                        | 同步生成地图（调试）   |
+| 知识地图 | POST   | `/api/mind-maps/jobs`                            | 创建后台生成任务       |
+| 知识地图 | GET    | `/api/mind-maps/jobs/{job_id}`                   | 查询任务进度和结果     |
+| 知识地图 | POST   | `/api/mind-maps/ask`                             | 针对节点来源提问       |
+| 知识地图 | POST   | `/api/mind-maps/expand`                          | 根据来源扩展节点       |
+| 知识地图 | GET    | `/api/mind-maps/histories`                       | 查询地图历史           |
+| 知识地图 | POST   | `/api/mind-maps/histories`                       | 保存地图历史           |
+| 知识地图 | GET    | `/api/mind-maps/histories/{history_id}`          | 查询地图历史详情       |
+| 知识地图 | PUT    | `/api/mind-maps/histories/{history_id}`          | 更新地图和画布状态     |
+| 知识地图 | DELETE | `/api/mind-maps/histories/{history_id}`          | 删除地图历史           |
 | 历史     | GET    | `/api/qa-records`                                | 查询问答历史           |
 | 历史     | GET    | `/api/qa-records/{qa_record_id}`                 | 查询问答详情           |
 | 反馈     | POST   | `/api/qa-records/{qa_record_id}/feedback`        | 提交回答反馈           |
@@ -216,7 +226,16 @@ GET /api/documents?knowledge_base_id=1&parse_status=completed
 
 响应为 `DocumentRead[]`，字段同上传文档响应。
 
-### 5.3 重新入库文档
+### 5.3 查询文档详情和原文件
+
+```text
+GET /api/documents/{document_id}
+GET /api/documents/{document_id}/content
+```
+
+第一个接口返回 `DocumentRead`。第二个接口校验文档归属后以内联方式返回原文件，支持 PDF、DOCX、Markdown 和 TXT；原文件不存在时返回 `404`。前端文档预览页使用该接口，不应绕过 JWT 直接访问上传目录。
+
+### 5.4 重新入库文档
 
 ```text
 POST /api/documents/{document_id}/reindex
@@ -231,7 +250,7 @@ POST /api/documents/{document_id}/reindex
 }
 ```
 
-### 5.4 查询文档片段
+### 5.5 查询文档片段
 
 ```text
 GET /api/documents/{document_id}/chunks
@@ -356,9 +375,140 @@ POST /api/chat
 }
 ```
 
-## 8. 历史与反馈接口
+## 8. 知识地图接口
 
-### 8.1 查询问答历史
+知识地图必须配置在线 LLM。前端正式流程使用后台任务接口，避免长时间同步请求阻塞页面；同步接口主要用于 Swagger 调试和后端联调。
+
+### 8.1 创建并查询生成任务
+
+```text
+POST /api/mind-maps/jobs
+GET /api/mind-maps/jobs/{job_id}
+```
+
+创建请求：
+
+```json
+{
+  "knowledge_base_id": 1,
+  "document_id": null,
+  "max_depth": 3,
+  "max_nodes": 38
+}
+```
+
+- `document_id=null` 表示使用知识库内全部已完成解析的文档。
+- `max_depth` 范围为 2 至 4。
+- `max_nodes` 范围为 8 至 60。
+
+创建成功返回 `202 Accepted`：
+
+```json
+{
+  "job_id": "e1f0b8f4d6d84dbe8db3f8cf15a1f08b",
+  "status": "queued",
+  "stage": "queued",
+  "progress": 0,
+  "message": "任务已创建，正在等待处理",
+  "result": null,
+  "error_message": null,
+  "created_at": "2026-07-13T10:00:00",
+  "updated_at": "2026-07-13T10:00:00"
+}
+```
+
+任务状态为 `queued`、`processing`、`completed` 或 `failed`。处理中可出现 `collecting`、`preparing`、`extracting`、`merging`、`validating` 和 `assembling` 阶段。完成后 `result` 为 `MindMapResponse`；失败时读取 `error_message`。
+
+同步接口使用同一请求模型：
+
+```text
+POST /api/mind-maps/generate
+```
+
+### 8.2 地图节点结构
+
+`MindMapResponse.root` 是递归节点：
+
+```json
+{
+  "id": "mind-node-0-0",
+  "title": "进程与线程",
+  "summary": "说明两种并发抽象的定义、作用和关系。",
+  "node_type": "concept",
+  "key_points": ["进程拥有独立资源", "线程共享进程资源"],
+  "learning_tip": "画表比较资源、调度和切换成本",
+  "depth": 2,
+  "sources": [
+    {
+      "chunk_id": 10,
+      "document_id": 1,
+      "file_name": "操作系统笔记.pdf",
+      "chunk_index": 3,
+      "page_no": 12,
+      "source_text": "进程拥有独立地址空间……",
+      "jump_url": "/documents/1/chunks/10"
+    }
+  ],
+  "children": []
+}
+```
+
+`node_type` 只能为 `overview`、`chapter`、`concept` 或 `detail`；`key_points` 最多 3 条。新增字段都有兼容默认值，旧历史 JSON 可以继续读取。
+
+### 8.3 节点提问
+
+```text
+POST /api/mind-maps/ask
+```
+
+```json
+{
+  "knowledge_base_id": 1,
+  "node_title": "进程与线程",
+  "question": "两者最容易混淆的地方是什么？",
+  "source_chunk_ids": [10, 11]
+}
+```
+
+后端只允许使用当前用户、当前知识库且已完成解析的片段，最多 8 个。响应包含回答和实际使用的来源列表。
+
+### 8.4 节点扩展
+
+```text
+POST /api/mind-maps/expand
+```
+
+```json
+{
+  "knowledge_base_id": 1,
+  "node_title": "进程与线程",
+  "node_summary": "并发执行的基本抽象",
+  "source_chunk_ids": [10, 11],
+  "child_count": 4
+}
+```
+
+`child_count` 范围为 2 至 8。后端根据给定真实来源生成子结构，并返回一个 `MindMapNode`。无效来源返回 `404`；缺少 LLM 配置返回 `503`；模型未返回有效 JSON 返回 `502`。
+
+### 8.5 地图历史
+
+```text
+GET    /api/mind-maps/histories?knowledge_base_id=1
+POST   /api/mind-maps/histories
+GET    /api/mind-maps/histories/{history_id}
+PUT    /api/mind-maps/histories/{history_id}
+DELETE /api/mind-maps/histories/{history_id}
+```
+
+- 列表响应不携带完整 `result`，详情响应包含完整地图。
+- 创建和更新时可传 `view_state`，用于保存节点坐标及折叠状态。
+- `document_id` 必须属于同一用户和同一知识库。
+- 自动生成成功后后端会保存一个历史版本。
+- 节点掌握状态当前保存在浏览器 `localStorage`，不属于历史接口字段。
+
+## 9. 历史与反馈接口
+
+### 9.1 查询问答历史
 
 ```text
 GET /api/qa-records?knowledge_base_id=1
@@ -382,7 +532,7 @@ GET /api/qa-records?knowledge_base_id=1
 ]
 ```
 
-### 8.2 查询问答详情
+### 9.2 查询问答详情
 
 ```text
 GET /api/qa-records/{qa_record_id}
@@ -390,7 +540,9 @@ GET /api/qa-records/{qa_record_id}
 
 响应为单个 `QaRecordRead`，应包含完整 `sources` 列表。
 
-### 8.3 提交反馈
+历史来源中的 `document_id` 和 `chunk_id` 可以为空。删除原文后仍返回文件名、片段序号、页码、分数和文本快照，但 `jump_url` 为 `null`。
+
+### 9.3 提交反馈
 
 ```text
 POST /api/qa-records/{qa_record_id}/feedback
@@ -405,7 +557,9 @@ POST /api/qa-records/{qa_record_id}/feedback
 }
 ```
 
-响应：
+当前状态：该接口只返回演示响应，没有查询问答归属，也没有写入 `feedbacks` 表；管理员列表当前返回空数组。前端尚未接入，不能作为已完成的持久化功能。
+
+演示响应：
 
 ```json
 {
@@ -418,7 +572,7 @@ POST /api/qa-records/{qa_record_id}/feedback
 }
 ```
 
-## 9. 字段一致性要求
+## 10. 字段一致性要求
 
 | API 字段               | MySQL 字段或 Chroma metadata                                         | 说明                                     |
 | ---------------------- | -------------------------------------------------------------------- | ---------------------------------------- |
@@ -430,5 +584,12 @@ POST /api/qa-records/{qa_record_id}/feedback
 | `qa_record_id`         | `qa_records.id`、`qa_sources.qa_record_id`                           | 问答历史和来源引用关联                   |
 | `source_text`          | `qa_sources.source_text`、Chroma document                            | 来源片段快照                             |
 | `score`                | `qa_sources.score`                                                   | 检索相似度或 rerank 分数，范围 `[-1, 1]` |
+| `job_id`               | `mind_map_jobs.id`                                                   | 地图后台任务编号                         |
+| `history_id`           | `mind_map_histories.id`                                              | 地图历史版本编号                         |
+| `node_type`            | `mind_map_histories.result_json`                                     | 地图节点类型，不单独占数据库列           |
 
-后端实现位于 `backend/app/api/routes.py`、`backend/app/services/` 和 `backend/app/schemas/contracts.py`。当前已接入 MySQL、Chroma、Embedding 与在线 LLM API；认证、反馈管理和更完整的检索评估仍需继续完善。
+后端实现位于 `backend/app/api/routes.py`、`backend/app/services/` 和 `backend/app/schemas/contracts.py`。当前已接入 JWT、MySQL、Chroma、Embedding、在线 LLM、问答历史和知识地图；反馈持久化、真实模型端到端测试和检索评估仍需继续完善。
+
+---
+
+文档状态：已按 `main` 提交 `839890b` 同步，更新时间为 2026-07-13。
