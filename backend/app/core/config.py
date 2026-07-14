@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     llm_max_retries: int = 1
     llm_max_tokens: int = 600
 
+    mind_map_model: str = ""
+    mind_map_timeout_seconds: float = 120.0
+    mind_map_total_timeout_seconds: float = 150.0
+    mind_map_max_retries: int = 0
+    mind_map_enable_thinking: bool = False
+
     embedding_api_key: str = ""
     embedding_base_url: str = ""
     embedding_model: str = ""

@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
@@ -5,6 +7,16 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes import router as api_router
 from app.core.config import settings
+from app.services.mind_map_job_service import mind_map_job_service
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await mind_map_job_service.start()
+    try:
+        yield
+    finally:
+        await mind_map_job_service.stop()
 
 
 def create_app() -> FastAPI:
@@ -12,6 +24,7 @@ def create_app() -> FastAPI:
         title="CodeMind API",
         version="0.1.0",
         description="RAG knowledge base API for computer science learning.",
+        lifespan=lifespan,
     )
 
     # ---------- 新增：中文验证错误处理 ----------

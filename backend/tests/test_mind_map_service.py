@@ -19,6 +19,7 @@ from app.main import create_app
 from app.schemas.contracts import (
     MindMapExpandRequest,
     MindMapGenerateRequest,
+    MindMapHistoryUpdate,
     MindMapNode,
     MindMapQuestionRequest,
     MindMapResponse,
@@ -46,6 +47,28 @@ class FakeLlmClient:
         self.prompts.append(prompt)
         self.last_system_message = kwargs.get("system_message")
         return self.response
+
+
+class StreamingLlmClient(FakeLlmClient):
+    def __init__(self, response: str) -> None:
+        super().__init__(response)
+        self.stream_calls = 0
+        self.generate_calls = 0
+        self.last_kwargs = None
+
+    async def generate_answer(self, prompt: str, **kwargs) -> str:
+        self.generate_calls += 1
+        raise AssertionError("mind map generation should use the streaming client")
+
+    async def stream_answer(self, prompt: str, **kwargs):
+        self.stream_calls += 1
+        self.last_kwargs = kwargs
+        self.last_prompt = prompt
+        self.prompts.append(prompt)
+        self.last_system_message = kwargs.get("system_message")
+        for start in range(0, len(self.response), 5):
+            await asyncio.sleep(0)
+            yield self.response[start : start + 5]
 
 
 class ConcurrencyTrackingLlmClient:
@@ -206,6 +229,41 @@ class MindMapServiceTest(unittest.TestCase):
 
         self.assertEqual(client.max_active_calls, 3)
 
+    def test_generation_uses_streaming_llm_path(self) -> None:
+        client = StreamingLlmClient(
+            """{
+              "title": "操作系统",
+              "summary": "课程知识结构",
+              "source_chunk_ids": [],
+              "children": [{
+                "title": "进程与线程",
+                "summary": "并发基础",
+                "source_chunk_ids": [11],
+                "children": []
+              }]
+            }"""
+        )
+
+        with (
+            patch("app.services.mind_map_service.settings.llm_api_key", "test-key"),
+            patch("app.services.mind_map_service.settings.llm_model", "test-model"),
+            patch(
+                "app.services.mind_map_service.settings.llm_base_url",
+                "https://api.siliconflow.cn/v1",
+            ),
+        ):
+            run_async(
+                MindMapService(client=client).generate(
+                    self.db,
+                    owner_id=1,
+                    request=MindMapGenerateRequest(knowledge_base_id=10),
+                )
+            )
+
+        self.assertEqual(client.generate_calls, 0)
+        self.assertEqual(client.stream_calls, 1)
+        self.assertFalse(client.last_kwargs["enable_thinking"])
+
     def test_service_limits_concurrency_across_operations(self) -> None:
         client = ConcurrencyTrackingLlmClient()
         service = MindMapService(client=client)
@@ -218,6 +276,19 @@ class MindMapServiceTest(unittest.TestCase):
         run_async(call_many())
 
         self.assertEqual(client.max_active_calls, 3)
+
+    def test_llm_total_timeout_bounds_streaming_generation(self) -> None:
+        service = MindMapService(client=ConcurrencyTrackingLlmClient())
+
+        with self.assertRaises(LlmServiceError) as context:
+            run_async(
+                service._generate_answer(
+                    "slow prompt",
+                    total_timeout_seconds=0.001,
+                )
+            )
+
+        self.assertEqual(context.exception.status_code, 504)
 
     def test_generation_cancels_remaining_batches_after_failure(self) -> None:
         for chunk_id in range(13, 26):
@@ -368,6 +439,41 @@ class MindMapServiceTest(unittest.TestCase):
         count = self.db.execute(text("SELECT COUNT(*) FROM mind_map_histories")).scalar_one()
         self.assertEqual(count, 0)
 
+    def test_history_update_preserves_view_state_when_omitted(self) -> None:
+        result = MindMapResponse(
+            history_id=1,
+            knowledge_base_id=10,
+            generation_mode="ai",
+            node_count=1,
+            message="done",
+            root=MindMapNode(id="root", title="操作系统"),
+        )
+        self.db.execute(
+            text(
+                """
+                INSERT INTO mind_map_histories (
+                    id, user_id, knowledge_base_id, title, node_count,
+                    result_json, view_state_json
+                ) VALUES (1, 1, 10, '操作系统', 1, :result, :view_state)
+                """
+            ),
+            {
+                "result": result.model_dump_json(),
+                "view_state": '{"zoom": 1.5, "x": 20}',
+            },
+        )
+        self.db.commit()
+
+        updated = MindMapHistoryService().update(
+            self.db,
+            history_id=1,
+            owner_id=1,
+            payload=MindMapHistoryUpdate(title="操作系统复习版"),
+        )
+
+        self.assertEqual(updated.title, "操作系统复习版")
+        self.assertEqual(updated.view_state, {"zoom": 1.5, "x": 20})
+
     def test_background_job_persists_progress_and_result(self) -> None:
         service = MindMapJobService()
         queued = service.create_job(
@@ -397,6 +503,111 @@ class MindMapServiceTest(unittest.TestCase):
         self.assertEqual(completed.status, "completed")
         self.assertEqual(completed.progress, 100)
         self.assertEqual(completed.result.root.title, "操作系统")
+
+    def test_job_completion_and_generated_history_are_atomic(self) -> None:
+        service = MindMapJobService()
+        queued = service.create_job(
+            self.db,
+            owner_id=1,
+            request=MindMapGenerateRequest(knowledge_base_id=10),
+        )
+        self.db.execute(
+            text(
+                """
+                CREATE TRIGGER fail_job_completion
+                BEFORE UPDATE ON mind_map_jobs
+                WHEN NEW.status = 'completed'
+                BEGIN
+                    SELECT RAISE(FAIL, 'completion failed');
+                END
+                """
+            )
+        )
+        result = MindMapResponse(
+            knowledge_base_id=10,
+            generation_mode="ai",
+            node_count=1,
+            message="done",
+            root=MindMapNode(id="root", title="操作系统"),
+        )
+
+        with (
+            patch("app.services.mind_map_job_service.SessionLocal", self.SessionLocal),
+            patch(
+                "app.services.mind_map_job_service.mind_map_service.generate",
+                new=AsyncMock(return_value=result),
+            ),
+            patch("app.services.mind_map_job_service.logger.exception"),
+        ):
+            run_async(service.process_job(queued.job_id))
+
+        history_count = self.db.execute(
+            text("SELECT COUNT(*) FROM mind_map_histories")
+        ).scalar_one()
+        failed = service.get_job(self.db, job_id=queued.job_id, owner_id=1)
+        self.assertEqual(history_count, 0)
+        self.assertEqual(failed.status, "failed")
+
+    def test_start_requeues_interrupted_jobs(self) -> None:
+        service = MindMapJobService()
+        queued = service.create_job(
+            self.db,
+            owner_id=1,
+            request=MindMapGenerateRequest(knowledge_base_id=10),
+        )
+        self.db.execute(
+            text(
+                """
+                UPDATE mind_map_jobs
+                SET status = 'processing', stage = 'merging', progress = 72
+                WHERE id = :job_id
+                """
+            ),
+            {"job_id": queued.job_id},
+        )
+        self.db.commit()
+
+        with (
+            patch("app.services.mind_map_job_service.SessionLocal", self.SessionLocal),
+            patch.object(service, "enqueue") as enqueue,
+        ):
+            run_async(service.start())
+
+        recovered = service.get_job(self.db, job_id=queued.job_id, owner_id=1)
+        self.assertEqual(recovered.status, "queued")
+        self.assertEqual(recovered.stage, "queued")
+        self.assertEqual(recovered.progress, 0)
+        enqueue.assert_called_once_with(queued.job_id)
+
+    def test_completed_job_is_not_processed_again(self) -> None:
+        service = MindMapJobService()
+        queued = service.create_job(
+            self.db,
+            owner_id=1,
+            request=MindMapGenerateRequest(knowledge_base_id=10),
+        )
+        self.db.execute(
+            text(
+                """
+                UPDATE mind_map_jobs
+                SET status = 'completed', stage = 'completed', progress = 100
+                WHERE id = :job_id
+                """
+            ),
+            {"job_id": queued.job_id},
+        )
+        self.db.commit()
+
+        generate = AsyncMock()
+        with (
+            patch("app.services.mind_map_job_service.SessionLocal", self.SessionLocal),
+            patch("app.services.mind_map_job_service.mind_map_service.generate", new=generate),
+        ):
+            run_async(service.process_job(queued.job_id))
+
+        generate.assert_not_awaited()
+        completed = service.get_job(self.db, job_id=queued.job_id, owner_id=1)
+        self.assertEqual(completed.status, "completed")
 
     def _create_schema(self) -> None:
         with self.engine.begin() as connection:
@@ -551,12 +762,16 @@ class MindMapApiTest(unittest.TestCase):
             "children": []
           }]
         }"""
+
+        async def stream_model_response(prompt: str, **kwargs):
+            yield model_response
+
         with (
             patch("app.services.mind_map_service.settings.llm_api_key", "test-key"),
             patch("app.services.mind_map_service.settings.llm_model", "test-model"),
             patch(
-                "app.services.mind_map_service.mind_map_service.client.generate_answer",
-                return_value=model_response,
+                "app.services.mind_map_service.mind_map_service.client.stream_answer",
+                new=stream_model_response,
             ),
         ):
             response = self.client.post(

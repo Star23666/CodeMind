@@ -64,6 +64,14 @@ class FakeLlmClient:
         return "进程负责资源分配，线程负责 CPU 调度。 [来源1]"
 
 
+class FakeStreamingLlmClient(FakeLlmClient):
+    async def stream_answer(self, prompt: str):
+        self.called = True
+        self.last_prompt = prompt
+        yield "进程负责资源分配，"
+        yield "线程负责 CPU 调度。[来源1]"
+
+
 class FakeHistoryService:
     def __init__(self):
         self.saved = None
@@ -145,6 +153,32 @@ class RagGenerationTest(unittest.TestCase):
         self.assertEqual(response.sources, [])
         self.assertEqual(response.qa_record_id, 1001)
         self.assertEqual(history.saved["sources"], [])
+
+    def test_stream_answer_emits_events_and_saves_sanitized_answer(self):
+        retrieval = FakeRetrievalService([make_source()])
+        llm = FakeStreamingLlmClient()
+        history = FakeHistoryService()
+        service = RagService(
+            retrieval_service=retrieval,
+            llm_client=llm,
+            history_service=history,
+        )
+        request = ChatRequest(knowledge_base_id=1, question="进程和线程有什么区别？")
+
+        async def collect_events():
+            return [
+                event
+                async for event in service.stream_answer(request, user_id=7, db=object())
+            ]
+
+        events = run_async(collect_events())
+
+        self.assertEqual(events[0]["event"], "meta")
+        self.assertEqual(events[0]["data"]["sources"][0]["chunk_id"], 10)
+        self.assertEqual([event["event"] for event in events[1:-1]], ["token", "token"])
+        self.assertEqual(events[-1]["event"], "done")
+        self.assertEqual(events[-1]["data"]["qa_record_id"], 1001)
+        self.assertEqual(history.saved["answer"], "进程负责资源分配，线程负责 CPU 调度。[来源1]")
 
     def test_source_context_has_global_budget_and_untrusted_data_guardrail(self):
         sources = [make_source(chunk_id=index, score=0.86) for index in range(1, 11)]

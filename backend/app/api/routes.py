@@ -1,7 +1,8 @@
+import json
 from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -53,6 +54,10 @@ from app.services.rag_service import rag_service
 from app.services.retrieval_service import RetrievalServiceError, retrieval_service
 
 router = APIRouter()
+
+
+def _sse_event(event: str, data: dict[str, object]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 @router.get("/health")
@@ -328,7 +333,6 @@ async def generate_mind_map(
 @router.post("/mind-maps/jobs", response_model=MindMapJobRead, status_code=status.HTTP_202_ACCEPTED)
 async def create_mind_map_job(
     payload: MindMapGenerateRequest,
-    background_tasks: BackgroundTasks,
     current_user: UserRead = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MindMapJobRead:
@@ -336,7 +340,7 @@ async def create_mind_map_job(
         job = mind_map_job_service.create_job(db, owner_id=current_user.id, request=payload)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库或文档不存在。") from exc
-    background_tasks.add_task(mind_map_job_service.process_job, job.job_id)
+    mind_map_job_service.enqueue(job.job_id)
     return job
 
 
@@ -495,6 +499,56 @@ async def chat(
         ) from exc
     except RetrievalServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    request: ChatRequest,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    try:
+        knowledge_base_service.get_owned(
+            db,
+            request.knowledge_base_id,
+            current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="知识库不存在。",
+        ) from exc
+
+    async def event_stream():
+        try:
+            async for event in rag_service.stream_answer(
+                request,
+                user_id=current_user.id,
+                db=db,
+            ):
+                yield _sse_event(
+                    str(event["event"]),
+                    event["data"],
+                )
+        except (LlmServiceError, RetrievalServiceError) as exc:
+            yield _sse_event(
+                "error",
+                {"status_code": exc.status_code, "detail": str(exc)},
+            )
+        except Exception:
+            yield _sse_event(
+                "error",
+                {"status_code": 500, "detail": "流式回答处理失败，请稍后重试。"},
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/qa-records", response_model=list[QaRecordRead])

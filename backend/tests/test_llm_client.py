@@ -40,6 +40,44 @@ class RecordingClient:
     def __init__(self) -> None:
         self.completions = RecordingCompletions()
         self.chat = SimpleNamespace(completions=self.completions)
+        self.closed = False
+
+    async def close(self):
+        self.closed = True
+
+
+class StreamingResponse:
+    def __init__(self, values: list[str]) -> None:
+        self.values = values
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        for value in self.values:
+            yield SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content=value),
+                        finish_reason=None,
+                    )
+                ]
+            )
+
+
+class StreamingCompletions:
+    def __init__(self) -> None:
+        self.kwargs = None
+
+    async def create(self, **kwargs):
+        self.kwargs = kwargs
+        return StreamingResponse(["第一段", "第二段"])
+
+
+class StreamingClient:
+    def __init__(self) -> None:
+        self.completions = StreamingCompletions()
+        self.chat = SimpleNamespace(completions=self.completions)
 
 
 class LlmClientTest(unittest.TestCase):
@@ -67,6 +105,7 @@ class LlmClientTest(unittest.TestCase):
         self.assertEqual(constructor_kwargs["timeout"], 12.0)
         self.assertEqual(constructor_kwargs["max_retries"], 1)
         self.assertEqual(recording_client.completions.kwargs["max_tokens"], 345)
+        self.assertTrue(recording_client.closed)
 
     def test_provider_failure_becomes_controlled_service_error(self):
         client = LlmClient()
@@ -81,3 +120,35 @@ class LlmClientTest(unittest.TestCase):
                 run_async(client.generate_answer("test prompt"))
 
         self.assertIn("大模型服务", str(context.exception))
+
+    def test_stream_provider_yields_deltas_and_sets_stream_flag(self):
+        client = LlmClient()
+        streaming_client = StreamingClient()
+
+        async def collect():
+            return [
+                token
+                async for token in client.stream_answer(
+                    "test prompt",
+                    enable_thinking=False,
+                    response_format={"type": "json_object"},
+                )
+            ]
+
+        with (
+            patch("app.services.llm_client.settings.llm_api_key", "test-key"),
+            patch("app.services.llm_client.settings.llm_model", "test-model"),
+            patch("openai.AsyncOpenAI", return_value=streaming_client),
+        ):
+            tokens = run_async(collect())
+
+        self.assertEqual(tokens, ["第一段", "第二段"])
+        self.assertTrue(streaming_client.completions.kwargs["stream"])
+        self.assertEqual(
+            streaming_client.completions.kwargs["extra_body"],
+            {"enable_thinking": False},
+        )
+        self.assertEqual(
+            streaming_client.completions.kwargs["response_format"],
+            {"type": "json_object"},
+        )
