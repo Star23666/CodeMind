@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.schemas.contracts import ChatRequest, ChatResponse
 from app.services.llm_client import LlmClient, LlmServiceError, llm_client
 from app.services.prompt_builder import build_rag_prompt, sanitize_answer_citations
@@ -34,7 +35,10 @@ class RagService:
         )
 
         if prompt:
-            answer = await self.llm_client.generate_answer(prompt)
+            answer = await self.llm_client.generate_answer(
+                prompt,
+                enable_thinking=settings.llm_enable_thinking,
+            )
             answer = sanitize_answer_citations(answer, source_count=len(sources))
         else:
             answer = retrieval_result.empty_message or (
@@ -84,7 +88,10 @@ class RagService:
 
         if prompt:
             answer_parts: list[str] = []
-            async for token in self.llm_client.stream_answer(prompt):
+            async for token in self.llm_client.stream_answer(
+                prompt,
+                enable_thinking=settings.llm_enable_thinking,
+            ):
                 answer_parts.append(token)
                 yield {"event": "token", "data": {"delta": token}}
 

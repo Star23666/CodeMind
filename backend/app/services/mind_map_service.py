@@ -104,7 +104,10 @@ class MindMapService:
                         temperature=0.1,
                         timeout_seconds=settings.mind_map_timeout_seconds,
                         total_timeout_seconds=settings.mind_map_total_timeout_seconds,
-                        max_tokens=max(settings.llm_max_tokens, 700),
+                        max_tokens=max(
+                            settings.llm_max_tokens,
+                            settings.mind_map_batch_max_tokens,
+                        ),
                         max_retries=settings.mind_map_max_retries,
                         model=self._structure_model(),
                         enable_thinking=self._thinking_option(),
@@ -266,7 +269,10 @@ class MindMapService:
                 system_message=MIND_MAP_SYSTEM_MESSAGE, temperature=0.1,
                 timeout_seconds=settings.mind_map_timeout_seconds,
                 total_timeout_seconds=settings.mind_map_total_timeout_seconds,
-                max_tokens=max(settings.llm_max_tokens, 700),
+                max_tokens=max(
+                    settings.llm_max_tokens,
+                    settings.mind_map_batch_max_tokens,
+                ),
                 max_retries=settings.mind_map_max_retries,
                 model=self._structure_model(),
                 enable_thinking=self._thinking_option(),

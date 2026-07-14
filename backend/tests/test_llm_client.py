@@ -47,36 +47,40 @@ class RecordingClient:
 
 
 class StreamingResponse:
-    def __init__(self, values: list[str]) -> None:
+    def __init__(self, values: list[str], finish_reason: str | None = None) -> None:
         self.values = values
+        self.finish_reason = finish_reason
 
     def __aiter__(self):
         return self._iterate()
 
     async def _iterate(self):
-        for value in self.values:
+        for index, value in enumerate(self.values):
             yield SimpleNamespace(
                 choices=[
                     SimpleNamespace(
                         delta=SimpleNamespace(content=value),
-                        finish_reason=None,
+                        finish_reason=(
+                            self.finish_reason if index == len(self.values) - 1 else None
+                        ),
                     )
                 ]
             )
 
 
 class StreamingCompletions:
-    def __init__(self) -> None:
+    def __init__(self, finish_reason: str | None = None) -> None:
         self.kwargs = None
+        self.finish_reason = finish_reason
 
     async def create(self, **kwargs):
         self.kwargs = kwargs
-        return StreamingResponse(["第一段", "第二段"])
+        return StreamingResponse(["第一段", "第二段"], self.finish_reason)
 
 
 class StreamingClient:
-    def __init__(self) -> None:
-        self.completions = StreamingCompletions()
+    def __init__(self, finish_reason: str | None = None) -> None:
+        self.completions = StreamingCompletions(finish_reason)
         self.chat = SimpleNamespace(completions=self.completions)
 
 
@@ -152,3 +156,21 @@ class LlmClientTest(unittest.TestCase):
             streaming_client.completions.kwargs["response_format"],
             {"type": "json_object"},
         )
+
+    def test_stream_preserves_output_limit_error(self):
+        client = LlmClient()
+        streaming_client = StreamingClient(finish_reason="length")
+
+        async def collect():
+            return [token async for token in client.stream_answer("test prompt")]
+
+        with (
+            patch("app.services.llm_client.settings.llm_api_key", "test-key"),
+            patch("app.services.llm_client.settings.llm_model", "test-model"),
+            patch("openai.AsyncOpenAI", return_value=streaming_client),
+        ):
+            with self.assertRaises(LlmServiceError) as context:
+                run_async(collect())
+
+        self.assertEqual(context.exception.status_code, 502)
+        self.assertIn("长度上限", str(context.exception))
