@@ -51,11 +51,11 @@
 </template>
 
 <script setup>
-import { nextTick, ref, watch } from "vue";
+import { nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { ElMessageBox } from "element-plus";
 import { Search } from "@element-plus/icons-vue";
 import { useRouter } from "vue-router";
-import { sendChatQuestion } from "../../api/chat";
+import { streamChatQuestion } from "../../api/chat";
 import { useUserStore } from "../../stores/user";
 import AnswerCard from "./AnswerCard.vue";
 
@@ -87,6 +87,7 @@ const sources = ref([]);
 const loading = ref(false);
 const hasError = ref(false);
 const questionInput = ref(null);
+const streamController = ref(null);
 
 watch(
   () => props.initialQuestion,
@@ -137,32 +138,59 @@ async function askQuestion() {
   answer.value = "";
   rewrittenQuestion.value = "";
   qaRecordId.value = null;
+  sources.value = [];
+  streamController.value?.abort();
+  const controller = new AbortController();
+  streamController.value = controller;
 
   try {
-    const data = await sendChatQuestion({
-      knowledge_base_id: props.knowledgeBaseId,
-      question: trimmedQuestion,
-      top_k: topK.value,
-      score_threshold: scoreThreshold.value,
-      rerank_top_n: 2,
-      enable_rewrite: true,
-      enable_rerank: true,
-    });
-
-    answer.value = data.answer || "后端已返回响应，但没有检测到 answer 字段。";
-    answerStatus.value = data.sources?.length ? "已生成带来源回答" : "资料依据不足";
-    rewrittenQuestion.value = data.rewritten_question || "";
-    qaRecordId.value = data.qa_record_id || null;
-    sources.value = data.sources || [];
+    await streamChatQuestion(
+      {
+        knowledge_base_id: props.knowledgeBaseId,
+        question: trimmedQuestion,
+        top_k: topK.value,
+        score_threshold: scoreThreshold.value,
+        rerank_top_n: 2,
+        enable_rewrite: true,
+        enable_rerank: true,
+      },
+      {
+        signal: controller.signal,
+        onMeta(data) {
+          rewrittenQuestion.value = data.rewritten_question || "";
+          sources.value = data.sources || [];
+          answerStatus.value = sources.value.length ? "资料已找到，生成中" : "资料依据不足";
+        },
+        onToken(delta) {
+          answer.value += delta;
+          answerStatus.value = "流式生成中";
+        },
+        onDone(data) {
+          answer.value = data.answer || answer.value;
+          rewrittenQuestion.value = data.rewritten_question || rewrittenQuestion.value;
+          qaRecordId.value = data.qa_record_id || null;
+          sources.value = data.sources || sources.value;
+          answerStatus.value = sources.value.length ? "已生成带来源回答" : "资料依据不足";
+        },
+      },
+    );
   } catch (error) {
+    if (error.name === "AbortError") {
+      answerStatus.value = "已停止生成";
+      return;
+    }
     hasError.value = true;
     answerStatus.value = "请求失败";
-    answer.value = error.message;
-    sources.value = [];
+    if (!answer.value) answer.value = error.message;
   } finally {
+    if (streamController.value === controller) streamController.value = null;
     loading.value = false;
   }
 }
+
+onBeforeUnmount(() => {
+  streamController.value?.abort();
+});
 
 async function focusQuestion() {
   await nextTick();

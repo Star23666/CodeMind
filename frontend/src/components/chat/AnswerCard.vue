@@ -8,7 +8,7 @@
       <el-tag v-if="qaRecordId" type="info" effect="plain">#{{ qaRecordId }}</el-tag>
     </div>
 
-    <el-skeleton v-if="loading" :rows="4" animated />
+    <el-skeleton v-if="loading && !answer" :rows="4" animated />
 
     <template v-else>
       <p class="answer-text">{{ answer || "提交问题后，这里会显示回答。" }}</p>

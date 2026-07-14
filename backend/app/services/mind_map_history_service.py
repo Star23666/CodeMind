@@ -12,7 +12,14 @@ from app.schemas.contracts import (
 
 
 class MindMapHistoryService:
-    def save_generated(self, db: Session, *, owner_id: int, result: MindMapResponse) -> MindMapHistoryRead:
+    def save_generated(
+        self,
+        db: Session,
+        *,
+        owner_id: int,
+        result: MindMapResponse,
+        commit: bool = True,
+    ) -> MindMapHistoryRead:
         title = result.root.title[:120]
         try:
             cursor = db.execute(text("""
@@ -29,7 +36,10 @@ class MindMapHistoryService:
             db.execute(text("UPDATE mind_map_histories SET result_json=:result WHERE id=:id"), {
                 "id": history_id, "result": result.model_dump_json(),
             })
-            db.commit()
+            if commit:
+                db.commit()
+            else:
+                db.flush()
         except Exception:
             db.rollback()
             raise
@@ -92,12 +102,13 @@ class MindMapHistoryService:
             result.root = payload.root
             result.node_count = self._count(payload.root)
         title = (payload.title or current.title).strip()[:120]
+        view_state = current.view_state if payload.view_state is None else payload.view_state
         db.execute(text("""
             UPDATE mind_map_histories SET title=:title, node_count=:node_count,
                 result_json=:result, view_state_json=:view_state, updated_at=CURRENT_TIMESTAMP
             WHERE id=:id AND user_id=:owner_id
         """), {"title": title, "node_count": result.node_count, "result": result.model_dump_json(),
-                 "view_state": json.dumps(payload.view_state, ensure_ascii=False),
+                 "view_state": json.dumps(view_state, ensure_ascii=False),
                  "id": history_id, "owner_id": owner_id})
         db.commit()
         return self.get(db, history_id=history_id, owner_id=owner_id)

@@ -12,7 +12,7 @@ CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented
 - 文档解析、文本切分和处理状态展示
 - 在线 Embedding API 和 Chroma 向量入库
 - 问题重写、topK 检索、相似度过滤和 rerank
-- 在线 LLM RAG 回答和来源编号校验
+- 在线 LLM RAG 回答、来源编号校验和 SSE 流式输出
 - 文档库、原始文档预览、片段查看与来源跳转
 - 问答历史列表、详情查看和历史来源快照
 - 知识地图异步生成、分阶段进度、失败恢复和历史版本管理
@@ -25,9 +25,10 @@ CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented
 
 后续计划：
 
-- 用户反馈持久化、管理员反馈页面和相应自动化测试
+- 文档上传和重新索引任务的持久化调度、重启恢复与重复任务防护
+- 用户反馈持久化、问答记录归属校验、管理员反馈页面和相应自动化测试
+- 健康检查增加 MySQL、Chroma 等关键依赖探测
 - 基于固定测试集的相似度阈值评估
-- RAG 问答与思维导图的真实模型端到端测试
 - 前端产物体积优化和项目成果物整理
 
 ## 技术栈
@@ -129,6 +130,11 @@ MYSQL_PASSWORD=replace_with_database_password
 LLM_API_KEY=replace_with_llm_api_key
 LLM_BASE_URL=https://provider.example.com/v1
 LLM_MODEL=replace_with_chat_model
+
+# 可选：为空时复用 LLM_MODEL
+MIND_MAP_MODEL=replace_with_structured_text_model
+MIND_MAP_TOTAL_TIMEOUT_SECONDS=150
+MIND_MAP_ENABLE_THINKING=false
 
 EMBEDDING_API_KEY=replace_with_embedding_api_key
 EMBEDDING_BASE_URL=https://provider.example.com/v1
@@ -271,6 +277,7 @@ Authorization: Bearer <access_token>
 | `DELETE`       | `/api/documents/{id}`       | 删除文档及向量   |
 | `POST`         | `/api/search`               | 语义检索         |
 | `POST`         | `/api/chat`                 | RAG 问答         |
+| `POST`         | `/api/chat/stream`          | SSE 流式 RAG 问答 |
 | `GET`          | `/api/qa-records`           | 问答历史列表     |
 | `GET`          | `/api/qa-records/{id}`      | 问答历史详情     |
 | `POST`         | `/api/mind-maps/jobs`       | 创建导图生成任务 |
@@ -293,7 +300,9 @@ python -m pip install pytest==8.3.5
 python -m pytest -q
 ```
 
-当前后端测试共 53 项，覆盖认证、权限、文档处理、删除清理、检索降级、Prompt、LLM 异常、RAG 编排、问答历史，以及知识地图生成、并发控制、任务、历史和接口权限。
+当前后端测试共 61 项，覆盖认证、权限、文档处理、删除清理、检索降级、Prompt、LLM 异常、RAG 编排、SSE 流式生成、问答历史，以及知识地图生成、JSON Mode、硬总时限、任务恢复、事务一致性、并发控制、历史和接口权限。
+
+Docker 端到端测试已验证前端 Nginx 代理下的注册、登录、知识库创建、文档上传与解析、SSE 问答、来源返回、知识地图生成、任务重启恢复和历史详情落库。当前实测小范围知识地图约 36 秒完成，生成 15 个节点，节点数、历史记录和来源引用均通过一致性校验。
 
 前端生产构建检查：
 

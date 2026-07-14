@@ -41,6 +41,7 @@
 | 文档     | GET    | `/api/chunks/{chunk_id}`                         | 查询单个片段           |
 | 检索     | POST   | `/api/search`                                    | 语义检索或文档直接检索 |
 | 问答     | POST   | `/api/chat`                                      | RAG 问答               |
+| 问答     | POST   | `/api/chat/stream`                               | SSE 流式 RAG 问答      |
 | 知识地图 | POST   | `/api/mind-maps/generate`                        | 同步生成地图（调试）   |
 | 知识地图 | POST   | `/api/mind-maps/jobs`                            | 创建后台生成任务       |
 | 知识地图 | GET    | `/api/mind-maps/jobs/{job_id}`                   | 查询任务进度和结果     |
@@ -375,6 +376,40 @@ POST /api/chat
 }
 ```
 
+### 7.1 SSE 流式问答
+
+```text
+POST /api/chat/stream
+Accept: text/event-stream
+```
+
+请求体与 `POST /api/chat` 完全相同。响应使用 Server-Sent Events（SSE），响应头为
+`Content-Type: text/event-stream`，事件之间使用空行分隔：
+
+```text
+event: meta
+data: {"knowledge_base_id":1,"question":"...","rewritten_question":null,"sources":[...]}
+
+event: token
+data: {"delta":"进程是"}
+
+event: token
+data: {"delta":"资源分配的基本单位。"}
+
+event: done
+data: {"qa_record_id":1002,"knowledge_base_id":1,"question":"...","rewritten_question":null,"answer":"...","sources":[...]}
+```
+
+事件约定：
+
+1. `meta`：检索完成后发送，包含改写问题和来源列表，便于前端先展示引用。
+2. `token`：每个事件的 `delta` 是回答的一段文本，前端按顺序拼接即可。
+3. `done`：回答完成并成功保存问答历史后发送，字段与普通 `/api/chat` 响应一致。
+4. `error`：处理失败时发送，包含 `status_code` 和 `detail`；流式响应建立后 HTTP 状态通常已经是 `200`，客户端必须同时处理该事件。
+
+前端通过 Nginx 代理时必须关闭响应缓冲；本项目的 `frontend/nginx.conf` 已配置
+`proxy_buffering off`、`proxy_cache off` 和 300 秒读取超时。
+
 ## 8. 知识地图接口
 
 知识地图必须配置在线 LLM。前端正式流程使用后台任务接口，避免长时间同步请求阻塞页面；同步接口主要用于 Swagger 调试和后端联调。
@@ -588,7 +623,7 @@ POST /api/qa-records/{qa_record_id}/feedback
 | `history_id`           | `mind_map_histories.id`                                              | 地图历史版本编号                         |
 | `node_type`            | `mind_map_histories.result_json`                                     | 地图节点类型，不单独占数据库列           |
 
-后端实现位于 `backend/app/api/routes.py`、`backend/app/services/` 和 `backend/app/schemas/contracts.py`。当前已接入 JWT、MySQL、Chroma、Embedding、在线 LLM、问答历史和知识地图；反馈持久化、真实模型端到端测试和检索评估仍需继续完善。
+后端实现位于 `backend/app/api/routes.py`、`backend/app/services/` 和 `backend/app/schemas/contracts.py`。当前已接入 JWT、MySQL、Chroma、Embedding、在线 LLM、问答历史和知识地图；反馈持久化和检索评估仍需继续完善。知识地图结构化调用使用流式 LLM 响应和一次瞬时错误重试，真实 Docker 多批次任务已完成验证。
 
 ---
 

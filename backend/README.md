@@ -11,7 +11,7 @@ FastAPI 后端负责认证、知识库与文档管理、Embedding 入库、Chrom
 | `app/db/session.py` | SQLAlchemy Engine 与 Session |
 | `app/services/document_service.py` | 上传、后台解析、入库、重建和删除 |
 | `app/services/retrieval_service.py` | 问题重写、Embedding、Chroma 召回、过滤与 rerank |
-| `app/services/rag_service.py` | 检索、Prompt、LLM、历史保存的问答编排 |
+| `app/services/rag_service.py` | 检索、Prompt、LLM、SSE 流式输出和历史保存的问答编排 |
 | `app/services/mind_map_service.py` | 知识地图结构生成、节点追问和分支扩展 |
 | `app/services/mind_map_job_service.py` | 异步任务状态、进度和结果持久化 |
 | `app/services/mind_map_history_service.py` | 地图历史版本和画布状态持久化 |
@@ -31,6 +31,11 @@ MYSQL_DATABASE=codemind
 LLM_API_KEY=replace_with_llm_key
 LLM_BASE_URL=https://provider.example.com/v1
 LLM_MODEL=replace_with_chat_model
+
+# 可选：知识地图单独使用更快的纯文本指令模型
+MIND_MAP_MODEL=replace_with_structured_text_model
+MIND_MAP_TOTAL_TIMEOUT_SECONDS=150
+MIND_MAP_ENABLE_THINKING=false
 
 EMBEDDING_API_KEY=replace_with_embedding_key
 EMBEDDING_BASE_URL=https://provider.example.com/v1
@@ -73,10 +78,16 @@ python -m uvicorn app.main:app --reload
 Authorization: Bearer <access_token>
 ```
 
+RAG 问答提供两个接口：`POST /api/chat` 返回完整 JSON；`POST /api/chat/stream` 返回
+`text/event-stream`。流式接口依次发送 `meta`、多个 `token` 和 `done` 事件，只有生成完成并发送
+`done` 后才保存问答历史；处理异常时发送 `error` 事件。客户端断开或生成失败时，不应把未完成回答当作已保存记录。
+
 ## 知识地图说明
 
 - `POST /api/mind-maps/jobs` 创建后台任务，`GET /api/mind-maps/jobs/{job_id}` 查询进度。
-- 任务会分批提炼资料，再合并为总览、章节、概念和细节节点。
+- 1～3 个资料片段会单次生成；更大范围先分批提炼，再合并为总览、章节、概念和细节节点。
+- 结构生成通过 LLM 流式响应收集文本，并受每次请求总时限约束；知识地图可单独配置纯文本模型和关闭思考模式。
+- 后端重启时，处于等待或处理中的知识地图任务会自动重新排队，客户端可继续查询原任务 ID。
 - 每个节点可包含 `key_points`、`learning_tip`、原文来源和子节点。
 - 同一后端实例的知识地图 LLM 调用并发上限为 3；分批调用失败时会取消剩余请求。
 - 自动生成结果会保存历史版本；前端也可创建、更新和删除版本。
@@ -89,7 +100,7 @@ cd backend
 python -m pytest -q
 ```
 
-当前基线为 `53 passed`。测试使用 SQLite 和替身服务覆盖主要业务，不等同于真实 MySQL、Chroma 和在线模型端到端验证。
+当前基线为 `61 passed`。测试使用 SQLite 和替身服务覆盖主要业务；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、Nginx SSE 代理和知识地图任务恢复、多批次任务链路。
 
 ## Docker 运行
 

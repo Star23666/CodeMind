@@ -75,45 +75,74 @@ class MindMapService:
 
         try:
             selected_rows = self._sample_rows(rows)
-            batches = [selected_rows[index:index + 3] for index in range(0, len(selected_rows), 3)]
-
-            async def analyze_batch(batch):
-                return await self._generate_answer(
-                    self._build_batch_prompt(batch),
+            if len(selected_rows) <= 3:
+                self._notify(
+                    progress_callback,
+                    "extracting",
+                    48,
+                    "资料较少，正在直接生成知识结构",
+                )
+                raw = await self._generate_answer(
+                    self._build_prompt(selected_rows, request=request, title=fallback_title),
                     system_message=MIND_MAP_SYSTEM_MESSAGE,
                     temperature=0.1,
-                    timeout_seconds=300.0,
-                    max_tokens=max(settings.llm_max_tokens, 700),
-                    max_retries=0,
+                    timeout_seconds=settings.mind_map_timeout_seconds,
+                    total_timeout_seconds=settings.mind_map_total_timeout_seconds,
+                    max_tokens=max(settings.llm_max_tokens, 3200),
+                    max_retries=settings.mind_map_max_retries,
                     model=self._structure_model(),
+                    enable_thinking=self._thinking_option(),
+                    response_format=self._response_format(),
                 )
+            else:
+                batches = [selected_rows[index:index + 3] for index in range(0, len(selected_rows), 3)]
 
-            tasks = [asyncio.create_task(analyze_batch(batch)) for batch in batches]
-            batch_notes = []
-            try:
-                for completed, task in enumerate(asyncio.as_completed(tasks), start=1):
-                    batch_notes.append(await task)
-                    progress = 32 + round(completed / (len(batches) + 1) * 36)
-                    self._notify(
-                        progress_callback,
-                        "extracting",
-                        progress,
-                        f"已提炼 {completed}/{len(batches)} 组资料",
+                async def analyze_batch(batch):
+                    return await self._generate_answer(
+                        self._build_batch_prompt(batch),
+                        system_message=MIND_MAP_SYSTEM_MESSAGE,
+                        temperature=0.1,
+                        timeout_seconds=settings.mind_map_timeout_seconds,
+                        total_timeout_seconds=settings.mind_map_total_timeout_seconds,
+                        max_tokens=max(settings.llm_max_tokens, 700),
+                        max_retries=settings.mind_map_max_retries,
+                        model=self._structure_model(),
+                        enable_thinking=self._thinking_option(),
+                        response_format=self._response_format(),
                     )
-            except BaseException:
-                # 某一批失败或任务被取消时，立即停止其余请求，避免失败后继续消耗 API。
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-                raise
-            self._notify(progress_callback, "merging", 72, "正在合并各章节知识点并生成层级")
-            raw = await self._generate_answer(
-                self._build_merge_prompt(batch_notes, request=request, title=fallback_title),
-                system_message=MIND_MAP_SYSTEM_MESSAGE, temperature=0.1,
-                timeout_seconds=300.0, max_tokens=max(settings.llm_max_tokens, 2000), max_retries=0,
-                model=self._structure_model(),
-            )
+
+                tasks = [asyncio.create_task(analyze_batch(batch)) for batch in batches]
+                batch_notes = []
+                try:
+                    for completed, task in enumerate(asyncio.as_completed(tasks), start=1):
+                        batch_notes.append(await task)
+                        progress = 32 + round(completed / (len(batches) + 1) * 36)
+                        self._notify(
+                            progress_callback,
+                            "extracting",
+                            progress,
+                            f"已提炼 {completed}/{len(batches)} 组资料",
+                        )
+                except BaseException:
+                    # 某一批失败或任务被取消时，立即停止其余请求，避免失败后继续消耗 API。
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
+                self._notify(progress_callback, "merging", 72, "正在合并各章节知识点并生成层级")
+                raw = await self._generate_answer(
+                    self._build_merge_prompt(batch_notes, request=request, title=fallback_title),
+                    system_message=MIND_MAP_SYSTEM_MESSAGE,
+                    temperature=0.1,
+                    timeout_seconds=settings.mind_map_timeout_seconds,
+                    total_timeout_seconds=settings.mind_map_total_timeout_seconds,
+                    max_tokens=max(settings.llm_max_tokens, 3200),
+                    max_retries=settings.mind_map_max_retries,
+                    model=self._structure_model(),
+                    enable_thinking=self._thinking_option(),
+                    response_format=self._response_format(),
+                )
             self._notify(progress_callback, "validating", 80, "正在校验节点层级和原文来源")
             root = self._parse_ai_tree(
                 raw,
@@ -191,8 +220,10 @@ class MindMapService:
         try:
             answer = await self._generate_answer(
                 prompt,
-                timeout_seconds=300.0,
+                timeout_seconds=settings.mind_map_timeout_seconds,
+                total_timeout_seconds=settings.mind_map_total_timeout_seconds,
                 max_tokens=max(settings.llm_max_tokens, 1200),
+                max_retries=settings.mind_map_max_retries,
             )
         except LlmServiceError as exc:
             raise MindMapGenerationError(str(exc), status_code=exc.status_code) from exc
@@ -233,8 +264,13 @@ class MindMapService:
 仅返回 JSON：{{"title":"{request.node_title}","summary":"概述","node_type":"concept","key_points":["关键点"],"learning_tip":"复述后核对原文","source_chunk_ids":{ids},"children":[{{"title":"子知识点","summary":"定义、作用与关系","node_type":"detail","key_points":["记忆点"],"learning_tip":"用一个例子解释它","source_chunk_ids":[真实编号],"children":[]}}]}}
 资料：\n{chr(10).join(blocks)}""",
                 system_message=MIND_MAP_SYSTEM_MESSAGE, temperature=0.1,
-                timeout_seconds=300, max_tokens=max(settings.llm_max_tokens, 700), max_retries=0,
+                timeout_seconds=settings.mind_map_timeout_seconds,
+                total_timeout_seconds=settings.mind_map_total_timeout_seconds,
+                max_tokens=max(settings.llm_max_tokens, 700),
+                max_retries=settings.mind_map_max_retries,
                 model=self._structure_model(),
+                enable_thinking=self._thinking_option(),
+                response_format=self._response_format(),
             )
             source_map = {int(row["chunk_id"]): self._to_source(row) for row in rows}
             return self._parse_ai_tree(
@@ -253,9 +289,37 @@ class MindMapService:
                 status_code=502,
             ) from exc
 
-    async def _generate_answer(self, prompt: str, **kwargs) -> str:
+    async def _generate_answer(
+        self,
+        prompt: str,
+        *,
+        total_timeout_seconds: float | None = None,
+        **kwargs,
+    ) -> str:
         async with self._llm_semaphore:
-            return await self.client.generate_answer(prompt, **kwargs)
+            async def request_answer() -> str:
+                stream_answer = getattr(self.client, "stream_answer", None)
+                if stream_answer is not None:
+                    parts: list[str] = []
+                    async for delta in stream_answer(prompt, **kwargs):
+                        if delta:
+                            parts.append(delta)
+                    answer = "".join(parts).strip()
+                    if not answer:
+                        raise LlmServiceError("大模型服务未返回有效回答。", status_code=502)
+                    return answer
+                return await self.client.generate_answer(prompt, **kwargs)
+
+            try:
+                if total_timeout_seconds is None:
+                    return await request_answer()
+                async with asyncio.timeout(total_timeout_seconds):
+                    return await request_answer()
+            except TimeoutError as exc:
+                raise LlmServiceError(
+                    f"大模型生成超过 {total_timeout_seconds:g} 秒，已停止本次请求。",
+                    status_code=504,
+                ) from exc
 
     def _get_document_scope(self, db: Session, *, owner_id: int, request: MindMapGenerateRequest):
         if request.document_id is None:
@@ -359,8 +423,8 @@ class MindMapService:
             content = self._normalize(row["chunk_text"])[:450]
             blocks.append(f"[chunk_id={row['chunk_id']} | 文件={row['file_name']}]\n{content}")
         return """提炼下面资料中的知识点，合并重复内容，不要按文本切片逐条罗列。
-仅返回 JSON 数组，每项格式为：
-{"topic":"知识主题","summary":"定义、作用与关系","key_points":["记忆点"],"source_chunk_ids":[真实编号],"points":["子知识点"]}
+仅返回 JSON 对象，topics 数组中的每项格式为：
+{"topics":[{"topic":"知识主题","summary":"定义、作用与关系","key_points":["记忆点"],"source_chunk_ids":[123],"points":["子知识点"]}]}
 每组最多 6 个主题；summary 要能帮助理解，不要只换一种方式重复标题；禁止补充资料以外的事实。
 
 资料：
@@ -567,9 +631,21 @@ node_type 只能是 overview、chapter、concept、detail，根节点必须是 o
         return " ".join(value.split())
 
     def _structure_model(self) -> str:
+        if settings.mind_map_model:
+            return settings.mind_map_model
         if settings.llm_base_url and "siliconflow" in settings.llm_base_url and settings.llm_model == "deepseek-ai/DeepSeek-V4-Pro":
             return "deepseek-ai/DeepSeek-V3.2"
         return settings.llm_model
+
+    def _thinking_option(self) -> bool | None:
+        if settings.llm_base_url and "siliconflow" in settings.llm_base_url.lower():
+            return settings.mind_map_enable_thinking
+        return None
+
+    def _response_format(self) -> dict[str, str] | None:
+        if settings.llm_base_url and "siliconflow" in settings.llm_base_url.lower():
+            return {"type": "json_object"}
+        return None
 
     def _notify(
         self,

@@ -35,7 +35,14 @@ npm ci
 npm run dev
 ```
 
-默认开发地址为 `http://localhost:5173`。接口根地址由 `VITE_API_BASE_URL` 控制；Docker 前端通过 Nginx 将 `/api` 代理到后端。
+默认开发地址为 `http://localhost:5173`。普通接口根地址由 `VITE_API_BASE_URL` 控制；Docker 前端通过 Nginx 将 `/api` 代理到后端。
+
+首页问答使用 `fetch` 消费 `POST /api/chat/stream` 的 SSE 响应。事件顺序为 `meta`、多个 `token`、`done`；
+`meta` 提前返回来源，`token` 逐段更新回答，`done` 返回最终答案和问答记录 ID。流式请求使用浏览器原生
+`AbortController`，切换问题或离开页面时会中止当前请求。
+
+Docker 生产环境的 `nginx.conf` 已关闭 `/api/` 代理缓冲，并将读取超时设置为 300 秒，否则浏览器可能等到
+完整回答生成后才一次性收到内容，无法体现流式效果。
 
 生产构建：
 

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from uuid import uuid4
 
@@ -16,6 +17,76 @@ logger = logging.getLogger(__name__)
 
 
 class MindMapJobService:
+    def __init__(self) -> None:
+        self._tasks: dict[str, asyncio.Task[None]] = {}
+
+    async def start(self) -> None:
+        """Requeue jobs that were interrupted by a backend restart."""
+        db = SessionLocal()
+        try:
+            job_ids = list(
+                db.execute(
+                    text(
+                        """
+                        SELECT id
+                        FROM mind_map_jobs
+                        WHERE status IN ('queued', 'processing')
+                        ORDER BY created_at ASC
+                        """
+                    )
+                ).scalars()
+            )
+            if job_ids:
+                db.execute(
+                    text(
+                        """
+                        UPDATE mind_map_jobs
+                        SET status = 'queued',
+                            stage = 'queued',
+                            progress = 0,
+                            message = '服务已恢复，任务重新排队',
+                            error_message = NULL,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE status IN ('queued', 'processing')
+                        """
+                    )
+                )
+                db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("Unable to recover interrupted mind map jobs")
+            return
+        finally:
+            db.close()
+
+        for job_id in job_ids:
+            self.enqueue(str(job_id))
+
+    async def stop(self) -> None:
+        tasks = list(self._tasks.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def enqueue(self, job_id: str) -> None:
+        current = self._tasks.get(job_id)
+        if current is not None and not current.done():
+            return
+
+        task = asyncio.create_task(self.process_job(job_id), name=f"mind-map-{job_id}")
+        self._tasks[job_id] = task
+        task.add_done_callback(lambda finished: self._task_finished(job_id, finished))
+
+    def _task_finished(self, job_id: str, task: asyncio.Task[None]) -> None:
+        if self._tasks.get(job_id) is task:
+            self._tasks.pop(job_id, None)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error("Unhandled mind map task error %s: %s", job_id, error)
+
     def create_job(
         self,
         db: Session,
@@ -57,7 +128,7 @@ class MindMapJobService:
     async def process_job(self, job_id: str) -> None:
         db = SessionLocal()
         try:
-            row = self._get_row(db, job_id=job_id)
+            row = self._claim_job(db, job_id=job_id)
             if row is None:
                 return
 
@@ -67,8 +138,6 @@ class MindMapJobService:
                 max_depth=int(row["max_depth"]),
                 max_nodes=int(row["max_nodes"]),
             )
-            self._update(db, job_id, status="processing", stage="collecting", progress=5, message="开始读取资料")
-
             def report(stage: str, progress: int, message: str) -> None:
                 self._update(
                     db,
@@ -85,7 +154,12 @@ class MindMapJobService:
                 request=request,
                 progress_callback=report,
             )
-            mind_map_history_service.save_generated(db, owner_id=int(row["user_id"]), result=result)
+            mind_map_history_service.save_generated(
+                db,
+                owner_id=int(row["user_id"]),
+                result=result,
+                commit=False,
+            )
             self._update(
                 db,
                 job_id,
@@ -96,13 +170,64 @@ class MindMapJobService:
                 result_json=result.model_dump_json(),
                 error_message=None,
             )
+        except asyncio.CancelledError:
+            self._requeue(db, job_id)
+            raise
         except MindMapGenerationError as exc:
+            db.rollback()
             self._mark_failed(db, job_id, str(exc))
         except Exception:
             logger.exception("Mind map background job failed: %s", job_id)
+            db.rollback()
             self._mark_failed(db, job_id, "思维导图生成失败，请稍后重试。")
         finally:
             db.close()
+
+    def _claim_job(self, db: Session, *, job_id: str):
+        result = db.execute(
+            text(
+                """
+                UPDATE mind_map_jobs
+                SET status = 'processing',
+                    stage = 'collecting',
+                    progress = 5,
+                    message = '开始读取资料',
+                    error_message = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :job_id
+                  AND status = 'queued'
+                """
+            ),
+            {"job_id": job_id},
+        )
+        if result.rowcount != 1:
+            db.rollback()
+            return None
+        db.commit()
+        return self._get_row(db, job_id=job_id)
+
+    def _requeue(self, db: Session, job_id: str) -> None:
+        try:
+            db.execute(
+                text(
+                    """
+                    UPDATE mind_map_jobs
+                    SET status = 'queued',
+                        stage = 'queued',
+                        progress = 0,
+                        message = '服务停止，任务将在下次启动时继续',
+                        error_message = NULL,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = :job_id
+                      AND status = 'processing'
+                    """
+                ),
+                {"job_id": job_id},
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("Unable to requeue cancelled mind map job: %s", job_id)
 
     def get_job(self, db: Session, *, job_id: str, owner_id: int) -> MindMapJobRead:
         row = self._get_row(db, job_id=job_id, owner_id=owner_id)

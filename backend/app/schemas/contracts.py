@@ -195,7 +195,7 @@ class MindMapHistoryCreate(BaseModel):
 class MindMapHistoryUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=120)
     root: MindMapNode | None = None
-    view_state: dict = Field(default_factory=dict)
+    view_state: dict | None = None
 
 
 class MindMapHistoryRead(BaseModel):
