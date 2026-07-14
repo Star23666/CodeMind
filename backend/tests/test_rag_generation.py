@@ -56,18 +56,21 @@ class FakeRetrievalService:
 class FakeLlmClient:
     def __init__(self):
         self.last_prompt = None
+        self.last_kwargs = None
         self.called = False
 
-    async def generate_answer(self, prompt: str) -> str:
+    async def generate_answer(self, prompt: str, **kwargs) -> str:
         self.called = True
         self.last_prompt = prompt
+        self.last_kwargs = kwargs
         return "进程负责资源分配，线程负责 CPU 调度。 [来源1]"
 
 
 class FakeStreamingLlmClient(FakeLlmClient):
-    async def stream_answer(self, prompt: str):
+    async def stream_answer(self, prompt: str, **kwargs):
         self.called = True
         self.last_prompt = prompt
+        self.last_kwargs = kwargs
         yield "进程负责资源分配，"
         yield "线程负责 CPU 调度。[来源1]"
 
@@ -123,13 +126,15 @@ class RagGenerationTest(unittest.TestCase):
         request = ChatRequest(knowledge_base_id=1, question="进程和线程有什么区别？")
 
         fake_db = object()
-        response = run_async(service.answer_question(request, user_id=7, db=fake_db))
+        with patch("app.services.rag_service.settings.llm_enable_thinking", False):
+            response = run_async(service.answer_question(request, user_id=7, db=fake_db))
 
         self.assertEqual(response.qa_record_id, 1001)
         self.assertEqual(response.knowledge_base_id, 1)
         self.assertEqual(response.rewritten_question, "操作系统中进程与线程的区别是什么？")
         self.assertEqual(response.sources[0].chunk_id, 10)
         self.assertTrue(llm.called)
+        self.assertFalse(llm.last_kwargs["enable_thinking"])
         self.assertIn("[来源1]", llm.last_prompt)
         self.assertEqual(history.saved["user_id"], 7)
         self.assertIs(history.saved["db"], fake_db)
@@ -171,13 +176,15 @@ class RagGenerationTest(unittest.TestCase):
                 async for event in service.stream_answer(request, user_id=7, db=object())
             ]
 
-        events = run_async(collect_events())
+        with patch("app.services.rag_service.settings.llm_enable_thinking", False):
+            events = run_async(collect_events())
 
         self.assertEqual(events[0]["event"], "meta")
         self.assertEqual(events[0]["data"]["sources"][0]["chunk_id"], 10)
         self.assertEqual([event["event"] for event in events[1:-1]], ["token", "token"])
         self.assertEqual(events[-1]["event"], "done")
         self.assertEqual(events[-1]["data"]["qa_record_id"], 1001)
+        self.assertFalse(llm.last_kwargs["enable_thinking"])
         self.assertEqual(history.saved["answer"], "进程负责资源分配，线程负责 CPU 调度。[来源1]")
 
     def test_source_context_has_global_budget_and_untrusted_data_guardrail(self):

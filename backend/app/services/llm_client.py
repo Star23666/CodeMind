@@ -185,6 +185,8 @@ class LlmClient:
                     "大模型输出达到长度上限，未能生成完整回答。",
                     status_code=502,
                 )
+        except LlmServiceError:
+            raise
         except AuthenticationError as exc:
             self._log_provider_error(exc)
             raise LlmServiceError("大模型服务认证失败，请检查服务端配置。", status_code=502) from exc
