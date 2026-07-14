@@ -88,7 +88,10 @@ class MindMapService:
                     temperature=0.1,
                     timeout_seconds=settings.mind_map_timeout_seconds,
                     total_timeout_seconds=settings.mind_map_total_timeout_seconds,
-                    max_tokens=max(settings.llm_max_tokens, 3200),
+                    max_tokens=max(
+                        settings.llm_max_tokens,
+                        settings.mind_map_merge_max_tokens,
+                    ),
                     max_retries=settings.mind_map_max_retries,
                     model=self._structure_model(),
                     enable_thinking=self._thinking_option(),
@@ -140,7 +143,10 @@ class MindMapService:
                     temperature=0.1,
                     timeout_seconds=settings.mind_map_timeout_seconds,
                     total_timeout_seconds=settings.mind_map_total_timeout_seconds,
-                    max_tokens=max(settings.llm_max_tokens, 3200),
+                    max_tokens=max(
+                        settings.llm_max_tokens,
+                        settings.mind_map_merge_max_tokens,
+                    ),
                     max_retries=settings.mind_map_max_retries,
                     model=self._structure_model(),
                     enable_thinking=self._thinking_option(),
@@ -303,24 +309,50 @@ class MindMapService:
         **kwargs,
     ) -> str:
         async with self._llm_semaphore:
-            async def request_answer() -> str:
+            async def request_answer(request_kwargs: dict) -> str:
                 stream_answer = getattr(self.client, "stream_answer", None)
                 if stream_answer is not None:
                     parts: list[str] = []
-                    async for delta in stream_answer(prompt, **kwargs):
+                    async for delta in stream_answer(prompt, **request_kwargs):
                         if delta:
                             parts.append(delta)
                     answer = "".join(parts).strip()
                     if not answer:
                         raise LlmServiceError("大模型服务未返回有效回答。", status_code=502)
                     return answer
-                return await self.client.generate_answer(prompt, **kwargs)
+                return await self.client.generate_answer(prompt, **request_kwargs)
+
+            async def request_with_length_retry() -> str:
+                try:
+                    return await request_answer(kwargs)
+                except LlmServiceError as exc:
+                    current_max_tokens = kwargs.get("max_tokens")
+                    is_structured_request = kwargs.get("response_format") is not None
+                    if (
+                        "长度上限" not in str(exc)
+                        or not is_structured_request
+                        or not isinstance(current_max_tokens, int)
+                        or current_max_tokens >= settings.mind_map_retry_max_tokens
+                    ):
+                        raise
+
+                    retry_kwargs = dict(kwargs)
+                    retry_kwargs["max_tokens"] = min(
+                        settings.mind_map_retry_max_tokens,
+                        current_max_tokens * 2,
+                    )
+                    logger.warning(
+                        "Mind map structured output reached %s tokens; retrying with %s tokens",
+                        current_max_tokens,
+                        retry_kwargs["max_tokens"],
+                    )
+                    return await request_answer(retry_kwargs)
 
             try:
                 if total_timeout_seconds is None:
-                    return await request_answer()
+                    return await request_with_length_retry()
                 async with asyncio.timeout(total_timeout_seconds):
-                    return await request_answer()
+                    return await request_with_length_retry()
             except TimeoutError as exc:
                 raise LlmServiceError(
                     f"大模型生成超过 {total_timeout_seconds:g} 秒，已停止本次请求。",
@@ -431,7 +463,8 @@ class MindMapService:
         return """提炼下面资料中的知识点，合并重复内容，不要按文本切片逐条罗列。
 仅返回 JSON 对象，topics 数组中的每项格式为：
 {"topics":[{"topic":"知识主题","summary":"定义、作用与关系","key_points":["记忆点"],"source_chunk_ids":[123],"points":["子知识点"]}]}
-每组最多 6 个主题；summary 要能帮助理解，不要只换一种方式重复标题；禁止补充资料以外的事实。
+每组最多 4 个主题；summary 限 30～80 个汉字；key_points 最多 2 条且每条不超过 30 个汉字；points 最多 3 条且每条不超过 24 个汉字。
+完整、紧凑的 JSON 优先于内容数量；不要重复主题，不要输出空字段说明，禁止补充资料以外的事实。
 
 资料：
 """ + "\n\n".join(blocks)
@@ -442,8 +475,9 @@ class MindMapService:
 最大深度 {request.max_depth}，总节点不超过 {request.max_nodes}；每个非根节点必须保留真实 source_chunk_ids。
 资料足够时使用“总览—章节—概念—细节”结构；每个非叶节点优先保留 2～5 个有意义的子节点。
 不要用“其他”“补充”等空泛节点，不要为了达到深度而虚构资料中不存在的内容。
-summary 用 40～140 个汉字说明定义、作用和关系；key_points 给出 1～3 条记忆点；learning_tip 给出复述、对比、举例或回看原文等具体动作。
+summary 限 30～90 个汉字，说明定义、作用和关系；key_points 给出 1～2 条记忆点且每条不超过 30 个汉字；learning_tip 不超过 30 个汉字。
 node_type 只能是 overview、chapter、concept、detail，根节点必须是 overview。
+必须优先保证 JSON 完整闭合；如果内容接近输出上限，应减少节点或缩短字段，绝不能重复节点或截断 JSON。
 仅返回 JSON 对象：
 {{"title":"根主题","summary":"知识范围与学习主线","node_type":"overview","key_points":["总览记忆点"],"learning_tip":"先浏览章节再逐层深入","source_chunk_ids":[],"children":[{{"title":"章节","summary":"本章讨论什么以及为什么重要","node_type":"chapter","key_points":["关键点"],"learning_tip":"先复述定义，再比较相邻概念","source_chunk_ids":[1],"children":[]}}]}}
 

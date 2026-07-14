@@ -84,6 +84,41 @@ class StreamingClient:
         self.chat = SimpleNamespace(completions=self.completions)
 
 
+class ThinkingLengthResponse:
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        yield SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content=None,
+                        reasoning_content="思考过程耗尽输出额度",
+                    ),
+                    finish_reason="length",
+                )
+            ]
+        )
+
+
+class ThinkingFallbackCompletions:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            return ThinkingLengthResponse()
+        return StreamingResponse(["降级后的完整回答"])
+
+
+class ThinkingFallbackClient:
+    def __init__(self) -> None:
+        self.completions = ThinkingFallbackCompletions()
+        self.chat = SimpleNamespace(completions=self.completions)
+
+
 class LlmClientTest(unittest.TestCase):
     def test_provider_uses_configured_timeout_retries_and_output_limit(self):
         client = LlmClient()
@@ -124,6 +159,26 @@ class LlmClientTest(unittest.TestCase):
                 run_async(client.generate_answer("test prompt"))
 
         self.assertIn("大模型服务", str(context.exception))
+
+    def test_qwen36_automatically_disables_thinking_when_setting_is_unset(self):
+        client = LlmClient()
+        recording_client = RecordingClient()
+
+        with (
+            patch("app.services.llm_client.settings.llm_api_key", "test-key"),
+            patch(
+                "app.services.llm_client.settings.llm_model",
+                "Qwen/Qwen3.6-35B-A3B",
+            ),
+            patch("openai.AsyncOpenAI", return_value=recording_client),
+        ):
+            answer = run_async(client.generate_answer("test prompt"))
+
+        self.assertEqual(answer, "基于资料的回答。[来源1]")
+        self.assertEqual(
+            recording_client.completions.kwargs["extra_body"],
+            {"enable_thinking": False},
+        )
 
     def test_stream_provider_yields_deltas_and_sets_stream_flag(self):
         client = LlmClient()
@@ -174,3 +229,39 @@ class LlmClientTest(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 502)
         self.assertIn("长度上限", str(context.exception))
+
+    def test_stream_retries_qwen36_without_thinking_when_reasoning_hits_limit(self):
+        client = LlmClient()
+        fallback_client = ThinkingFallbackClient()
+
+        async def collect():
+            return [
+                token
+                async for token in client.stream_answer(
+                    "test prompt",
+                    enable_thinking=True,
+                    thinking_budget=256,
+                )
+            ]
+
+        with (
+            patch("app.services.llm_client.settings.llm_api_key", "test-key"),
+            patch(
+                "app.services.llm_client.settings.llm_model",
+                "Qwen/Qwen3.6-35B-A3B",
+            ),
+            patch("openai.AsyncOpenAI", return_value=fallback_client),
+            patch("app.services.llm_client.logger.warning"),
+        ):
+            tokens = run_async(collect())
+
+        self.assertEqual(tokens, ["降级后的完整回答"])
+        self.assertEqual(len(fallback_client.completions.calls), 2)
+        self.assertEqual(
+            fallback_client.completions.calls[0]["extra_body"],
+            {"enable_thinking": True, "thinking_budget": 256},
+        )
+        self.assertEqual(
+            fallback_client.completions.calls[1]["extra_body"],
+            {"enable_thinking": False},
+        )

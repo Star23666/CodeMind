@@ -406,6 +406,16 @@ MYSQL_DATABASE=codemind
 LLM_API_KEY=replace_with_llm_key
 LLM_BASE_URL=https://provider.example.com/v1
 LLM_MODEL=replace_with_chat_model
+LLM_MAX_TOKENS=1200
+LLM_THINKING_BUDGET=512
+# Qwen3.5/Qwen3.6 留空时自动使用非思考模式
+# LLM_ENABLE_THINKING=false
+
+MIND_MAP_MODEL=
+MIND_MAP_ENABLE_THINKING=false
+MIND_MAP_BATCH_MAX_TOKENS=1600
+MIND_MAP_MERGE_MAX_TOKENS=4096
+MIND_MAP_RETRY_MAX_TOKENS=6400
 
 EMBEDDING_API_KEY=replace_with_embedding_key
 EMBEDDING_BASE_URL=https://provider.example.com/v1
