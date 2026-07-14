@@ -114,6 +114,20 @@ class FailingBatchLlmClient:
             raise
 
 
+class LengthThenSuccessStreamingLlmClient:
+    def __init__(self) -> None:
+        self.max_tokens = []
+
+    async def stream_answer(self, prompt: str, **kwargs):
+        self.max_tokens.append(kwargs.get("max_tokens"))
+        if len(self.max_tokens) == 1:
+            raise LlmServiceError(
+                "大模型输出达到长度上限，未能生成完整回答。",
+                status_code=502,
+            )
+        yield '{"title":"重试成功"}'
+
+
 class MindMapServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.engine = create_engine("sqlite+pysqlite:///:memory:")
@@ -289,6 +303,28 @@ class MindMapServiceTest(unittest.TestCase):
             )
 
         self.assertEqual(context.exception.status_code, 504)
+
+    def test_structured_generation_retries_once_with_larger_output_budget(self) -> None:
+        client = LengthThenSuccessStreamingLlmClient()
+        service = MindMapService(client=client)
+
+        with (
+            patch(
+                "app.services.mind_map_service.settings.mind_map_retry_max_tokens",
+                2400,
+            ),
+            patch("app.services.mind_map_service.logger.warning"),
+        ):
+            answer = run_async(
+                service._generate_answer(
+                    "structured prompt",
+                    max_tokens=1000,
+                    response_format={"type": "json_object"},
+                )
+            )
+
+        self.assertEqual(answer, '{"title":"重试成功"}')
+        self.assertEqual(client.max_tokens, [1000, 2000])
 
     def test_generation_cancels_remaining_batches_after_failure(self) -> None:
         for chunk_id in range(13, 26):

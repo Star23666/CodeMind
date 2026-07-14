@@ -130,11 +130,18 @@ MYSQL_PASSWORD=replace_with_database_password
 LLM_API_KEY=replace_with_llm_api_key
 LLM_BASE_URL=https://provider.example.com/v1
 LLM_MODEL=replace_with_chat_model
+LLM_MAX_TOKENS=1200
+LLM_THINKING_BUDGET=512
+# Qwen3.5/Qwen3.6 留空时会自动使用非思考模式
+# LLM_ENABLE_THINKING=false
 
 # 可选：为空时复用 LLM_MODEL
 MIND_MAP_MODEL=replace_with_structured_text_model
 MIND_MAP_TOTAL_TIMEOUT_SECONDS=150
 MIND_MAP_ENABLE_THINKING=false
+MIND_MAP_BATCH_MAX_TOKENS=1600
+MIND_MAP_MERGE_MAX_TOKENS=4096
+MIND_MAP_RETRY_MAX_TOKENS=6400
 
 EMBEDDING_API_KEY=replace_with_embedding_api_key
 EMBEDDING_BASE_URL=https://provider.example.com/v1
@@ -147,6 +154,7 @@ JWT_SECRET_KEY=replace_with_a_long_random_secret
 
 - 两份文件中的 `MYSQL_PASSWORD` 应保持一致。
 - `BASE_URL` 填 API 根地址，例如 `https://provider.example.com/v1`，不要填写具体的 `/chat/completions`、`/embeddings` 或 `/rerank` 路径。
+- 使用 `Qwen/Qwen3.6-35B-A3B` 时，普通 RAG 默认关闭思考以避免思考过程耗尽输出额度；显式开启思考后若尚未产生正文就达到长度上限，后端会自动关闭思考重试。
 - 不要提交 `.env`、`backend/.env`、API Key、JWT Secret 或数据库密码。
 
 ### 4. 构建并启动

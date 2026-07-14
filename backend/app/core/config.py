@@ -19,8 +19,9 @@ class Settings(BaseSettings):
     llm_model: str = ""
     llm_timeout_seconds: float = 45.0
     llm_max_retries: int = 1
-    llm_max_tokens: int = 600
+    llm_max_tokens: int = 1200
     llm_enable_thinking: bool | None = None
+    llm_thinking_budget: int = 512
 
     mind_map_model: str = ""
     mind_map_timeout_seconds: float = 120.0
@@ -28,6 +29,8 @@ class Settings(BaseSettings):
     mind_map_max_retries: int = 0
     mind_map_enable_thinking: bool = False
     mind_map_batch_max_tokens: int = 1600
+    mind_map_merge_max_tokens: int = 4096
+    mind_map_retry_max_tokens: int = 6400
 
     embedding_api_key: str = ""
     embedding_base_url: str = ""
