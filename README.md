@@ -15,14 +15,17 @@ CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented
 - 在线 LLM RAG 回答和来源编号校验
 - 文档库、原始文档预览、片段查看与来源跳转
 - 问答历史列表、详情查看和历史来源快照
-- 知识库思维导图异步生成、进度展示和历史管理
-- 思维导图节点追问、节点扩展和画布交互
+- 知识地图异步生成、分阶段进度、失败恢复和历史版本管理
+- 总览、章节、概念、细节四类节点，以及关键记忆点和学习建议
+- 节点来源核对、针对性追问、AI 分支扩展和相关资料检索
+- 节点搜索定位、路径导航、本机掌握进度和继续学习入口
+- 画布缩放、布局、撤销重做、分支折叠、全屏及 PNG/SVG/JSON/Markdown 导出
 - 文档、向量、原始文件和知识库级联清理
 - Docker Compose 本地及服务器部署
 
 后续计划：
 
-- 用户反馈持久化和管理员反馈页面
+- 用户反馈持久化、管理员反馈页面和相应自动化测试
 - 基于固定测试集的相似度阈值评估
 - RAG 问答与思维导图的真实模型端到端测试
 - 前端产物体积优化和项目成果物整理
@@ -50,7 +53,9 @@ flowchart LR
     Backend --> Uploads[("上传文件")]
     Backend --> Embedding["Embedding API"]
     Backend --> LLM["在线 LLM API"]
-    Backend --> MindMap["RAG 回答与思维导图生成"]
+    Backend --> RAG["RAG 问答"]
+    Backend --> MindMap["知识地图任务与历史"]
+    RAG --> LLM
     MindMap --> LLM
 ```
 
@@ -236,7 +241,8 @@ Get-Content -Raw database\migrations\20260711_preserve_qa_source_snapshots.sql |
 6. 查看回答中的来源片段和相关度。
 7. 点击“查看片段”或进入“文档库”核对原文。
 8. 在“问答历史”中回看回答；原文被删除后仍保留来源快照。
-9. 进入“知识地图”异步生成思维导图，并对节点追问或继续扩展。
+9. 进入“知识地图”异步生成学习结构，并查看节点类型、记忆点、学习建议和原文覆盖率。
+10. 搜索或定位节点，标记本机掌握状态，对节点追问、扩展分支或导出地图。
 
 如果检索不到资料，请先确认文档处理状态、Embedding 配置和相似度阈值。阈值与 Embedding 模型及切分粒度有关，更换模型后必须重新评估。
 
@@ -269,6 +275,7 @@ Authorization: Bearer <access_token>
 | `GET`          | `/api/qa-records/{id}`      | 问答历史详情     |
 | `POST`         | `/api/mind-maps/jobs`       | 创建导图生成任务 |
 | `GET`          | `/api/mind-maps/jobs/{id}`  | 查询任务进度     |
+| `POST`         | `/api/mind-maps/generate`   | 同步生成导图（调试接口） |
 | `POST`         | `/api/mind-maps/ask`        | 对导图节点追问   |
 | `POST`         | `/api/mind-maps/expand`     | 扩展导图节点     |
 | `GET/POST`     | `/api/mind-maps/histories`  | 查询或保存导图历史 |
@@ -286,7 +293,7 @@ python -m pip install pytest==8.3.5
 python -m pytest -q
 ```
 
-当前后端测试共 46 项，覆盖认证、权限、文档处理、删除清理、检索降级、Prompt、LLM 异常、RAG 编排、问答历史和思维导图服务。
+当前后端测试共 53 项，覆盖认证、权限、文档处理、删除清理、检索降级、Prompt、LLM 异常、RAG 编排、问答历史，以及知识地图生成、并发控制、任务、历史和接口权限。
 
 前端生产构建检查：
 
@@ -356,6 +363,12 @@ Docker Compose 使用三个命名卷：
 
 确认知识库中存在 `completed` 文档，并检查相似度阈值。不要直接把其他 Embedding 模型下的阈值用于当前模型。
 
+### 知识地图无法生成或一直等待
+
+知识地图必须配置在线 LLM。先查看 `docker compose logs -f backend`，确认任务是否进入 `failed`，再检查 LLM 模型、超时和网络。前端会在页面切换后恢复同一知识库的未完成任务，并逐步降低轮询频率。
+
+知识地图节点的 `node_type`、`key_points` 和 `learning_tip` 保存在历史记录的 JSON 中，不需要新增数据库列；旧历史缺少这些字段时会使用兼容默认值。
+
 ### 修改 schema.sql 后数据库没有变化
 
 初始化脚本不会作用于已有数据卷。请执行对应的 `database/migrations/*.sql`，不要为了应用结构变化直接删除生产数据卷。
@@ -371,10 +384,15 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 ## 项目文档
 
+- [文档导航与实现状态](docs/README.md)
+- [前端开发说明](frontend/README.md)
+- [后端开发说明](backend/README.md)
 - [需求分析](docs/需求分析.md)
 - [API 接口设计](docs/API接口设计.md)
 - [生成侧接口约定](docs/生成侧接口约定.md)
+- [GitHub Wiki 首页草稿](docs/wiki/Home.md)
 - [数据库结构](database/schema.sql)
+- [数据库与迁移说明](database/README.md)
 
 ## 安全说明
 
@@ -386,3 +404,7 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 ## License
 
 本项目用于课程实训。若后续需要公开发布或允许外部复用，请由项目组补充正式开源许可证。
+
+---
+
+文档状态：已按 `main` 提交 `839890b`（合并 PR #11）同步，更新时间为 2026-07-13。
