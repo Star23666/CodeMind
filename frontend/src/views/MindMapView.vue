@@ -44,7 +44,7 @@
               clearable
               :disabled="loadingDocuments || generating"
             >
-              <el-option label="整个知识库" :value="null" />
+              <el-option label="整个知识库" value="" />
               <el-option
                 v-for="document in completedDocuments"
                 :key="document.id"
@@ -1723,6 +1723,7 @@ kbd {
 
 @media (max-width: 720px) {
   .mind-map-view { padding-top: 6px; }
+  .mind-map-view.zen-mode { padding-top: 0; }
   .map-page { margin-top: 16px; }
   .control-grid,
   .learning-strip { grid-template-columns: 1fr; }

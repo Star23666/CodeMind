@@ -145,6 +145,7 @@ const { isDark } = useTheme();
 const GRAPH_PADDING = 66;
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 2.4;
+const VIEW_STATE_VERSION = 2;
 const canvasHost = ref(null);
 const layoutLocked = ref(false);
 const selectedNodeId = ref("");
@@ -497,7 +498,7 @@ async function renderGraph() {
     presentedConstructionRevision = props.constructionRevision;
     await revealConstruction(data, version);
   }
-  await restoreViewState(props.viewState || {});
+  const recoveredViewState = await restoreViewState(props.viewState || {});
   rememberLayout(false);
   const preferredNodeId = props.selectedNodeId
     || props.viewState?.selected_node_id
@@ -507,6 +508,7 @@ async function renderGraph() {
   if (props.searchTerm) await updateSearch(props.searchTerm);
   isGraphReady = true;
   if (resizePending) scheduleCanvasResize();
+  if (recoveredViewState) notifyViewChange();
 }
 
 function waitForReveal(delay) {
@@ -562,6 +564,23 @@ function fullVisibility() {
   return visibility;
 }
 
+function currentViewportCenter() {
+  if (!graph) return [0, 0];
+  const [width, height] = graph.getSize();
+  return graph.getCanvasByViewport([width / 2, height / 2]).slice(0, 2);
+}
+
+async function centerCanvasPoint(point, animation = false) {
+  if (!graph || !Array.isArray(point) || point.length < 2) return;
+  const [canvasWidth, canvasHeight] = graph.getSize();
+  const viewportPosition = graph.getViewportByCanvas(point);
+  const offset = [
+    canvasWidth / 2 - viewportPosition[0],
+    canvasHeight / 2 - viewportPosition[1],
+  ];
+  if (offset.every(Number.isFinite)) await graph.translateBy(offset, animation);
+}
+
 async function fitNodeIds(nodeIds, animation = false) {
   if (!graph) return;
   const targetGraph = graph;
@@ -597,10 +616,14 @@ async function fitNodeIds(nodeIds, animation = false) {
     MAX_ZOOM,
     Math.max(MIN_ZOOM, Math.min(availableWidth / contentWidth, availableHeight / contentHeight)),
   );
+  const contentCenter = [
+    (bounds.minX + bounds.maxX) / 2,
+    (bounds.minY + bounds.maxY) / 2,
+  ];
 
   await targetGraph.zoomTo(zoom, animation);
   if (graph !== targetGraph) return;
-  await targetGraph.focusElement(validNodeIds, animation);
+  await centerCanvasPoint(contentCenter, animation);
 }
 
 async function fitCurrentView(animation = false) {
@@ -623,8 +646,8 @@ async function applyFocusMode(nodeId, options = {}) {
       await graph.draw();
     }
     if (Number.isFinite(focusSnapshot?.zoom)) await graph.zoomTo(focusSnapshot.zoom, false);
-    if (Array.isArray(focusSnapshot?.viewportPosition)) {
-      await graph.translateTo(focusSnapshot.viewportPosition, false);
+    if (Array.isArray(focusSnapshot?.viewportCenter)) {
+      await centerCanvasPoint(focusSnapshot.viewportCenter, false);
     }
     focusSnapshot = null;
     updateZoomLevel();
@@ -637,7 +660,7 @@ async function applyFocusMode(nodeId, options = {}) {
     focusSnapshot = {
       positions: currentLayout(),
       zoom: graph.getZoom() || 1,
-      viewportPosition: graph.getPosition() || [0, 0],
+      viewportCenter: currentViewportCenter(),
     };
   } else if (focusSnapshot.positions?.length) {
     await graph.setElementVisibility(fullVisibility(), false);
@@ -806,9 +829,10 @@ async function applyPresentationOptions() {
 }
 
 async function restoreViewState(state) {
-  if (!graph) return;
+  if (!graph) return false;
   isRestoring = true;
   collapsedNodeIds.clear();
+  let recovered = false;
   try {
     for (const nodeId of state.collapsed_node_ids || []) {
       if (!nodeLookup.get(nodeId)?.children?.length) continue;
@@ -830,14 +854,50 @@ async function restoreViewState(state) {
       await graph.zoomTo(Math.min(2.4, Math.max(0.25, state.zoom)), false);
     }
     if (Array.isArray(state.viewport_position) && state.viewport_position.length >= 2) {
-      await graph.translateTo(state.viewport_position, false);
+      if (Number(state.view_state_version || 0) >= VIEW_STATE_VERSION) {
+        await centerCanvasPoint(state.viewport_position, false);
+      } else {
+        await graph.translateTo(state.viewport_position, false);
+      }
     } else if (!positions.length) {
+      await fitCurrentView();
+    }
+
+    if (!hasNodeInViewport()) {
+      await fitCurrentView();
+      recovered = true;
+    }
+    if (!hasNodeInViewport()) {
+      graph.setLayout(layoutOptions());
+      await graph.layout();
+      await graph.draw();
       await fitCurrentView();
     }
     updateZoomLevel();
   } finally {
     isRestoring = false;
   }
+  return recovered;
+}
+
+function hasNodeInViewport() {
+  if (!graph) return false;
+  const [canvasWidth, canvasHeight] = graph.getSize();
+  const zoom = graph.getZoom() || 1;
+  return graph.getNodeData().some((node) => {
+    if (graph.getElementVisibility(node.id) === "hidden") return false;
+    const position = graph.getElementPosition(node.id);
+    if (!Number.isFinite(position?.[0]) || !Number.isFinite(position?.[1])) return false;
+    const viewportPosition = graph.getViewportByCanvas(position);
+    if (!Number.isFinite(viewportPosition?.[0]) || !Number.isFinite(viewportPosition?.[1])) return false;
+    const [width, height] = nodeSize(node);
+    const halfWidth = width * zoom / 2;
+    const halfHeight = height * zoom / 2;
+    return viewportPosition[0] + halfWidth >= 0
+      && viewportPosition[0] - halfWidth <= canvasWidth
+      && viewportPosition[1] + halfHeight >= 0
+      && viewportPosition[1] - halfHeight <= canvasHeight;
+  });
 }
 
 function exportPng() {
@@ -846,10 +906,11 @@ function exportPng() {
 
 function getViewState() {
   return {
+    view_state_version: VIEW_STATE_VERSION,
     positions: focusSnapshot?.positions || currentLayout(),
     collapsed_node_ids: [...collapsedNodeIds],
     zoom: focusSnapshot?.zoom || graph?.getZoom() || 1,
-    viewport_position: focusSnapshot?.viewportPosition || graph?.getPosition() || [0, 0],
+    viewport_position: focusSnapshot?.viewportCenter || currentViewportCenter(),
     selected_node_id: selectedNodeId.value,
     focus_root_id: props.focusRootId || "",
     layout_density: props.density,
@@ -1243,7 +1304,15 @@ onBeforeUnmount(() => {
   .canvas-title { display: none; }
   .canvas-legend { display: none; }
   .canvas-navigation { right: 10px; bottom: 10px; max-width: calc(100% - 20px); }
+  .view-mode-tools { order: -1; }
   .view-mode-tools button:not(:last-child) { display: none; }
+}
+
+@media (max-width: 720px) {
+  .map-shell.immersive {
+    height: calc(100vh - 106px);
+    min-height: calc(100vh - 106px);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
