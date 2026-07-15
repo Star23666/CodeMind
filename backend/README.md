@@ -32,6 +32,9 @@ LLM_API_KEY=replace_with_llm_key
 LLM_BASE_URL=https://provider.example.com/v1
 LLM_MODEL=replace_with_chat_model
 
+# 独立用于加密用户保存的模型 API Key，至少 32 个随机字符
+LLM_CONFIG_ENCRYPTION_KEY=replace_with_a_separate_random_secret
+
 # 可选：知识地图单独使用更快的纯文本指令模型
 MIND_MAP_MODEL=replace_with_structured_text_model
 MIND_MAP_TOTAL_TIMEOUT_SECONDS=150
@@ -82,6 +85,11 @@ RAG 问答提供两个接口：`POST /api/chat` 返回完整 JSON；`POST /api/c
 `text/event-stream`。流式接口依次发送 `meta`、多个 `token` 和 `done` 事件，只有生成完成并发送
 `done` 后才保存问答历史；处理异常时发送 `error` 事件。客户端断开或生成失败时，不应把未完成回答当作已保存记录。
 
+用户可在“我的 → AI 模型设置”中最多保存 5 套 OpenAI 兼容模型预设。API Key
+使用 `LLM_CONFIG_ENCRYPTION_KEY` 加密后写入数据库，接口只返回末四位；预设必须测试成功后才能启用。
+测试由后端限制为单用户单并发、至少间隔 30 秒。未启用个人预设时，
+系统默认项会展示并使用 `.env` 中的 `LLM_MODEL`。
+
 ## 知识地图说明
 
 - `POST /api/mind-maps/jobs` 创建后台任务，`GET /api/mind-maps/jobs/{job_id}` 查询进度。
@@ -100,7 +108,7 @@ cd backend
 python -m pytest -q
 ```
 
-当前基线为 `61 passed`。测试使用 SQLite 和替身服务覆盖主要业务；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、Nginx SSE 代理和知识地图任务恢复、多批次任务链路。
+当前基线为 `72 passed`。测试使用 SQLite 和替身服务覆盖主要业务；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、Nginx SSE 代理和知识地图任务恢复、多批次任务链路。
 
 ## Docker 运行
 

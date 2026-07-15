@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.schemas.contracts import ChatRequest, ChatResponse
 from app.services.llm_client import LlmClient, LlmServiceError, llm_client
+from app.services.llm_config_service import llm_config_service
 from app.services.prompt_builder import build_rag_prompt, sanitize_answer_citations
 from app.services.qa_history_service import QaHistoryService, qa_history_service
 from app.services.retrieval_service import RetrievalService, retrieval_service
@@ -17,10 +18,12 @@ class RagService:
         retrieval_service: RetrievalService = retrieval_service,
         llm_client: LlmClient = llm_client,
         history_service: QaHistoryService = qa_history_service,
+        config_service=llm_config_service,
     ) -> None:
         self.retrieval_service = retrieval_service
         self.llm_client = llm_client
         self.history_service = history_service
+        self.config_service = config_service
 
     async def answer_question(
         self,
@@ -35,9 +38,11 @@ class RagService:
         )
 
         if prompt:
+            runtime_config = self.config_service.resolve_runtime(db, user_id=user_id)
             answer = await self.llm_client.generate_answer(
                 prompt,
                 enable_thinking=settings.llm_enable_thinking,
+                runtime_config=runtime_config,
             )
             answer = sanitize_answer_citations(answer, source_count=len(sources))
         else:
@@ -87,10 +92,12 @@ class RagService:
         }
 
         if prompt:
+            runtime_config = self.config_service.resolve_runtime(db, user_id=user_id)
             answer_parts: list[str] = []
             async for token in self.llm_client.stream_answer(
                 prompt,
                 enable_thinking=settings.llm_enable_thinking,
+                runtime_config=runtime_config,
             ):
                 answer_parts.append(token)
                 yield {"event": "token", "data": {"delta": token}}

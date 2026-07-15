@@ -15,6 +15,7 @@ from app.services.prompt_builder import (
     build_source_block,
     sanitize_answer_citations,
 )
+from app.services.llm_client import LlmRuntimeConfig
 from app.services.rag_service import RagService
 from app.services.retrieval_service import RetrievalService
 from app.services.retrieval_service import (
@@ -100,6 +101,20 @@ class FakeHistoryService:
         return 1001
 
 
+class FakeLlmConfigService:
+    def __init__(self):
+        self.runtime_config = LlmRuntimeConfig(
+            api_key="test-api-key",
+            base_url="https://example.com/v1",
+            model="test-model",
+            source="personal",
+            name="测试配置",
+        )
+
+    def resolve_runtime(self, db, *, user_id: int) -> LlmRuntimeConfig:
+        return self.runtime_config
+
+
 class RagGenerationTest(unittest.TestCase):
     def test_build_prompt_numbers_sources_and_includes_guardrails(self):
         prompt = build_rag_prompt(
@@ -122,6 +137,7 @@ class RagGenerationTest(unittest.TestCase):
             retrieval_service=retrieval,
             llm_client=llm,
             history_service=history,
+            config_service=FakeLlmConfigService(),
         )
         request = ChatRequest(knowledge_base_id=1, question="进程和线程有什么区别？")
 
@@ -148,6 +164,7 @@ class RagGenerationTest(unittest.TestCase):
             retrieval_service=retrieval,
             llm_client=llm,
             history_service=history,
+            config_service=FakeLlmConfigService(),
         )
         request = ChatRequest(knowledge_base_id=1, question="量子计算是什么？")
 
@@ -167,6 +184,7 @@ class RagGenerationTest(unittest.TestCase):
             retrieval_service=retrieval,
             llm_client=llm,
             history_service=history,
+            config_service=FakeLlmConfigService(),
         )
         request = ChatRequest(knowledge_base_id=1, question="进程和线程有什么区别？")
 

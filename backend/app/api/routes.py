@@ -19,6 +19,11 @@ from app.schemas.contracts import (
     KnowledgeBaseCreate,
     KnowledgeBaseRead,
     KnowledgeBaseUpdate,
+    LlmConfigCreate,
+    LlmConfigOverview,
+    LlmConfigRead,
+    LlmConfigTestResult,
+    LlmConfigUpdate,
     LoginRequest,
     MindMapGenerateRequest,
     MindMapExpandRequest,
@@ -46,6 +51,11 @@ from app.services.auth_service import (
 from app.services.document_service import document_service
 from app.services.knowledge_base_service import knowledge_base_service
 from app.services.llm_client import LlmServiceError
+from app.services.llm_config_service import (
+    LlmConfigError,
+    LlmConfigRateLimitError,
+    llm_config_service,
+)
 from app.services.mind_map_service import MindMapGenerationError, mind_map_service
 from app.services.mind_map_job_service import mind_map_job_service
 from app.services.mind_map_history_service import mind_map_history_service
@@ -96,6 +106,119 @@ async def logout(current_user: UserRead = Depends(get_current_user)) -> ActionRe
 @router.get("/auth/me", response_model=UserRead)
 async def current_user(current_user: UserRead = Depends(get_current_user)) -> UserRead:
     return current_user
+
+
+@router.get("/me/llm-configs", response_model=LlmConfigOverview)
+async def list_my_llm_configs(
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LlmConfigOverview:
+    return llm_config_service.list_overview(db, user_id=current_user.id)
+
+
+@router.post(
+    "/me/llm-configs",
+    response_model=LlmConfigRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_my_llm_config(
+    payload: LlmConfigCreate,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LlmConfigRead:
+    try:
+        return llm_config_service.create(db, user_id=current_user.id, payload=payload)
+    except LlmConfigError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="模型配置名称已存在。") from exc
+
+
+@router.put("/me/llm-configs/{config_id}", response_model=LlmConfigRead)
+async def update_my_llm_config(
+    config_id: int,
+    payload: LlmConfigUpdate,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LlmConfigRead:
+    try:
+        return llm_config_service.update(
+            db,
+            user_id=current_user.id,
+            config_id=config_id,
+            payload=payload,
+        )
+    except LlmConfigError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="模型配置名称已存在。") from exc
+
+
+@router.delete("/me/llm-configs/{config_id}", response_model=ActionResponse)
+async def delete_my_llm_config(
+    config_id: int,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ActionResponse:
+    try:
+        llm_config_service.delete(
+            db,
+            user_id=current_user.id,
+            config_id=config_id,
+        )
+    except LlmConfigError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return ActionResponse(status="ok", message="模型配置已删除。")
+
+
+@router.post("/me/llm-configs/{config_id}/test", response_model=LlmConfigTestResult)
+async def test_my_llm_config(
+    config_id: int,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LlmConfigTestResult:
+    try:
+        return await llm_config_service.test_config(
+            db,
+            user_id=current_user.id,
+            config_id=config_id,
+        )
+    except LlmConfigRateLimitError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+    except LlmConfigError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except LlmServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.post("/me/llm-configs/{config_id}/activate", response_model=LlmConfigOverview)
+async def activate_my_llm_config(
+    config_id: int,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LlmConfigOverview:
+    try:
+        return llm_config_service.activate(
+            db,
+            user_id=current_user.id,
+            config_id=config_id,
+        )
+    except LlmConfigError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.post("/me/llm-configs/use-system-default", response_model=LlmConfigOverview)
+async def use_system_default_llm_config(
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LlmConfigOverview:
+    return llm_config_service.use_system_default(db, user_id=current_user.id)
 
 
 @router.get("/knowledge-bases", response_model=list[KnowledgeBaseRead])

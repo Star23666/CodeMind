@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     llm_enable_thinking: bool | None = None
     llm_thinking_budget: int = 512
 
+    # Per-user LLM presets. The encryption key must be configured separately
+    # from JWT_SECRET_KEY so credentials can be rotated independently.
+    llm_config_encryption_key: str = ""
+    llm_config_max_presets: int = 5
+    llm_config_test_cooldown_seconds: int = 30
+    llm_config_test_timeout_seconds: float = 30.0
+
     mind_map_model: str = ""
     mind_map_timeout_seconds: float = 120.0
     mind_map_total_timeout_seconds: float = 150.0

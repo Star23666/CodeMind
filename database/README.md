@@ -7,6 +7,8 @@ CodeMind 使用 MySQL 保存结构化业务数据，使用 Chroma 保存文档�
 | 表 | 用途 |
 | --- | --- |
 | `users` | 用户、密码哈希、角色和状态 |
+| `user_llm_configs` | 用户模型预设、加密后的 API Key 与连接测试状态 |
+| `user_llm_preferences` | 用户当前启用的个人模型预设；为空时使用系统默认模型 |
 | `knowledge_bases` | 私人知识库和用户归属 |
 | `documents` | 文件信息、处理状态、错误和片段数量 |
 | `document_chunks` | 文本片段、位置、页码和 `vector_id` |
@@ -25,6 +27,7 @@ CodeMind 使用 MySQL 保存结构化业务数据，使用 Chroma 保存文档�
 | `migrations/20260711_add_document_error_message.sql` | 增加文档处理失败原因 |
 | `migrations/20260711_preserve_qa_source_snapshots.sql` | 删除原文后保留问答来源快照 |
 | `migrations/20260712_create_mind_map_tables.sql` | 创建地图历史和后台任务表 |
+| `migrations/20260715_create_user_llm_configs.sql` | 创建用户模型预设和当前模型偏好表 |
 
 生产数据库执行迁移前必须备份。迁移脚本按说明执行一次，不要通过删除 Docker 数据卷来替代迁移。
 

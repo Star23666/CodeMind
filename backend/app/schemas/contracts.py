@@ -1,6 +1,7 @@
 from datetime import datetime
 from enum import Enum
 import re
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -18,6 +19,34 @@ class UserStatus(str, Enum):
 class Visibility(str, Enum):
     PRIVATE = "private"
     PUBLIC = "public"
+
+
+class LlmProvider(str, Enum):
+    SILICONFLOW = "siliconflow"
+    OPENAI = "openai"
+    OPENAI_COMPATIBLE = "openai_compatible"
+
+
+class LlmTestStatus(str, Enum):
+    UNTESTED = "untested"
+    SUCCESS = "success"
+    FAILED = "failed"
+
+
+def normalize_llm_base_url(value: str) -> str:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().rstrip("/")
+    parsed = urlsplit(normalized)
+    if parsed.scheme.lower() != "https" or not parsed.hostname:
+        raise ValueError("API Base URL 必须是有效的 HTTPS 地址")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("API Base URL 不能包含账号、密码、查询参数或锚点")
+    lowered_path = parsed.path.rstrip("/").lower()
+    blocked_suffixes = ("/chat/completions", "/embeddings", "/responses")
+    if lowered_path.endswith(blocked_suffixes):
+        raise ValueError("API Base URL 请填写接口根地址，例如 https://provider.example.com/v1")
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc, parsed.path.rstrip("/"), "", ""))
 
 
 class ParseStatus(str, Enum):
@@ -77,6 +106,80 @@ class UserRead(BaseModel):
     email: str
     role: UserRole = UserRole.USER
     status: UserStatus = UserStatus.ACTIVE
+
+
+class LlmConfigCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    provider: LlmProvider = LlmProvider.OPENAI_COMPATIBLE
+    base_url: str = Field(..., min_length=8, max_length=500)
+    model: str = Field(..., min_length=1, max_length=200)
+    api_key: str = Field(..., min_length=8, max_length=512)
+
+    @field_validator("name", "model", "api_key", mode="before")
+    @classmethod
+    def strip_required_values(cls, value: str) -> str:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("base_url", mode="before")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        return normalize_llm_base_url(value)
+
+
+class LlmConfigUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    provider: LlmProvider | None = None
+    base_url: str | None = Field(default=None, min_length=8, max_length=500)
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+    api_key: str | None = Field(default=None, min_length=8, max_length=512)
+
+    @field_validator("name", "model", "api_key", mode="before")
+    @classmethod
+    def strip_optional_values(cls, value: str | None) -> str | None:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("base_url", mode="before")
+    @classmethod
+    def validate_base_url(cls, value: str | None) -> str | None:
+        return normalize_llm_base_url(value) if value is not None else None
+
+
+class LlmConfigRead(BaseModel):
+    id: int
+    name: str
+    provider: LlmProvider
+    base_url: str
+    model: str
+    masked_api_key: str
+    test_status: LlmTestStatus = LlmTestStatus.UNTESTED
+    test_message: str | None = None
+    last_tested_at: datetime | None = None
+    is_active: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class LlmSystemDefaultRead(BaseModel):
+    configured: bool
+    model: str
+
+
+class LlmConfigOverview(BaseModel):
+    configs: list[LlmConfigRead] = Field(default_factory=list)
+    active_config_id: int | None = None
+    effective_source: str
+    effective_name: str
+    effective_model: str
+    system_default: LlmSystemDefaultRead
+    max_presets: int = 5
+    test_cooldown_seconds: int = 30
+
+
+class LlmConfigTestResult(BaseModel):
+    success: bool
+    message: str
+    model: str
+    latency_ms: int
 
 
 class KnowledgeBaseCreate(BaseModel):
