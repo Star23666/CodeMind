@@ -142,6 +142,9 @@ const emit = defineEmits([
   "toggle-zen",
 ]);
 const { isDark } = useTheme();
+const GRAPH_PADDING = 66;
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 2.4;
 const canvasHost = ref(null);
 const layoutLocked = ref(false);
 const selectedNodeId = ref("");
@@ -292,11 +295,12 @@ function nodeLabel(datum) {
   return title + "\n" + detail;
 }
 
-function layoutOptions() {
+function layoutOptions(nodeFilter) {
   const compact = props.density === "compact";
   return {
     type: "mindmap",
     direction: "H",
+    ...(nodeFilter ? { nodeFilter } : {}),
     getWidth: (datum) => nodeSize(datum)[0],
     getHeight: (datum) => nodeSize(datum)[1],
     getHGap: () => compact ? 72 : 104,
@@ -359,9 +363,9 @@ async function renderGraph() {
   const nextGraph = new Graph({
     container: canvasHost.value,
     data,
-    padding: 66,
+    padding: GRAPH_PADDING,
     animation: shouldReveal ? { duration: 220, easing: "ease-out" } : false,
-    zoomRange: [0.25, 2.4],
+    zoomRange: [MIN_ZOOM, MAX_ZOOM],
     layout: layoutOptions(),
     node: {
       type: "rect",
@@ -550,11 +554,59 @@ function fullVisibility() {
   return visibility;
 }
 
+async function fitNodeIds(nodeIds, animation = false) {
+  if (!graph) return;
+  const dataById = new Map(graph.getNodeData().map((node) => [node.id, node]));
+  const bounds = {
+    minX: Number.POSITIVE_INFINITY,
+    minY: Number.POSITIVE_INFINITY,
+    maxX: Number.NEGATIVE_INFINITY,
+    maxY: Number.NEGATIVE_INFINITY,
+  };
+  const validNodeIds = [];
+
+  nodeIds.forEach((nodeId) => {
+    const datum = dataById.get(nodeId);
+    const position = graph.getElementPosition(nodeId);
+    if (!datum || !Number.isFinite(position?.[0]) || !Number.isFinite(position?.[1])) return;
+    const [width, height] = nodeSize(datum);
+    bounds.minX = Math.min(bounds.minX, position[0] - width / 2);
+    bounds.minY = Math.min(bounds.minY, position[1] - height / 2);
+    bounds.maxX = Math.max(bounds.maxX, position[0] + width / 2);
+    bounds.maxY = Math.max(bounds.maxY, position[1] + height / 2);
+    validNodeIds.push(nodeId);
+  });
+
+  if (!validNodeIds.length) return;
+  const [canvasWidth, canvasHeight] = graph.getSize();
+  const contentWidth = Math.max(bounds.maxX - bounds.minX, 1);
+  const contentHeight = Math.max(bounds.maxY - bounds.minY, 1);
+  const availableWidth = Math.max(canvasWidth - GRAPH_PADDING * 2, 1);
+  const availableHeight = Math.max(canvasHeight - GRAPH_PADDING * 2, 1);
+  const zoom = Math.min(
+    MAX_ZOOM,
+    Math.max(MIN_ZOOM, Math.min(availableWidth / contentWidth, availableHeight / contentHeight)),
+  );
+
+  await graph.zoomTo(zoom, animation);
+  await graph.focusElement(validNodeIds, animation);
+}
+
+async function fitCurrentView(animation = false) {
+  if (!graph) return;
+  const focusedIds = props.focusRootId && nodeLookup.has(props.focusRootId)
+    ? [...descendantIds(props.focusRootId)]
+    : [];
+  if (focusedIds.length) await fitNodeIds(focusedIds, animation);
+  else await graph.fitView(undefined, animation);
+}
+
 async function applyFocusMode(nodeId, options = {}) {
   if (!graph) return;
   const validNodeId = nodeLookup.has(nodeId) ? nodeId : "";
 
   if (!validNodeId) {
+    graph.setLayout(layoutOptions());
     await graph.setElementVisibility(fullVisibility(), false);
     if (focusSnapshot?.positions?.length) {
       graph.updateNodeData(focusSnapshot.positions);
@@ -590,9 +642,12 @@ async function applyFocusMode(nodeId, options = {}) {
     visibility[id] = visibleNodes.has(edge.source) && visibleNodes.has(edge.target) ? "visible" : "hidden";
   });
   await graph.setElementVisibility(visibility, false);
-  graph.setLayout(layoutOptions());
+  graph.setLayout(layoutOptions((node) => visibleNodes.has(node.id)));
   await graph.layout();
-  await graph.fitView(undefined, { duration: options.initial ? 0 : 240, easing: "ease-out" });
+  await fitNodeIds(
+    [...visibleNodes],
+    options.initial ? false : { duration: 240, easing: "ease-out" },
+  );
   updateZoomLevel();
   await selectNodeById(validNodeId, false);
   if (!options.initial) notifyViewChange();
@@ -822,7 +877,7 @@ async function zoom(ratio) {
 
 async function fitView() {
   if (!graph) return;
-  await graph.fitView();
+  await fitCurrentView();
   updateZoomLevel();
   notifyViewChange();
 }
@@ -837,8 +892,12 @@ async function centerRoot() {
 async function reflow() {
   if (!graph) return;
   collapsedNodeIds.clear();
+  const focusedIds = props.focusRootId && nodeLookup.has(props.focusRootId)
+    ? descendantIds(props.focusRootId)
+    : null;
+  graph.setLayout(layoutOptions(focusedIds ? (node) => focusedIds.has(node.id) : undefined));
   await graph.layout();
-  await graph.fitView();
+  await fitCurrentView();
   undoStack.value = [];
   redoStack.value = [];
   rememberLayout(false);
@@ -870,12 +929,23 @@ onMounted(() => {
   renderGraph();
 });
 
+async function resizeAndFitCurrentView() {
+  await nextTick();
+  await new Promise((resolve) => window.requestAnimationFrame(resolve));
+  if (!graph || !canvasHost.value) return;
+  const { width, height } = canvasHost.value.getBoundingClientRect();
+  graph.resize(Math.max(width, 320), Math.max(height, 520));
+  await fitCurrentView();
+  updateZoomLevel();
+}
+
 watch(() => props.root, () => renderGraph());
 watch(() => props.searchTerm, updateSearch);
 watch(() => props.selectedNodeId, (nodeId) => {
   if (nodeId && nodeId !== selectedNodeId.value) selectNodeById(nodeId);
 });
 watch(isDark, () => renderGraph());
+watch(() => props.immersive, resizeAndFitCurrentView);
 watch(() => props.focusRootId, (nodeId) => applyFocusMode(nodeId));
 watch(() => props.masteredNodeIds, updateLearningSignals, { deep: true });
 watch([() => props.density, () => props.displayMode], applyPresentationOptions);
@@ -921,7 +991,7 @@ onBeforeUnmount(() => {
   box-shadow: none;
 }
 
-:global(:root[data-theme="dark"]) .map-shell {
+:global(:root[data-theme="dark"] .map-shell) {
   --canvas-bg: #101a2a;
   --canvas-grid: rgba(171, 190, 219, 0.105);
   --canvas-ink: #edf3ff;
