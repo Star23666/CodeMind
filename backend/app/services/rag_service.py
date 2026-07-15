@@ -1,3 +1,6 @@
+import asyncio
+import logging
+import time
 from collections.abc import AsyncIterator
 
 from sqlalchemy.orm import Session
@@ -8,6 +11,9 @@ from app.services.llm_client import LlmClient, LlmServiceError, llm_client
 from app.services.prompt_builder import build_rag_prompt, sanitize_answer_citations
 from app.services.qa_history_service import QaHistoryService, qa_history_service
 from app.services.retrieval_service import RetrievalService, retrieval_service
+
+
+logger = logging.getLogger(__name__)
 
 
 class RagService:
@@ -35,11 +41,30 @@ class RagService:
         )
 
         if prompt:
-            answer = await self.llm_client.generate_answer(
-                prompt,
-                enable_thinking=settings.llm_enable_thinking,
-            )
+            generation_started = time.perf_counter()
+            try:
+                async with asyncio.timeout(settings.chat_total_timeout_seconds):
+                    answer = await self.llm_client.generate_answer(
+                        prompt,
+                        enable_thinking=settings.llm_enable_thinking,
+                    )
+            except TimeoutError as exc:
+                logger.warning(
+                    "RAG non-stream generation exceeded hard timeout "
+                    "(model=%s, timeout_seconds=%s)",
+                    settings.llm_model,
+                    settings.chat_total_timeout_seconds,
+                )
+                raise LlmServiceError(
+                    f"大模型生成超过 {settings.chat_total_timeout_seconds:g} 秒，已停止本次请求。",
+                    status_code=504,
+                ) from exc
             answer = sanitize_answer_citations(answer, source_count=len(sources))
+            logger.info(
+                "RAG generation completed (mode=non_stream, model=%s, generation_ms=%.1f)",
+                settings.llm_model,
+                (time.perf_counter() - generation_started) * 1000,
+            )
         else:
             answer = retrieval_result.empty_message or (
                 "知识库中未找到足够依据，请先上传相关资料或换一个更具体的问题。"
@@ -88,10 +113,14 @@ class RagService:
 
         if prompt:
             answer_parts: list[str] = []
+            generation_started = time.perf_counter()
+            first_token_ms: float | None = None
             async for token in self.llm_client.stream_answer(
                 prompt,
                 enable_thinking=settings.llm_enable_thinking,
             ):
+                if first_token_ms is None:
+                    first_token_ms = (time.perf_counter() - generation_started) * 1000
                 answer_parts.append(token)
                 yield {"event": "token", "data": {"delta": token}}
 
@@ -99,6 +128,13 @@ class RagService:
             if not raw_answer:
                 raise LlmServiceError("大模型服务未返回有效回答。", status_code=502)
             answer = sanitize_answer_citations(raw_answer, source_count=len(sources))
+            logger.info(
+                "RAG generation completed "
+                "(mode=stream, model=%s, first_token_ms=%.1f, generation_ms=%.1f)",
+                settings.llm_model,
+                first_token_ms or 0.0,
+                (time.perf_counter() - generation_started) * 1000,
+            )
         else:
             answer = retrieval_result.empty_message or (
                 "知识库中未找到足够依据，请先上传相关资料或换一个更具体的问题。"
@@ -130,6 +166,7 @@ class RagService:
         *,
         user_id: int,
     ):
+        retrieval_started = time.perf_counter()
         retrieval_result = await self.retrieval_service.retrieve_for_chat(request, user_id=user_id)
         sources = retrieval_result.sources
         rewritten_question = retrieval_result.rewritten_question
@@ -141,6 +178,14 @@ class RagService:
             )
             if sources
             else None
+        )
+        logger.info(
+            "RAG retrieval completed "
+            "(model=%s, knowledge_base_id=%s, source_count=%s, retrieval_ms=%.1f)",
+            settings.embedding_model,
+            request.knowledge_base_id,
+            len(sources),
+            (time.perf_counter() - retrieval_started) * 1000,
         )
         return retrieval_result, sources, rewritten_question, prompt
 

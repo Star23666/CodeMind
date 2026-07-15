@@ -1,5 +1,4 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
 import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import { getHealth } from "../api/health";
 import { listDocuments } from "../api/documents";

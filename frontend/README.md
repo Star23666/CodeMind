@@ -17,7 +17,7 @@ Vue 3 前端提供认证、知识库管理、文档处理、RAG 问答、问答�
 | --- | --- | --- |
 | `/` | `HomeView` | RAG 问答和来源展示 |
 | `/documents` | `DocumentUploadView` | 上传、进度和处理状态 |
-| `/library` | `DocumentLibraryView` | 文档筛选、重建和删除 |
+| `/library` | `DocumentLibraryView` | 文档筛选、取消处理、重建和删除 |
 | `/documents/:id/view` | `DocumentViewerView` | 原始文档预览 |
 | `/documents/:id/chunks/:chunkId` | `DocumentDetailView` | 片段查看和定位 |
 | `/history` | `QaHistoryView` | 问答历史和来源快照 |
@@ -50,7 +50,7 @@ Docker 生产环境的 `nginx.conf` 已关闭 `/api/` 代理缓冲，并将读�
 npm run build
 ```
 
-当前构建可以完成，但 AntV G6、Element Plus 和文档预览相关产物仍会触发大于 500 kB 的 chunk 警告，后续可通过更细的动态导入和 `manualChunks` 优化。
+所有页面路由均懒加载。Element Plus 组件和消息 API 由构建插件按需导入，生产构建将 AntV G6、Element Plus 和文档预览依赖拆为独立异步 chunk。首屏只预加载入口与 Vue 运行时，合计约 `62.5 KiB gzip`；较大的业务依赖仅在打开对应页面后下载。详细记录见 [前端构建优化](../docs/前端构建优化.md)。
 
 ## 知识地图交互
 
@@ -73,6 +73,7 @@ npm run build
 - 上传接口超时为 5 分钟，并通过 Axios 事件显示真实上传进度。
 - 若上传响应超时，先到文档库确认是否已创建记录，避免重复提交。
 - 状态轮询遇到临时网络错误会继续重试。
+- 文档库可取消 `pending` 或 `processing` 任务，并显示 `cancelled` 状态。
 - 原文预览通过受保护的 `/api/documents/{id}/content` 获取，不直接公开上传目录。
 
 ## 安全注意事项

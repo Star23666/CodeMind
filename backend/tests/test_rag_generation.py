@@ -15,6 +15,7 @@ from app.services.prompt_builder import (
     build_source_block,
     sanitize_answer_citations,
 )
+from app.services.llm_client import LlmServiceError
 from app.services.rag_service import RagService
 from app.services.retrieval_service import RetrievalService
 from app.services.retrieval_service import (
@@ -75,6 +76,12 @@ class FakeStreamingLlmClient(FakeLlmClient):
         yield "线程负责 CPU 调度。[来源1]"
 
 
+class SlowLlmClient(FakeLlmClient):
+    async def generate_answer(self, prompt: str, **kwargs) -> str:
+        await asyncio.sleep(1)
+        return "不应到达"
+
+
 class FakeHistoryService:
     def __init__(self):
         self.saved = None
@@ -101,6 +108,11 @@ class FakeHistoryService:
 
 
 class RagGenerationTest(unittest.TestCase):
+    def test_chat_request_uses_tuned_embedding_threshold_by_default(self):
+        request = ChatRequest(knowledge_base_id=1, question="进程是什么？")
+
+        self.assertEqual(request.score_threshold, 0.45)
+
     def test_build_prompt_numbers_sources_and_includes_guardrails(self):
         prompt = build_rag_prompt(
             question="进程和线程有什么区别？",
@@ -158,6 +170,23 @@ class RagGenerationTest(unittest.TestCase):
         self.assertEqual(response.sources, [])
         self.assertEqual(response.qa_record_id, 1001)
         self.assertEqual(history.saved["sources"], [])
+
+    def test_non_stream_answer_has_a_hard_total_timeout(self):
+        history = FakeHistoryService()
+        service = RagService(
+            retrieval_service=FakeRetrievalService([make_source()]),
+            llm_client=SlowLlmClient(),
+            history_service=history,
+        )
+        request = ChatRequest(knowledge_base_id=1, question="请进行复杂推理")
+
+        with patch("app.services.rag_service.settings.chat_total_timeout_seconds", 0.01):
+            with self.assertRaises(LlmServiceError) as context:
+                run_async(service.answer_question(request, user_id=7, db=object()))
+
+        self.assertEqual(context.exception.status_code, 504)
+        self.assertIn("超过", str(context.exception))
+        self.assertIsNone(history.saved)
 
     def test_stream_answer_emits_events_and_saves_sanitized_answer(self):
         retrieval = FakeRetrievalService([make_source()])

@@ -1,6 +1,8 @@
 import { request } from "./request";
 import { TOKEN_KEY } from "../stores/user";
 
+export const DEFAULT_SCORE_THRESHOLD = 0.45;
+
 export function sendChatQuestion(payload) {
   return request.post(
     "/chat",
@@ -8,7 +10,7 @@ export function sendChatQuestion(payload) {
       knowledge_base_id: payload.knowledge_base_id || 1,
       question: payload.question,
       top_k: payload.top_k ?? 4,
-      score_threshold: payload.score_threshold ?? 0.77,
+      score_threshold: payload.score_threshold ?? DEFAULT_SCORE_THRESHOLD,
       rerank_top_n: payload.rerank_top_n ?? 2,
       enable_rewrite: payload.enable_rewrite ?? true,
       enable_rerank: payload.enable_rerank ?? true,
@@ -59,7 +61,7 @@ export async function streamChatQuestion(payload, { onMeta, onToken, onDone, sig
       knowledge_base_id: payload.knowledge_base_id || 1,
       question: payload.question,
       top_k: payload.top_k ?? 4,
-      score_threshold: payload.score_threshold ?? 0.77,
+      score_threshold: payload.score_threshold ?? DEFAULT_SCORE_THRESHOLD,
       rerank_top_n: payload.rerank_top_n ?? 2,
       enable_rewrite: payload.enable_rewrite ?? true,
       enable_rerank: payload.enable_rerank ?? true,

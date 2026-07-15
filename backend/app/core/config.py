@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 1200
     llm_enable_thinking: bool | None = None
     llm_thinking_budget: int = 512
+    chat_total_timeout_seconds: float = 60.0
 
     mind_map_model: str = ""
     mind_map_timeout_seconds: float = 120.0
@@ -37,6 +38,9 @@ class Settings(BaseSettings):
     embedding_model: str = ""
     embedding_timeout_seconds: float = 30.0
     embedding_max_retries: int = 1
+    retrieval_score_threshold: float = 0.45
+
+    document_worker_concurrency: int = 2
 
     # JWT
     jwt_secret_key: str = "change-me-in-production-use-a-long-random-string"

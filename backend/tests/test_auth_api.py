@@ -33,7 +33,8 @@ class AuthApiTest(unittest.TestCase):
                         password_hash VARCHAR(255) NOT NULL,
                         email VARCHAR(120) NOT NULL UNIQUE,
                         role VARCHAR(20) NOT NULL DEFAULT 'user',
-                        status VARCHAR(20) NOT NULL DEFAULT 'active'
+                        status VARCHAR(20) NOT NULL DEFAULT 'active',
+                        token_version INTEGER NOT NULL DEFAULT 0
                     )
                     """
                 )
@@ -114,6 +115,22 @@ class AuthApiTest(unittest.TestCase):
 
         logout = self.client.post("/api/auth/logout", headers=headers)
         self.assertEqual(logout.status_code, 200)
+
+        revoked = self.client.get("/api/auth/me", headers=headers)
+        self.assertEqual(revoked.status_code, 401)
+
+        relogin = self.client.post(
+            "/api/auth/login",
+            json={"username": "alice", "password": "password123"},
+        )
+        self.assertEqual(relogin.status_code, 200)
+        refreshed_headers = {
+            "Authorization": f"Bearer {relogin.json()['access_token']}"
+        }
+        self.assertEqual(
+            self.client.get("/api/auth/me", headers=refreshed_headers).status_code,
+            200,
+        )
 
         tampered = self.client.get(
             "/api/auth/me",
