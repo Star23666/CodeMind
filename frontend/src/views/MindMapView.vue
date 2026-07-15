@@ -1,321 +1,351 @@
 <template>
-  <div class="mind-map-view">
-    <AppHeader :health-online="healthOnline" />
+  <div class="mind-map-view" :class="{ 'zen-mode': zenMode }">
+    <AppHeader v-if="!zenMode" :health-online="healthOnline" />
 
     <main class="map-page">
-      <header class="page-intro">
+      <header v-if="!mapData && !zenMode" class="page-heading">
         <div>
-          <p class="eyebrow">KNOWLEDGE ATLAS</p>
-          <h1>把资料展开成一张可核对的知识地图</h1>
-          <p class="intro-copy">
-            每个节点都连接真实文档片段。先看结构，再沿着来源回到原文。
-          </p>
-        </div>
-        <div class="intro-mark" aria-hidden="true">
-          <span>MAP</span>
-          <strong>{{ mapData?.node_count || "—" }}</strong>
-          <small>节点</small>
+          <p class="utility-label">KNOWLEDGE WORKSPACE</p>
+          <h1>知识地图</h1>
+          <p>把资料整理成一张能聚焦分支、核对原文并持续学习的知识画布。</p>
         </div>
       </header>
 
-      <section class="map-controls" aria-label="思维导图生成设置">
-        <label>
-          <span>知识库</span>
-          <el-select
-            v-model="knowledgeBaseId"
-            placeholder="选择知识库"
-            :disabled="loadingBases"
-            @change="handleKnowledgeBaseChange"
-          >
-            <el-option
-              v-for="base in knowledgeBases"
-              :key="base.id"
-              :label="base.name"
-              :value="base.id"
-            />
-          </el-select>
-        </label>
+      <section v-if="!mapData || setupOpen" class="control-deck" aria-label="知识地图生成设置">
+        <div class="control-deck-heading">
+          <div>
+            <span>{{ mapData ? "重新构造地图" : "生成范围" }}</span>
+            <p>选择资料与结构深度；新结果完成前，当前地图仍可继续浏览。</p>
+          </div>
+          <div class="control-deck-actions">
+            <span v-if="generating" class="working-badge"><i></i>正在构造</span>
+            <button v-if="mapData" type="button" aria-label="收起生成设置" @click="setupOpen = false">×</button>
+          </div>
+        </div>
 
-        <label>
-          <span>资料范围</span>
-          <el-select v-model="documentId" placeholder="整个知识库" clearable>
-            <el-option label="整个知识库" :value="null" />
-            <el-option
-              v-for="document in completedDocuments"
-              :key="document.id"
-              :label="document.file_name"
-              :value="document.id"
-            />
-          </el-select>
-        </label>
+        <div class="control-grid">
+          <label>
+            <span>知识库</span>
+            <el-select
+              v-model="knowledgeBaseId"
+              placeholder="选择知识库"
+              :disabled="loadingBases || generating"
+              @change="handleKnowledgeBaseChange"
+            >
+              <el-option v-for="base in knowledgeBases" :key="base.id" :label="base.name" :value="base.id" />
+            </el-select>
+          </label>
 
-        <label class="depth-control">
-          <span>结构深度</span>
-          <el-segmented v-model="maxDepth" :options="depthOptions" />
-        </label>
+          <label>
+            <span>资料范围</span>
+            <el-select
+              v-model="documentId"
+              placeholder="整个知识库"
+              clearable
+              :disabled="loadingDocuments || generating"
+            >
+              <el-option label="整个知识库" value="" />
+              <el-option
+                v-for="document in completedDocuments"
+                :key="document.id"
+                :label="document.file_name"
+                :value="document.id"
+              />
+            </el-select>
+          </label>
 
-        <el-button
-          class="generate-button"
-          type="primary"
-          :loading="generating"
-          :disabled="!knowledgeBaseId"
-          @click="generate"
-        >
-          {{ mapData ? "重新生成" : "生成知识地图" }}
-        </el-button>
-      </section>
+          <label class="depth-control">
+            <span>结构深度</span>
+            <el-segmented v-model="maxDepth" :options="depthOptions" :disabled="generating" />
+          </label>
 
-      <section v-if="histories.length" class="history-bar" aria-label="历史知识地图">
-        <label>
-          <span>历史知识地图</span>
-          <el-select
-            v-model="activeHistoryId"
-            placeholder="选择一张已保存的地图打开"
-            @change="openHistory"
-          >
-            <el-option
-              v-for="item in histories"
-              :key="item.id"
-              :value="item.id"
-              :label="`${item.title} · ${formatTime(item.updated_at)}`"
-            />
-          </el-select>
-        </label>
+          <label v-if="histories.length" class="history-control">
+            <span>历史版本</span>
+            <el-select v-model="selectedHistoryId" placeholder="打开已保存地图" @change="openHistory">
+              <el-option
+                v-for="item in histories"
+                :key="item.id"
+                :value="item.id"
+                :label="item.title + ' · ' + formatTime(item.updated_at)"
+              />
+            </el-select>
+          </label>
+
+          <el-button
+            class="generate-button"
+            type="primary"
+            :loading="generating"
+            :disabled="!canGenerate"
+            @click="generate"
+          >{{ mapData ? "构造新版本" : "生成知识地图" }}</el-button>
+        </div>
+
+        <p v-if="generationBlockReason" class="control-guidance">
+          {{ generationBlockReason }}
+          <RouterLink :to="generationGuidance.to">{{ generationGuidance.action }}</RouterLink>
+        </p>
       </section>
 
       <p v-if="loadError" class="state-message error-state">{{ loadError }}</p>
 
-      <section v-if="generationJob && generating" class="generation-status" aria-live="polite">
-        <div class="status-copy">
-          <span>{{ stageLabel }}</span>
-          <strong>{{ generationJob.message }}</strong>
-          <small>已等待 {{ elapsedSeconds }} 秒 · 可切换到其他页面，返回后进度和计时会自动接续</small>
-        </div>
-        <el-progress
-          :percentage="generationJob.progress"
-          :stroke-width="10"
-          :status="generationJob.status === 'failed' ? 'exception' : undefined"
-        />
-        <div class="stage-track" aria-label="生成阶段">
-          <span
-            v-for="stage in stageSteps"
-            :key="stage.key"
-            :class="stageClass(stage.key)"
-          >
-            <i></i>{{ stage.label }}
-          </span>
-        </div>
-      </section>
-
-      <section v-if="mapData" class="map-meta" aria-live="polite">
-        <span class="mode-chip">LLM 已分析</span>
-        <span>{{ mapData.node_count }} 个知识节点</span>
-        <span>{{ selectedScopeName }}</span>
-        <p>{{ mapData.message }}</p>
-      </section>
-
-      <section v-if="mapData" class="learning-overview" aria-label="学习概览">
-        <div class="overview-title">
+      <section
+        v-if="mapData && generationJob && (generating || generationJob.status === 'failed')"
+        class="generation-ribbon"
+        :class="{ failed: generationJob.status === 'failed' }"
+        aria-live="polite"
+      >
+        <div class="ribbon-stage">
+          <i></i>
           <div>
-            <span>LEARNING ROUTE</span>
-            <strong>这张地图的学习轮廓</strong>
-          </div>
-          <div class="mastery-progress">
-            <span>本机掌握进度</span>
-            <strong>{{ masteryProgress }}%</strong>
+            <span>{{ generationJob.status === "failed" ? "新版本构造失败" : `新版构造中 · ${stageLabel}` }}</span>
+            <strong>{{ generationJob.message || loadError }}</strong>
           </div>
         </div>
-        <div class="overview-metrics">
-          <article><strong>{{ mapStats.maxDepth }}</strong><span>知识层级</span></article>
-          <article><strong>{{ mapStats.leafCount }}</strong><span>核心落点</span></article>
-          <article><strong>{{ mapStats.evidenceCoverage }}%</strong><span>原文覆盖</span></article>
-          <article><strong>{{ masteredCount }}/{{ learnableNodes.length }}</strong><span>已掌握节点</span></article>
+        <div class="ribbon-progress" aria-label="新版本构造进度">
+          <span :style="{ width: generationJob.progress + '%' }"></span>
         </div>
-        <button v-if="nextLearningNode" type="button" class="next-learning" @click="focusLearningNode(nextLearningNode)">
-          <span>继续学习</span>
-          <strong>{{ nextLearningNode.title }}</strong>
-          <i>→</i>
-        </button>
+        <b>{{ generationJob.progress }}%</b>
+        <small v-if="generationConnectionIssue">{{ generationConnectionIssue }}</small>
+        <small v-else-if="generationStalled">进度暂未更新，请确认后端服务仍在运行；任务可能仍在继续。</small>
+        <button v-if="generationJob.status === 'failed'" type="button" @click="generate">按原设置重试</button>
       </section>
 
-      <section v-if="mapData" class="map-actions" aria-label="导图文件操作">
-        <el-input v-model="searchTerm" clearable placeholder="搜索并定位知识节点" />
-        <el-button type="primary" :loading="saving" @click="saveCurrent">保存到历史</el-button>
-        <el-dropdown @command="exportMap">
-          <el-button>导出 <span class="el-icon--right">⌄</span></el-button>
-          <template #dropdown><el-dropdown-menu>
-            <el-dropdown-item command="png">PNG 图片</el-dropdown-item>
-            <el-dropdown-item command="svg">SVG 矢量图</el-dropdown-item>
-            <el-dropdown-item command="json">JSON 可恢复数据</el-dropdown-item>
-            <el-dropdown-item command="md">Markdown 大纲</el-dropdown-item>
-          </el-dropdown-menu></template>
-        </el-dropdown>
-        <el-button type="danger" plain :disabled="!activeHistoryId" @click="removeHistory">删除版本</el-button>
-      </section>
-
-      <section v-if="mapData" class="atlas-workspace">
-        <MindMapCanvas ref="canvasRef" :root="mapData.root" :search-term="searchTerm" @select="selectNode" />
-
-        <aside ref="evidenceRef" class="evidence-panel">
-          <div class="evidence-kicker">
-            <span>SELECTED NODE</span>
-            <i></i>
-          </div>
-
-          <template v-if="selectedNode">
-            <nav class="node-breadcrumb" aria-label="当前知识路径">
-              <button
-                v-for="node in selectedPath"
-                :key="node.id"
-                type="button"
-                @click="focusLearningNode(node)"
-              >{{ node.title }}</button>
-            </nav>
-            <div class="node-meta-row">
-              <p class="node-depth">第 {{ selectedNode.depth + 1 }} 层 · {{ selectedNodeTypeLabel }}</p>
-              <button
-                v-if="selectedNode.depth > 0"
-                type="button"
-                class="mastery-toggle"
-                :class="{ mastered: isSelectedMastered }"
-                @click="toggleSelectedMastery"
-              >{{ isSelectedMastered ? "已掌握 ✓" : "标记已掌握" }}</button>
+      <template v-if="mapData">
+        <header class="map-document-bar">
+          <div class="document-leading">
+            <button
+              v-if="!zenMode"
+              type="button"
+              class="rail-toggle"
+              :class="{ active: outlineOpen }"
+              :aria-pressed="outlineOpen"
+              @click="outlineOpen = !outlineOpen"
+            >大纲</button>
+            <div class="document-title">
+              <span class="map-status" :class="{ dirty: isDirty }"><i></i>{{ isDirty ? "未保存" : "已保存" }}</span>
+              <strong>{{ mapData.root.title }}</strong>
+              <small>{{ selectedScopeName }} · {{ mapData.node_count }} 个节点</small>
             </div>
-            <h2>{{ selectedNode.title }}</h2>
-            <span class="section-caption">核心理解</span>
-            <p class="node-summary">
-              {{ selectedNode.summary || "该节点用于组织下级知识点，可继续展开查看。" }}
-            </p>
+          </div>
 
-            <section v-if="selectedNode.key_points?.length" class="key-points">
-              <span class="section-caption">关键记忆点</span>
-              <ul>
-                <li v-for="point in selectedNode.key_points" :key="point">{{ point }}</li>
-              </ul>
-            </section>
+          <div class="node-search">
+            <el-input
+              ref="searchInputRef"
+              v-model="searchTerm"
+              clearable
+              :placeholder="focusRootId ? '搜索当前分支' : '搜索标题、摘要或记忆点'"
+              @keydown.enter.exact="stepSearch(1)"
+              @keydown.shift.enter="stepSearch(-1)"
+            />
+            <span class="search-count">{{ searchResultLabel }}</span>
+            <button type="button" aria-label="上一个搜索结果" :disabled="searchStatus.count < 2" @click="stepSearch(-1)">↑</button>
+            <button type="button" aria-label="下一个搜索结果" :disabled="searchStatus.count < 2" @click="stepSearch(1)">↓</button>
+          </div>
 
-            <section class="learning-tip">
-              <span>学习动作</span>
-              <p>{{ selectedLearningTip }}</p>
-            </section>
-
-            <section v-if="selectedNode.children?.length" class="child-navigation">
-              <span class="section-caption">继续深入</span>
-              <div>
-                <button
-                  v-for="child in selectedNode.children"
-                  :key="child.id"
-                  type="button"
-                  @click="focusLearningNode(child)"
-                >{{ child.title }} <i>→</i></button>
-              </div>
-            </section>
-            <el-button plain :loading="expandingNode" :disabled="!selectedNode.sources?.length" @click="expandSelectedNode">
-              AI 展开这个分支
+          <div class="document-actions" aria-label="地图文件操作">
+            <button type="button" class="plain-action" :class="{ active: inspectorOpen }" @click="inspectorOpen = !inspectorOpen">详情</button>
+            <el-button size="small" type="primary" :loading="saving" :disabled="!canSave" @click="saveCurrent">
+              {{ saveButtonLabel }}
             </el-button>
-
-            <section class="node-question">
-              <div>
-                <strong>问这个知识点</strong>
-                <span>{{ hasOwnSources ? "回答只使用该节点绑定的原文" : "回答使用下方检索到的相关资料" }}</span>
+            <el-dropdown @command="exportMap">
+              <el-button size="small">导出⌄</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="png">PNG 图片</el-dropdown-item>
+                  <el-dropdown-item command="svg">SVG 大纲</el-dropdown-item>
+                  <el-dropdown-item command="json">JSON 可恢复数据</el-dropdown-item>
+                  <el-dropdown-item command="md">Markdown 大纲</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <el-dropdown @command="handleDocumentCommand">
+              <button type="button" class="more-action" aria-label="更多地图操作">•••</button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="setup">重新构造设置</el-dropdown-item>
+                  <el-dropdown-item command="zen">{{ zenMode ? "退出专注模式" : "进入专注模式" }}</el-dropdown-item>
+                  <el-dropdown-item command="delete" divided :disabled="!activeHistoryId">删除当前版本</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <el-popover placement="bottom-end" :width="260" trigger="click">
+              <template #reference><button type="button" class="shortcut-action" aria-label="查看快捷键">?</button></template>
+              <div class="shortcut-list">
+                <strong>快捷键</strong>
+                <span><kbd>Ctrl F</kbd> 搜索节点</span>
+                <span><kbd>Ctrl 0</kbd> 回到中心主题</span>
+                <span><kbd>F</kbd> 聚焦选中分支</span>
+                <span><kbd>Z</kbd> 专注模式</span>
+                <span><kbd>Esc</kbd> 返回上一层视图</span>
               </div>
-              <el-input
-                v-model="nodeQuestion"
-                type="textarea"
-                :autosize="{ minRows: 2, maxRows: 4 }"
-                maxlength="500"
-                show-word-limit
-                :placeholder="`例如：${selectedNode.title} 最容易混淆的地方是什么？`"
-                :disabled="!questionChunkIds.length"
-                @keydown.ctrl.enter="askNode"
-              />
-              <el-button
-                type="primary"
-                :loading="askingNode"
-                :disabled="!questionChunkIds.length || !nodeQuestion.trim()"
-                @click="askNode"
+            </el-popover>
+          </div>
+        </header>
+
+        <section v-if="!zenMode" class="learning-strip">
+          <div class="learning-progress">
+            <span>本机学习进度</span>
+            <strong>{{ masteryProgress }}%</strong>
+            <div aria-hidden="true"><i :style="{ width: masteryProgress + '%' }"></i></div>
+          </div>
+          <dl>
+            <div><dt>层级</dt><dd>{{ mapStats.maxDepth }}</dd></div>
+            <div><dt>原文覆盖</dt><dd>{{ mapStats.evidenceCoverage }}%</dd></div>
+            <div><dt>已掌握</dt><dd>{{ masteredCount }}/{{ learnableNodes.length }}</dd></div>
+          </dl>
+          <button v-if="nextLearningNode" type="button" class="continue-learning" @click="openLearningNode(nextLearningNode)">
+            <span>继续学习</span><strong>{{ nextLearningNode.title }}</strong><i>→</i>
+          </button>
+        </section>
+
+        <section
+          class="atlas-workspace"
+          :class="{
+            'has-navigator': outlineOpen && !zenMode,
+            'has-inspector': inspectorOpen,
+            immersive: zenMode,
+          }"
+        >
+          <aside v-if="outlineOpen && !zenMode" class="map-navigator" aria-label="知识地图大纲">
+            <header>
+              <div><span>地图导航</span><strong>{{ filteredOutlineNodes.length }} 个节点</strong></div>
+              <button type="button" aria-label="收起地图大纲" @click="outlineOpen = false">×</button>
+            </header>
+            <div class="navigator-filters" role="group" aria-label="大纲筛选">
+              <button
+                v-for="item in outlineFilterOptions"
+                :key="item.value"
+                type="button"
+                :class="{ active: outlineFilter === item.value }"
+                @click="outlineFilter = item.value"
+              >{{ item.label }}</button>
+            </div>
+            <nav class="outline-tree">
+              <button
+                v-for="item in filteredOutlineNodes"
+                :key="item.node.id"
+                type="button"
+                :class="{
+                  selected: selectedNode?.id === item.node.id,
+                  mastered: item.mastered,
+                  'focus-root': focusRootId === item.node.id,
+                }"
+                :style="{ '--outline-depth': Math.min(item.depth, 4) }"
+                @click="selectOutlineNode(item.node)"
               >
-                针对性提问
-              </el-button>
-              <p v-if="!questionChunkIds.length" class="question-hint">
-                正在为该节点检索可用资料，稍候即可提问。
-              </p>
-              <div v-if="nodeAnswer" class="node-answer">
-                <span>LLM 回答</span>
-                <p>{{ nodeAnswer.answer }}</p>
-                <div>
-                  <RouterLink
-                    v-for="source in nodeAnswer.sources"
-                    :key="source.chunk_id"
-                    :to="source.jump_url"
-                  >
-                    来源：{{ source.file_name }} · 片段 {{ source.chunk_index + 1 }}
-                  </RouterLink>
-                </div>
-              </div>
-            </section>
+                <i></i>
+                <span>{{ item.node.title }}</span>
+                <small v-if="item.mastered">✓</small>
+                <small v-else-if="item.sourceCount">文</small>
+              </button>
+              <p v-if="!filteredOutlineNodes.length">当前筛选下没有节点。</p>
+            </nav>
+            <footer><span><i class="mastered-key"></i>已掌握</span><span><i class="source-key"></i>有原文</span></footer>
+          </aside>
 
-            <div class="source-heading">
-              <strong>原文依据</strong>
-              <span>{{ selectedNode.sources?.length || 0 }}</span>
+          <div class="canvas-stage">
+            <nav v-if="focusPath.length" class="focus-trail" aria-label="当前聚焦分支">
+              <button type="button" @click="exitBranchFocus">全部地图</button>
+              <template v-for="node in focusPath" :key="node.id">
+                <i>›</i>
+                <button type="button" @click="setFocusFromBreadcrumb(node)">{{ node.title }}</button>
+              </template>
+              <button type="button" class="exit-focus" @click="exitBranchFocus">退出聚焦</button>
+            </nav>
+
+            <div v-if="selectedNode" class="selection-bar" aria-label="选中节点快捷操作">
+              <div><span>{{ selectedNodeTypeLabel }}</span><strong>{{ selectedNode.title }}</strong></div>
+              <button type="button" :disabled="!selectedNode.children?.length" @click="enterBranchFocus(selectedNode)">聚焦分支 <kbd>F</kbd></button>
+              <button type="button" :disabled="!selectedNode.children?.length" @click="toggleSelectedBranch">收起/展开</button>
+              <button v-if="selectedNode.depth > 0" type="button" :class="{ mastered: isSelectedMastered }" @click="toggleSelectedMastery">
+                {{ isSelectedMastered ? "已掌握 ✓" : "标记掌握" }}
+              </button>
+              <button type="button" @click="openInspector">查看原文</button>
             </div>
 
-            <div v-if="selectedNode.sources?.length" class="source-cards">
-              <article v-for="source in selectedNode.sources" :key="source.chunk_id">
-                <div>
-                  <strong>{{ source.file_name }}</strong>
-                  <span>
-                    片段 {{ source.chunk_index + 1 }}
-                    <template v-if="source.page_no"> · 第 {{ source.page_no }} 页</template>
-                  </span>
-                </div>
-                <p>{{ source.source_text }}</p>
-                <RouterLink :to="source.jump_url">查看完整原文 →</RouterLink>
-              </article>
-            </div>
+            <MindMapCanvas
+              ref="canvasRef"
+              :root="mapData.root"
+              :search-term="searchTerm"
+              :view-state="historyViewState"
+              :selected-node-id="selectedNode?.id || ''"
+              :focus-root-id="focusRootId"
+              :mastered-node-ids="masteredNodeIdList"
+              :density="layoutDensity"
+              :display-mode="displayMode"
+              :construction-revision="mapConstructionRevision"
+              :immersive="zenMode"
+              @select="selectNode"
+              @view-change="handleCanvasViewChange"
+              @search-change="handleSearchStatus"
+              @density-change="changeDensity"
+              @display-mode-change="changeDisplayMode"
+              @toggle-zen="toggleZenMode"
+            />
+          </div>
 
-            <el-empty v-else :image-size="60" description="该节点没有直接绑定原文，可参考下方检索到的相关资料" />
+          <MindMapInspector
+            v-if="inspectorOpen"
+            ref="evidenceRef"
+            v-model:node-question="nodeQuestion"
+            closable
+            :selected-node="selectedNode"
+            :selected-path="selectedPath"
+            :selected-node-type-label="selectedNodeTypeLabel"
+            :selected-learning-tip="selectedLearningTip"
+            :is-selected-mastered="isSelectedMastered"
+            :has-own-sources="hasOwnSources"
+            :question-chunk-count="questionChunkIds.length"
+            :node-answer="nodeAnswer"
+            :asking-node="askingNode"
+            :expanding-node="expandingNode"
+            :related-loading="relatedLoading"
+            :related-sources="relatedSources"
+            :related-error="relatedError"
+            @close="inspectorOpen = false"
+            @focus="openLearningNode"
+            @toggle-mastery="toggleSelectedMastery"
+            @expand="expandSelectedNode"
+            @ask="askNode"
+          />
+        </section>
+      </template>
 
-            <div class="source-heading related-heading">
-              <strong>知识库相关资料</strong>
-              <span v-if="relatedLoading" class="related-spinner">检索中…</span>
-              <span v-else>{{ relatedSources.length }}</span>
-            </div>
-
-            <div v-if="relatedSources.length" class="source-cards related">
-              <article v-for="source in relatedSources" :key="`rel-${source.chunk_id}`">
-                <div>
-                  <strong>{{ source.file_name }}</strong>
-                  <span>
-                    片段 {{ source.chunk_index + 1 }}
-                    <template v-if="source.page_no"> · 第 {{ source.page_no }} 页</template>
-                    <template v-if="source.score != null"> · 相关度 {{ Math.round(source.score * 100) }}%</template>
-                  </span>
-                </div>
-                <p>{{ source.source_text }}</p>
-                <RouterLink :to="source.jump_url">查看完整原文 →</RouterLink>
-              </article>
-            </div>
-            <p v-else-if="relatedLoading" class="related-hint">正在从整个知识库检索与该节点相关的资料…</p>
-            <p v-else class="related-hint">{{ relatedError || "暂无检索到的相关资料。" }}</p>
-          </template>
-        </aside>
-      </section>
-
-      <section v-else class="empty-atlas">
-        <div class="constellation" aria-hidden="true">
-          <i class="point one"></i>
-          <i class="point two"></i>
-          <i class="point three"></i>
-          <i class="point four"></i>
-          <span class="line a"></span>
-          <span class="line b"></span>
-          <span class="line c"></span>
+      <section v-else class="empty-atlas" :class="{ constructing: generating }">
+        <div class="empty-map-mark" aria-hidden="true">
+          <span class="map-node root-node"></span>
+          <span class="map-node node-a"></span>
+          <span class="map-node node-b"></span>
+          <span class="map-node node-c"></span>
+          <i class="route route-a"></i>
+          <i class="route route-b"></i>
+          <i class="route route-c"></i>
         </div>
-        <div>
-          <p>画布等待资料</p>
-          <h2>选择知识库，生成第一张知识地图</h2>
-          <span>只有已完成解析的文档会进入导图。</span>
+
+        <div v-if="generationJob && (generating || generationJob.status === 'failed')" class="construction-copy">
+          <span>{{ generationJob.status === "failed" ? "构造中断" : `${stagePosition.current} / ${stagePosition.total} · ${stageLabel}` }}</span>
+          <h2>{{ generationJob.message || loadError }}</h2>
+          <p>{{ generationJob.status === "failed" ? "检查后端服务、模型配置和网络后，可以按原设置重试。" : stageDetail }}</p>
+          <div class="construction-progress">
+            <i :style="{ width: generationJob.progress + '%' }"></i>
+          </div>
+          <div class="stage-track" aria-label="地图构造阶段">
+            <span v-for="stage in stageSteps" :key="stage.key" :class="stageClass(stage.key)"><i></i>{{ stage.label }}</span>
+          </div>
+          <small v-if="generationConnectionIssue" class="connection-note">{{ generationConnectionIssue }}</small>
+          <small v-else-if="generationStalled" class="connection-note">进度已较久没有更新，请确认后端服务仍在运行。</small>
+          <small v-else>已等待 {{ elapsedSeconds }} 秒；离开页面后任务仍会继续</small>
+          <el-button v-if="generationJob.status === 'failed'" type="primary" @click="generate">按原设置重试</el-button>
+        </div>
+
+        <div v-else class="empty-copy">
+          <span>{{ generating ? "正在建立生成任务" : "画布准备就绪" }}</span>
+          <h2>{{ generating ? "正在为你读取资料" : "从一组资料开始建立地图" }}</h2>
+          <p v-if="generating">任务建立后，这里会显示每一步真实构造进度。</p>
+          <p v-else>选择知识库、资料范围和结构深度，然后生成第一张可核对原文的知识地图。</p>
+          <ol v-if="!generating">
+            <li><b>1</b>选择资料</li><li><b>2</b>构造枝架</li><li><b>3</b>沿路径学习</li>
+          </ol>
         </div>
       </section>
     </main>
@@ -323,922 +353,494 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
-import { useRoute, useRouter } from "vue-router";
-import { getHealth } from "../api/health";
-import { listDocuments } from "../api/documents";
-import { listKnowledgeBases } from "../api/knowledgeBases";
-import {
-  askMindMapNode, createMindMapHistory, createMindMapJob, deleteMindMapHistory,
-  expandMindMapNode, getMindMapHistory, getMindMapJob, listMindMapHistories, updateMindMapHistory,
-} from "../api/mindMaps";
-import { searchKnowledge } from "../api/search";
-import MindMapCanvas from "../components/mindmap/MindMapCanvas.vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import AppHeader from "../components/layout/AppHeader.vue";
+import MindMapCanvas from "../components/mindmap/MindMapCanvas.vue";
+import MindMapInspector from "../components/mindmap/MindMapInspector.vue";
+import { useMindMapWorkspace } from "../composables/useMindMapWorkspace";
 
-const route = useRoute();
-const router = useRouter();
-const knowledgeBases = ref([]);
-const documents = ref([]);
-const knowledgeBaseId = ref(null);
-const documentId = ref(null);
-const maxDepth = ref(3);
-const mapData = ref(null);
-const selectedNode = ref(null);
-const loadingBases = ref(false);
-const generating = ref(false);
-const generationJob = ref(null);
-const elapsedSeconds = ref(0);
-const nodeQuestion = ref("");
-const nodeAnswer = ref(null);
-const askingNode = ref(false);
-const loadError = ref("");
-const canvasRef = ref(null);
-const evidenceRef = ref(null);
-const searchTerm = ref("");
-const histories = ref([]);
-const activeHistoryId = ref(null);
-const saving = ref(false);
-const expandingNode = ref(false);
-const healthOnline = ref(false);
-const relatedLoading = ref(false);
-const relatedSources = ref([]);
-const relatedError = ref("");
-const masteredNodeIds = ref(new Set());
-// 节点标题 -> 检索结果缓存，避免同一节点反复点击时重复请求。
-const relatedCache = new Map();
-let pollTimer = null;
-let elapsedTimer = null;
-let pollAttempt = 0;
-let trackingVersion = 0;
-const stageSteps = [
-  { key: "queued", label: "排队" },
-  { key: "collecting", label: "读取资料" },
-  { key: "preparing", label: "整理上下文" },
-  { key: "extracting", label: "分批提炼" },
-  { key: "merging", label: "合并结构" },
-  { key: "validating", label: "校验来源" },
-  { key: "assembling", label: "组装画布" },
+const {
+  activeHistoryId,
+  askNode,
+  askingNode,
+  canGenerate,
+  canSave,
+  canvasRef,
+  completedDocuments,
+  depthOptions,
+  documentId,
+  elapsedSeconds,
+  evidenceRef,
+  expandingNode,
+  expandSelectedNode,
+  exportMap,
+  focusLearningNode,
+  formatTime,
+  generate,
+  generationBlockReason,
+  generationConnectionIssue,
+  generationGuidance,
+  generationJob,
+  generationStalled,
+  generating,
+  handleCanvasViewChange,
+  handleKnowledgeBaseChange,
+  handleSearchStatus,
+  hasOwnSources,
+  healthOnline,
+  histories,
+  historyViewState,
+  isDirty,
+  isSelectedMastered,
+  knowledgeBaseId,
+  knowledgeBases,
+  learnableNodes,
+  loadingBases,
+  loadingDocuments,
+  loadError,
+  mapData,
+  mapConstructionRevision,
+  mapStats,
+  masteredCount,
+  masteredNodeIdList,
+  masteryProgress,
+  maxDepth,
+  nextLearningNode,
+  nodeAnswer,
+  nodeQuestion,
+  openHistory,
+  questionChunkIds,
+  relatedError,
+  relatedLoading,
+  relatedSources,
+  removeHistory,
+  saveButtonLabel,
+  saveCurrent,
+  saving,
+  searchResultLabel,
+  searchStatus,
+  searchTerm,
+  selectNode,
+  selectedHistoryId,
+  selectedLearningTip,
+  selectedNode,
+  selectedNodeTypeLabel,
+  selectedPath,
+  selectedScopeName,
+  stageClass,
+  stageDetail,
+  stageLabel,
+  stagePosition,
+  stageSteps,
+  stepSearch,
+  toggleSelectedMastery,
+} = useMindMapWorkspace();
+
+const setupOpen = ref(false);
+const outlineOpen = ref(typeof window === "undefined" || window.innerWidth >= 1320);
+const inspectorOpen = ref(typeof window === "undefined" || window.innerWidth >= 980);
+const zenMode = ref(false);
+const outlineFilter = ref("all");
+const focusRootId = ref("");
+const layoutDensity = ref("comfortable");
+const displayMode = ref("detail");
+const searchInputRef = ref(null);
+let inspectorBeforeZen = true;
+
+const outlineFilterOptions = [
+  { label: "全部", value: "all" },
+  { label: "未掌握", value: "unmastered" },
+  { label: "有原文", value: "evidence" },
 ];
-const depthOptions = [
-  { label: "简洁", value: 2 },
-  { label: "标准", value: 3 },
-  { label: "深入", value: 4 },
-];
 
-const completedDocuments = computed(() =>
-  documents.value.filter((document) => document.parse_status === "completed"),
-);
-
-const selectedScopeName = computed(() => {
-  if (documentId.value) {
-    return completedDocuments.value.find((item) => item.id === documentId.value)?.file_name || "指定文档";
-  }
-  return knowledgeBases.value.find((item) => item.id === knowledgeBaseId.value)?.name || "整个知识库";
-});
-const stageLabel = computed(() => {
-  const current = stageSteps.find((stage) => stage.key === generationJob.value?.stage);
-  return current?.label || "正在处理";
-});
-
-// 节点自带原文时优先用自带来源；否则回退到实时检索到的相关资料，
-// 让没有直接来源的“章节类”节点也能提问。
-const hasOwnSources = computed(() => Boolean(selectedNode.value?.sources?.length));
-const questionChunkIds = computed(() => {
-  const own = selectedNode.value?.sources?.map((source) => source.chunk_id) || [];
-  if (own.length) return own.slice(0, 8);
-  return relatedSources.value.map((source) => source.chunk_id).slice(0, 8);
-});
-
-const allMapNodes = computed(() => {
+const outlineNodes = computed(() => {
   if (!mapData.value?.root) return [];
-  const nodes = [];
-  const walk = (node) => {
-    nodes.push(node);
-    node.children?.forEach(walk);
+  const rows = [];
+  const mastered = new Set(masteredNodeIdList.value);
+  const walk = (node, depth = 0) => {
+    rows.push({
+      node,
+      depth,
+      mastered: mastered.has(node.id),
+      sourceCount: node.sources?.length || 0,
+    });
+    node.children?.forEach((child) => walk(child, depth + 1));
   };
   walk(mapData.value.root);
-  return nodes;
-});
-const learnableNodes = computed(() => allMapNodes.value.filter((node) => node.depth > 0));
-const masteredCount = computed(() =>
-  learnableNodes.value.filter((node) => masteredNodeIds.value.has(node.id)).length,
-);
-const masteryProgress = computed(() =>
-  learnableNodes.value.length ? Math.round((masteredCount.value / learnableNodes.value.length) * 100) : 0,
-);
-const nextLearningNode = computed(() => {
-  const unmastered = learnableNodes.value.filter((node) => !masteredNodeIds.value.has(node.id));
-  return unmastered.find((node) => !node.children?.length) || unmastered[0] || null;
-});
-const mapStats = computed(() => {
-  const nodes = allMapNodes.value;
-  const learnable = learnableNodes.value;
-  const evidenced = learnable.filter((node) => node.sources?.length).length;
-  return {
-    maxDepth: nodes.length ? Math.max(...nodes.map((node) => Number(node.depth || 0))) + 1 : 0,
-    leafCount: nodes.filter((node) => !node.children?.length).length,
-    evidenceCoverage: learnable.length ? Math.round((evidenced / learnable.length) * 100) : 0,
-  };
-});
-const selectedPath = computed(() => {
-  if (!mapData.value?.root || !selectedNode.value) return [];
-  const findPath = (node, targetId, path = []) => {
-    const nextPath = [...path, node];
-    if (node.id === targetId) return nextPath;
-    for (const child of node.children || []) {
-      const match = findPath(child, targetId, nextPath);
-      if (match) return match;
-    }
-    return null;
-  };
-  return findPath(mapData.value.root, selectedNode.value.id) || [];
-});
-const selectedNodeTypeLabel = computed(() => ({
-  overview: "知识总览",
-  chapter: "学习章节",
-  concept: "核心概念",
-  detail: "知识细节",
-}[selectedNode.value?.node_type] || "知识节点"));
-const isSelectedMastered = computed(() =>
-  Boolean(selectedNode.value && masteredNodeIds.value.has(selectedNode.value.id)),
-);
-const selectedLearningTip = computed(() => {
-  if (selectedNode.value?.learning_tip) return selectedNode.value.learning_tip;
-  if (selectedNode.value?.children?.length) return "先用一句话复述本节点，再依次学习下方子知识点。";
-  return "合上原文尝试复述定义，并举一个例子检验是否真正理解。";
+  return rows;
 });
 
-onMounted(() => {
-  checkHealth();
-  loadInitialData();
-});
-onBeforeUnmount(stopTracking);
-
-async function checkHealth() {
-  try {
-    const data = await getHealth();
-    healthOnline.value = data.status === "ok";
-  } catch {
-    healthOnline.value = false;
-  }
-}
-
-async function loadInitialData() {
-  loadingBases.value = true;
-  loadError.value = "";
-  try {
-    knowledgeBases.value = await listKnowledgeBases();
-    const requestedId = Number(route.query.knowledge_base_id);
-    const requestedBase = knowledgeBases.value.find((item) => item.id === requestedId);
-    knowledgeBaseId.value = requestedBase?.id || knowledgeBases.value[0]?.id || null;
-    if (knowledgeBaseId.value) {
-      await loadDocuments();
-      await loadHistories();
-      await resumeActiveJob();
-    }
-  } catch (error) {
-    loadError.value = error.message;
-  } finally {
-    loadingBases.value = false;
-  }
-}
-
-async function loadDocuments() {
-  documentId.value = null;
-  documents.value = [];
-  if (!knowledgeBaseId.value) return;
-  try {
-    documents.value = await listDocuments({ knowledge_base_id: knowledgeBaseId.value });
-  } catch (error) {
-    loadError.value = error.message;
-  }
-}
-
-async function handleKnowledgeBaseChange() {
-  mapData.value = null;
-  selectedNode.value = null;
-  activeHistoryId.value = null;
-  masteredNodeIds.value = new Set();
-  relatedSources.value = [];
-  relatedError.value = "";
-  relatedCache.clear();
-  stopTracking();
-  generating.value = false;
-  generationJob.value = null;
-  loadError.value = "";
-  await router.replace({
-    name: "mind-map",
-    query: { knowledge_base_id: knowledgeBaseId.value },
+const filteredOutlineNodes = computed(() => {
+  const term = searchTerm.value.trim().toLowerCase();
+  return outlineNodes.value.filter((item) => {
+    if (outlineFilter.value === "unmastered" && (item.mastered || item.node.depth === 0)) return false;
+    if (outlineFilter.value === "evidence" && !item.sourceCount) return false;
+    if (!term) return true;
+    return [item.node.title, item.node.summary, ...(item.node.key_points || [])]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .includes(term);
   });
-  await loadDocuments();
-  await loadHistories();
-  await resumeActiveJob();
-}
+});
 
-async function loadHistories() {
-  histories.value = knowledgeBaseId.value ? await listMindMapHistories(knowledgeBaseId.value) : [];
-}
+const focusPath = computed(() => {
+  if (!focusRootId.value || !mapData.value?.root) return [];
+  return (findNodePath(mapData.value.root, focusRootId.value) || []).slice(1);
+});
 
-async function openHistory(historyId) {
-  if (!historyId) return;
-  try {
-    const history = await getMindMapHistory(historyId);
-    mapData.value = history.result;
-    activeHistoryId.value = history.id;
-    loadMastery();
-    relatedCache.clear();
-    selectNode(mapData.value.root);
-  } catch (error) {
-    ElMessage.error(`打开历史版本失败：${error.message}`);
+function findNode(node, nodeId) {
+  if (!node || !nodeId) return null;
+  if (node.id === nodeId) return node;
+  for (const child of node.children || []) {
+    const match = findNode(child, nodeId);
+    if (match) return match;
   }
+  return null;
 }
 
-async function saveCurrent() {
-  if (!mapData.value) {
-    ElMessage.warning("请先生成或打开一张知识地图");
-    return;
+function findNodePath(node, nodeId, path = []) {
+  if (!node) return null;
+  const nextPath = [...path, node];
+  if (node.id === nodeId) return nextPath;
+  for (const child of node.children || []) {
+    const match = findNodePath(child, nodeId, nextPath);
+    if (match) return match;
   }
-  saving.value = true;
-  try {
-    const viewState = canvasRef.value?.getViewState() || {};
-    if (activeHistoryId.value) {
-      await updateMindMapHistory(activeHistoryId.value, {
-        title: mapData.value.root.title,
-        root: mapData.value.root,
-        view_state: viewState,
-      });
-      ElMessage.success("已更新当前历史版本");
-    } else {
-      const created = await createMindMapHistory({
-        knowledge_base_id: knowledgeBaseId.value,
-        document_id: documentId.value || null,
-        title: mapData.value.root.title,
-        generation_mode: mapData.value.generation_mode || "ai",
-        root: mapData.value.root,
-        view_state: viewState,
-      });
-      activeHistoryId.value = created.id;
-      mapData.value.history_id = created.id;
-      saveMastery();
-      ElMessage.success("已保存为新的历史版本");
-    }
-    await loadHistories();
-  } catch (error) {
-    ElMessage.error(`保存失败：${error.message}`);
-  } finally {
-    saving.value = false;
-  }
+  return null;
 }
 
-async function removeHistory() {
-  await deleteMindMapHistory(activeHistoryId.value);
-  activeHistoryId.value = null;
-  await loadHistories();
-  ElMessage.success("历史版本已删除");
+function commitViewPreference(patch) {
+  const current = canvasRef.value?.getViewState?.() || historyViewState.value || {};
+  handleCanvasViewChange({ ...current, ...patch });
 }
 
-function download(content, type, extension) {
-  const url = typeof content === "string" && content.startsWith("data:")
-    ? content : URL.createObjectURL(new Blob([content], { type }));
-  const anchor = document.createElement("a");
-  anchor.href = url; anchor.download = `${mapData.value.root.title}.${extension}`; anchor.click();
-  if (!url.startsWith("data:")) URL.revokeObjectURL(url);
+function enterBranchFocus(node = selectedNode.value) {
+  if (!node?.children?.length) return;
+  focusRootId.value = node.id;
+  commitViewPreference({ focus_root_id: node.id });
 }
 
-function toMarkdown(node, depth = 0) {
-  const indent = "  ".repeat(depth);
-  const points = (node.key_points || []).map((point) => `${indent}  - 记忆点：${point}\n`).join("");
-  const tip = node.learning_tip ? `${indent}  - 学习建议：${node.learning_tip}\n` : "";
-  return `${indent}- ${node.title}${node.summary ? `：${node.summary}` : ""}\n${points}${tip}${node.children.map((child) => toMarkdown(child, depth + 1)).join("")}`;
+function exitBranchFocus() {
+  if (!focusRootId.value) return;
+  focusRootId.value = "";
+  commitViewPreference({ focus_root_id: "" });
 }
 
-function toSvg(root) {
-  const rows = [];
-  function walk(node, depth = 0) { rows.push({ node, depth }); node.children.forEach((child) => walk(child, depth + 1)); }
-  walk(root); const width = 1100; const height = Math.max(160, rows.length * 44 + 60);
-  const escaped = (value) => String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#07111f"/>${rows.map(({node,depth}, i) => `<circle cx="${50 + depth * 180}" cy="${45 + i * 44}" r="5" fill="#38bdf8"/><text x="${66 + depth * 180}" y="${51 + i * 44}" fill="#e8f8ff" font-family="Microsoft YaHei,sans-serif" font-size="16">${escaped(node.title)}</text>`).join("")}</svg>`;
+function setFocusFromBreadcrumb(node) {
+  if (!node || node.id === mapData.value?.root?.id) exitBranchFocus();
+  else enterBranchFocus(node);
 }
 
-function exportMap(format) {
-  if (format === "png") download(canvasRef.value?.exportPng(), "image/png", "png");
-  if (format === "svg") download(toSvg(mapData.value.root), "image/svg+xml", "svg");
-  if (format === "json") download(JSON.stringify(mapData.value, null, 2), "application/json", "json");
-  if (format === "md") download(`# ${mapData.value.root.title}\n\n${toMarkdown(mapData.value.root)}`, "text/markdown", "md");
+function isInsideFocusedBranch(nodeId) {
+  if (!focusRootId.value) return true;
+  const branch = findNode(mapData.value?.root, focusRootId.value);
+  return Boolean(findNode(branch, nodeId));
 }
 
-function formatTime(value) { return value ? new Date(value).toLocaleString("zh-CN") : ""; }
-
-async function generate() {
-  if (!knowledgeBaseId.value) return;
-  if (mapData.value) {
-    try {
-      await ElMessageBox.confirm(
-        "重新生成会覆盖当前正在查看的知识地图（已保存的历史版本不受影响）。确定继续吗？",
-        "重新生成确认",
-        { confirmButtonText: "重新生成", cancelButtonText: "取消", type: "warning" },
-      );
-    } catch {
-      return;
-    }
-  }
-  generating.value = true;
-  loadError.value = "";
-  nodeAnswer.value = null;
-  try {
-    generationJob.value = await createMindMapJob({
-      knowledge_base_id: knowledgeBaseId.value,
-      document_id: documentId.value || null,
-      max_depth: maxDepth.value,
-      max_nodes: maxDepth.value >= 4 ? 48 : maxDepth.value === 3 ? 38 : 26,
-    });
-    sessionStorage.setItem(activeJobKey(), generationJob.value.job_id);
-    sessionStorage.setItem(startedAtKey(), String(Date.now()));
-    startTracking();
-  } catch (error) {
-    loadError.value = error.message;
-    generating.value = false;
-  }
-}
-
-function selectNode(node) {
-  selectedNode.value = node;
-  nodeQuestion.value = "";
-  nodeAnswer.value = null;
-  fetchRelated(node);
-  scrollToDetail();
-}
-
-async function focusLearningNode(node) {
+function selectOutlineNode(node) {
   if (!node) return;
-  if (canvasRef.value?.focusNode) {
-    await canvasRef.value.focusNode(node.id);
+  if (!isInsideFocusedBranch(node.id)) exitBranchFocus();
+  selectNode(node, { scroll: false });
+}
+
+async function openLearningNode(node) {
+  if (!node) return;
+  if (!isInsideFocusedBranch(node.id)) exitBranchFocus();
+  await nextTick();
+  await focusLearningNode(node);
+}
+
+function changeDensity(value) {
+  layoutDensity.value = value === "compact" ? "compact" : "comfortable";
+  commitViewPreference({ layout_density: layoutDensity.value });
+}
+
+function changeDisplayMode(value) {
+  displayMode.value = value === "title" ? "title" : "detail";
+  commitViewPreference({ display_mode: displayMode.value });
+}
+
+function toggleSelectedBranch() {
+  canvasRef.value?.toggleSelectedBranch?.();
+}
+
+async function openInspector() {
+  inspectorOpen.value = true;
+  await nextTick();
+  if (window.innerWidth <= 980) evidenceRef.value?.scrollIntoView?.();
+}
+
+function toggleZenMode(force) {
+  const next = typeof force === "boolean" ? force : !zenMode.value;
+  if (next === zenMode.value) return;
+  if (next) {
+    inspectorBeforeZen = inspectorOpen.value;
+    inspectorOpen.value = false;
+    zenMode.value = true;
   } else {
-    selectNode(node);
+    zenMode.value = false;
+    inspectorOpen.value = inspectorBeforeZen;
   }
 }
 
-function masteryStorageKey() {
-  if (!mapData.value?.root) return "";
-  const identity = activeHistoryId.value
-    || mapData.value.history_id
-    || `${knowledgeBaseId.value}-${documentId.value || "all"}-${mapData.value.root.id}`;
-  return `codemind_mind_map_mastery_${identity}`;
+function handleDocumentCommand(command) {
+  if (command === "setup") setupOpen.value = true;
+  if (command === "zen") toggleZenMode();
+  if (command === "delete") removeHistory();
 }
 
-function loadMastery() {
-  const key = masteryStorageKey();
-  if (!key) {
-    masteredNodeIds.value = new Set();
+function isEditableTarget(target) {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
+function handleGlobalKeydown(event) {
+  if (!mapData.value) return;
+  const key = event.key.toLowerCase();
+  if ((event.ctrlKey || event.metaKey) && key === "f") {
+    event.preventDefault();
+    searchInputRef.value?.focus?.();
     return;
   }
-  try {
-    const saved = JSON.parse(localStorage.getItem(key) || "[]");
-    const validIds = new Set(learnableNodes.value.map((node) => node.id));
-    masteredNodeIds.value = new Set(saved.filter((id) => validIds.has(id)));
-  } catch {
-    masteredNodeIds.value = new Set();
-  }
-}
+  if (isEditableTarget(event.target)) return;
+  if (event.repeat && ["f", "z"].includes(key)) return;
 
-function saveMastery() {
-  const key = masteryStorageKey();
-  if (key) localStorage.setItem(key, JSON.stringify([...masteredNodeIds.value]));
-}
-
-function toggleSelectedMastery() {
-  if (!selectedNode.value || selectedNode.value.depth === 0) return;
-  const next = new Set(masteredNodeIds.value);
-  if (next.has(selectedNode.value.id)) next.delete(selectedNode.value.id);
-  else next.add(selectedNode.value.id);
-  masteredNodeIds.value = next;
-  saveMastery();
-}
-
-// 点击节点后，用“标题 + 简介”去整个知识库检索相关片段，作为节点自带原文之外的补充。
-async function fetchRelated(node) {
-  relatedError.value = "";
-  relatedSources.value = [];
-  if (!node || !knowledgeBaseId.value) return;
-  const query = [node.title, node.summary].filter(Boolean).join(" ").trim();
-  if (!query) return;
-  const cacheKey = `${knowledgeBaseId.value}:${node.id}`;
-  if (relatedCache.has(cacheKey)) {
-    relatedSources.value = relatedCache.get(cacheKey);
+  if (key === "escape") {
+    if (focusRootId.value) exitBranchFocus();
+    else if (zenMode.value) toggleZenMode(false);
     return;
   }
-  relatedLoading.value = true;
-  try {
-    const data = await searchKnowledge({
-      knowledge_base_id: knowledgeBaseId.value,
-      query,
-      top_k: 6,
-    });
-    const results = data.results || [];
-    relatedCache.set(cacheKey, results);
-    // 用户可能已经切到别的节点，只有仍停留在当前节点时才写入，避免结果错位。
-    if (selectedNode.value?.id === node.id) {
-      relatedSources.value = results;
-      if (!results.length) relatedError.value = data.message || "没有检索到相关资料。";
-    }
-  } catch (error) {
-    if (selectedNode.value?.id === node.id) relatedError.value = error.message;
-  } finally {
-    relatedLoading.value = false;
-  }
-}
-
-// 小屏（右侧详情栏堆到下方）时，点节点后自动滚到详情，避免用户以为“点了没反应”。
-function scrollToDetail() {
-  if (window.innerWidth > 1080) return;
-  nextTick(() => {
-    evidenceRef.value?.scrollIntoView({ behavior: "smooth", block: "start" });
-  });
-}
-
-async function askNode() {
-  const question = nodeQuestion.value.trim();
-  const chunkIds = questionChunkIds.value;
-  if (!question || !chunkIds.length) return;
-  askingNode.value = true;
-  try {
-    nodeAnswer.value = await askMindMapNode({
-      knowledge_base_id: knowledgeBaseId.value,
-      node_title: selectedNode.value.title,
-      question,
-      source_chunk_ids: chunkIds,
-    });
-  } catch (error) {
-    ElMessage.error(error.message);
-  } finally {
-    askingNode.value = false;
-  }
-}
-
-async function expandSelectedNode() {
-  if (!selectedNode.value?.sources?.length) return;
-  expandingNode.value = true;
-  try {
-    const expanded = await expandMindMapNode({
-      knowledge_base_id: knowledgeBaseId.value, node_title: selectedNode.value.title,
-      node_summary: selectedNode.value.summary || "", child_count: 4,
-      source_chunk_ids: selectedNode.value.sources.map((source) => source.chunk_id).slice(0, 8),
-    });
-    // 后端展开接口返回的子节点 id 从 mind-node-0 起重新编号，会与主树已有节点 id 撞车，
-    // G6 画布遇到重复 id 会渲染失败、导致整张导图消失。这里按选中节点重新编号，保证全树唯一。
-    selectedNode.value.children = relabelBranch(
-      expanded.children || [],
-      selectedNode.value.id,
-      selectedNode.value.depth,
-    );
-    mapData.value.node_count = countNodes(mapData.value.root);
-    ElMessage.success("已根据原文展开该分支，确认后请保存当前版本");
-  } catch (error) { ElMessage.error(error.message); }
-  finally { expandingNode.value = false; }
-}
-
-function countNodes(node) { return 1 + node.children.reduce((total, child) => total + countNodes(child), 0); }
-
-// 递归重编号展开得到的分支：以父节点 id 作前缀加 "-e序号"，避开主树的纯数字路径 id，
-// 同时把 depth 接续到父节点之下，保证画布层级配色正确。
-function relabelBranch(nodes, parentId, parentDepth) {
-  return nodes.map((node, index) => {
-    const id = `${parentId}-e${index}`;
-    return {
-      ...node,
-      id,
-      depth: parentDepth + 1,
-      children: relabelBranch(node.children || [], id, parentDepth + 1),
-    };
-  });
-}
-
-function activeJobKey() {
-  return `codemind_mind_map_job_${knowledgeBaseId.value}`;
-}
-
-function startedAtKey() {
-  return `codemind_mind_map_started_${knowledgeBaseId.value}`;
-}
-
-function clearActiveJob() {
-  sessionStorage.removeItem(activeJobKey());
-  sessionStorage.removeItem(startedAtKey());
-}
-
-async function resumeActiveJob() {
-  const jobId = sessionStorage.getItem(activeJobKey());
-  if (!jobId) return;
-  try {
-    generationJob.value = await getMindMapJob(jobId);
-    if (generationJob.value.status === "completed") {
-      applyCompletedJob();
-    } else if (generationJob.value.status === "failed") {
-      loadError.value = generationJob.value.error_message || "知识地图生成失败。";
-      clearActiveJob();
-      generating.value = false;
-    } else {
-      generating.value = true;
-      startTracking();
-    }
-  } catch {
-    clearActiveJob();
-    generating.value = false;
-  }
-}
-
-function startTracking() {
-  stopTracking();
-  generating.value = true;
-  pollAttempt = 0;
-  const version = trackingVersion;
-  // 以任务真实开始时刻为基准计算已等待时间，切走再回来也能接续显示、不归零。
-  const startedAt = Number(sessionStorage.getItem(startedAtKey())) || Date.now();
-  const tick = () => {
-    elapsedSeconds.value = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
-  };
-  tick();
-  elapsedTimer = window.setInterval(tick, 1000);
-  schedulePoll(300, version);
-}
-
-function nextPollDelay() {
-  if (pollAttempt < 10) return 1500;
-  if (pollAttempt < 30) return 3000;
-  return 5000;
-}
-
-function schedulePoll(delay = nextPollDelay(), version = trackingVersion) {
-  window.clearTimeout(pollTimer);
-  pollTimer = window.setTimeout(() => pollJob(version), delay);
-}
-
-async function pollJob(version) {
-  if (version !== trackingVersion) return;
-  const jobId = generationJob.value?.job_id;
-  if (!jobId) return;
-  try {
-    const latestJob = await getMindMapJob(jobId);
-    // 切换知识库或开始了新任务后，丢弃旧请求迟到的响应，避免状态串线。
-    if (version !== trackingVersion || generationJob.value?.job_id !== jobId) return;
-    generationJob.value = latestJob;
-    pollAttempt += 1;
-    if (loadError.value.startsWith("无法读取生成进度：")) loadError.value = "";
-    if (generationJob.value.status === "completed") {
-      applyCompletedJob();
-      return;
-    }
-    if (generationJob.value.status === "failed") {
-      loadError.value = generationJob.value.error_message || "知识地图生成失败。";
-      clearActiveJob();
-      stopTracking();
-      generating.value = false;
-      return;
-    }
-    schedulePoll(nextPollDelay(), version);
-  } catch (error) {
-    if (version !== trackingVersion) return;
-    loadError.value = `无法读取生成进度：${error.message}`;
-    pollAttempt += 1;
-    schedulePoll(Math.max(3000, nextPollDelay()), version);
-  }
-}
-
-function applyCompletedJob() {
-  if (!generationJob.value?.result?.root) {
-    loadError.value = "生成任务已结束，但没有返回有效的知识地图，请重新生成。";
-    clearActiveJob();
-    stopTracking();
-    generating.value = false;
+  if ((event.ctrlKey || event.metaKey) && key === "0") {
+    event.preventDefault();
+    canvasRef.value?.centerRoot?.();
     return;
   }
-  mapData.value = generationJob.value.result;
-  activeHistoryId.value = mapData.value.history_id;
-  loadMastery();
-  relatedCache.clear();
-  selectNode(mapData.value.root);
-  clearActiveJob();
-  stopTracking();
-  generating.value = false;
-  // 生成时后端已自动存了一份历史，这里刷新清单，让新地图立刻出现在历史下拉框里。
-  loadHistories().catch((error) => ElMessage.warning(`历史列表刷新失败：${error.message}`));
-  ElMessage.success("知识地图已生成");
+  if (key === "f") {
+    event.preventDefault();
+    enterBranchFocus();
+  } else if (key === "z") {
+    event.preventDefault();
+    toggleZenMode();
+  } else if (["+", "="].includes(event.key)) {
+    event.preventDefault();
+    canvasRef.value?.zoom?.(1.2);
+  } else if (event.key === "-") {
+    event.preventDefault();
+    canvasRef.value?.zoom?.(0.82);
+  }
 }
 
-function stopTracking() {
-  trackingVersion += 1;
-  window.clearTimeout(pollTimer);
-  window.clearInterval(elapsedTimer);
-  pollTimer = null;
-  elapsedTimer = null;
-}
+watch(historyViewState, (state) => {
+  const root = mapData.value?.root;
+  const savedFocus = findNode(root, state?.focus_root_id)?.children?.length ? state.focus_root_id : "";
+  focusRootId.value = savedFocus;
+  layoutDensity.value = state?.layout_density === "compact" ? "compact" : "comfortable";
+  displayMode.value = state?.display_mode === "title" ? "title" : "detail";
+});
 
-function stageClass(stageKey) {
-  const order = stageSteps.map((stage) => stage.key);
-  const currentIndex = order.indexOf(generationJob.value?.stage);
-  const stageIndex = order.indexOf(stageKey);
-  return {
-    active: stageIndex === currentIndex,
-    done: currentIndex > stageIndex || generationJob.value?.status === "completed",
-  };
-}
+watch(() => mapData.value?.root?.id, () => {
+  setupOpen.value = false;
+  outlineFilter.value = "all";
+});
+
+onMounted(() => window.addEventListener("keydown", handleGlobalKeydown));
+onBeforeUnmount(() => window.removeEventListener("keydown", handleGlobalKeydown));
 </script>
 
 <style scoped>
 .mind-map-view {
+  --atlas-cobalt: #2f5ee5;
+  --atlas-teal: #168c8c;
+  --atlas-amber: #d9912b;
   min-height: 100vh;
   padding: 16px 0 64px;
 }
 
 .map-page {
   display: grid;
-  gap: 18px;
-  width: min(1440px, calc(100% - 32px));
-  margin: 42px auto 0;
+  gap: 16px;
+  width: min(1540px, calc(100% - 32px));
+  margin: 34px auto 0;
 }
 
-.page-intro {
+.page-heading {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
   gap: 32px;
-  padding: 12px 4px 18px;
+  padding: 8px 4px 12px;
 }
 
-.eyebrow,
-.evidence-kicker span {
-  margin: 0 0 10px;
-  color: var(--cm-primary);
-  font-family: Consolas, "Microsoft YaHei", monospace;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
+.utility-label {
+  margin: 0 0 7px;
+  color: var(--atlas-cobalt);
+  font-family: "DIN Alternate", Consolas, "Microsoft YaHei", monospace;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.13em;
 }
 
-.page-intro h1 {
-  max-width: 760px;
+.page-heading h1 {
   margin: 0;
   color: var(--cm-heading);
-  font-family: "Songti SC", "STSong", "Noto Serif SC", serif;
-  font-size: clamp(32px, 4.3vw, 62px);
-  font-weight: 780;
-  letter-spacing: -0.045em;
-  line-height: 1.04;
+  font-family: "Source Han Serif SC", "Songti SC", "STSong", serif;
+  font-size: clamp(34px, 4vw, 52px);
+  letter-spacing: -0.035em;
+  line-height: 1.08;
 }
 
-.intro-copy {
-  max-width: 620px;
-  margin: 18px 0 0;
+.page-heading > div:first-child > p:last-child {
+  max-width: 600px;
+  margin: 11px 0 0;
   color: var(--cm-muted);
-  font-size: 16px;
-  line-height: 1.75;
+  font-size: 14px;
+  line-height: 1.7;
 }
 
-.intro-mark {
+.map-snapshot {
   display: grid;
-  min-width: 118px;
+  min-width: 126px;
   padding-left: 20px;
   border-left: 1px solid var(--cm-border);
-  color: var(--cm-muted);
   justify-items: end;
 }
 
-.intro-mark span,
-.intro-mark small {
-  font-family: Consolas, monospace;
-  font-size: 11px;
-  letter-spacing: 0.12em;
+.map-snapshot span,
+.map-snapshot small {
+  color: var(--cm-muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
 }
 
-.intro-mark strong {
+.map-snapshot strong {
   color: var(--cm-heading);
-  font-size: 46px;
+  font-family: "DIN Alternate", Consolas, monospace;
+  font-size: 38px;
   line-height: 1.1;
 }
 
-.map-controls {
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.2fr) auto auto;
-  align-items: end;
-  gap: 14px;
-  padding: 16px;
+.control-deck {
+  padding: 16px 18px;
   border: 1px solid var(--cm-border);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--cm-surface) 92%, transparent);
-  box-shadow: 0 12px 34px rgba(15, 29, 53, 0.07);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--cm-surface) 94%, transparent);
+  box-shadow: 0 14px 38px rgba(28, 50, 84, 0.08);
   backdrop-filter: blur(14px);
 }
 
-.map-controls label {
-  display: grid;
-  min-width: 0;
-  gap: 7px;
+.control-deck-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 13px;
 }
 
-.map-controls label > span {
+.control-deck-heading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.control-deck-heading span {
+  color: var(--cm-heading);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.control-deck-heading p {
+  margin: 0;
   color: var(--cm-muted);
-  font-size: 12px;
+  font-size: 11px;
+}
+
+.working-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--atlas-cobalt) !important;
+  font-size: 11px !important;
+}
+
+.working-badge i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--atlas-cobalt);
+  box-shadow: 0 0 0 5px var(--cm-primary-soft);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.control-grid {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.8fr) minmax(220px, 1.1fr) auto minmax(240px, 1.15fr) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.control-grid label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.control-grid label > span {
+  color: var(--cm-muted);
+  font-size: 11px;
   font-weight: 700;
 }
 
 .generate-button {
   min-height: 40px;
-  padding-inline: 22px;
+  padding-inline: 21px;
 }
 
-.map-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 18px;
-  color: var(--cm-muted);
-  font-size: 13px;
-}
-
-.map-actions {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto auto auto;
-  gap: 10px;
-  align-items: center;
-  padding: 12px;
-  border: 1px solid var(--cm-border);
-  border-radius: 12px;
-  background: var(--cm-surface);
-}
-
-.history-bar {
-  display: grid;
-  grid-template-columns: minmax(0, 440px);
-  padding: 0 4px;
-}
-
-.history-bar label {
-  display: grid;
-  gap: 7px;
-}
-
-.history-bar label > span {
-  color: var(--cm-muted);
+.control-guidance {
+  margin: 12px 0 0;
+  color: var(--cm-warning);
   font-size: 12px;
-  font-weight: 700;
 }
 
-.map-meta p {
-  min-width: 260px;
-  margin: 0 0 0 auto;
-  text-align: right;
-}
-
-.learning-overview {
-  display: grid;
-  grid-template-columns: minmax(220px, 0.8fr) minmax(420px, 1.6fr) minmax(220px, 0.8fr);
-  align-items: stretch;
-  gap: 18px;
-  padding: 18px 20px;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--cm-primary) 18%, var(--cm-border));
-  border-radius: 16px;
-  background:
-    linear-gradient(110deg, color-mix(in srgb, var(--cm-primary-soft) 48%, var(--cm-surface)), var(--cm-surface) 42%);
-  box-shadow: 0 16px 44px rgba(15, 29, 53, 0.08);
-}
-
-.overview-title,
-.overview-title > div,
-.mastery-progress,
-.next-learning {
-  display: grid;
-}
-
-.overview-title {
-  align-content: space-between;
-  gap: 16px;
-  padding-right: 18px;
-  border-right: 1px solid var(--cm-border);
-}
-
-.overview-title > div:first-child { gap: 5px; }
-.overview-title > div:first-child span,
-.section-caption {
-  color: var(--cm-primary);
-  font-family: Consolas, "Microsoft YaHei", monospace;
-  font-size: 10px;
+.control-guidance a {
+  margin-left: 8px;
+  color: var(--atlas-cobalt);
   font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.overview-title > div:first-child strong {
-  color: var(--cm-heading);
-  font-family: "Songti SC", "STSong", serif;
-  font-size: 20px;
-}
-
-.mastery-progress {
-  grid-template-columns: 1fr auto;
-  align-items: end;
-  gap: 10px;
-  color: var(--cm-muted);
-  font-size: 11px;
-}
-
-.mastery-progress strong {
-  color: var(--cm-primary);
-  font-family: Consolas, monospace;
-  font-size: 24px;
-}
-
-.overview-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  align-items: center;
-}
-
-.overview-metrics article {
-  display: grid;
-  gap: 4px;
-  padding: 4px 18px;
-  border-right: 1px solid var(--cm-border);
-}
-
-.overview-metrics article:last-child { border-right: 0; }
-.overview-metrics strong {
-  color: var(--cm-heading);
-  font-family: Consolas, "Microsoft YaHei", monospace;
-  font-size: clamp(22px, 2.4vw, 34px);
-  line-height: 1;
-}
-.overview-metrics span { color: var(--cm-muted); font-size: 11px; }
-
-.next-learning {
-  position: relative;
-  align-content: center;
-  gap: 5px;
-  min-width: 0;
-  padding: 15px 44px 15px 17px;
-  border: 1px solid color-mix(in srgb, var(--cm-primary) 28%, var(--cm-border));
-  border-radius: 12px;
-  color: inherit;
-  background: var(--cm-surface);
-  text-align: left;
-  cursor: pointer;
-}
-
-.next-learning span { color: var(--cm-muted); font-size: 11px; }
-.next-learning strong { overflow: hidden; color: var(--cm-heading); text-overflow: ellipsis; white-space: nowrap; }
-.next-learning i {
-  position: absolute;
-  top: 50%;
-  right: 17px;
-  color: var(--cm-primary);
-  font-size: 22px;
-  font-style: normal;
-  transform: translateY(-50%);
-}
-.next-learning:hover { border-color: var(--cm-primary); }
-
-.mode-chip {
-  border-radius: 999px;
-  padding: 5px 10px;
-  color: #1e40af;
-  background: #dbeafe;
-  font-weight: 800;
-}
-
-.mode-chip.fallback {
-  color: #92400e;
-  background: #fef3c7;
 }
 
 .generation-status {
   display: grid;
-  gap: 15px;
-  padding: 18px 20px;
-  border: 1px solid color-mix(in srgb, var(--cm-primary) 30%, var(--cm-border));
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--cm-primary-soft) 55%, var(--cm-surface));
+  gap: 13px;
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--atlas-cobalt) 28%, var(--cm-border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--cm-primary-soft) 45%, var(--cm-surface));
 }
 
 .status-copy {
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 12px;
+  gap: 13px;
 }
 
 .status-copy > span {
-  border-radius: 999px;
   padding: 5px 9px;
-  color: var(--cm-primary);
+  border-radius: 999px;
+  color: var(--atlas-cobalt);
   background: var(--cm-surface);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
 }
 
+.status-copy > div { display: grid; gap: 3px; }
 .status-copy strong { color: var(--cm-heading); }
-.status-copy small { color: var(--cm-muted); }
+.status-copy small { color: var(--cm-muted); font-size: 11px; }
+.status-copy b {
+  color: var(--atlas-cobalt);
+  font-family: "DIN Alternate", Consolas, monospace;
+  font-size: 22px;
+}
 
 .stage-track {
   display: grid;
@@ -1251,496 +853,900 @@ function stageClass(stageKey) {
   align-items: center;
   gap: 6px;
   color: var(--cm-muted);
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .stage-track i {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border: 2px solid var(--cm-border);
   border-radius: 50%;
   background: var(--cm-surface);
 }
 
-.stage-track span.active {
-  color: var(--cm-primary);
-  font-weight: 800;
-}
-
+.stage-track span.active { color: var(--atlas-cobalt); font-weight: 800; }
 .stage-track span.active i {
-  border-color: var(--cm-primary);
+  border-color: var(--atlas-cobalt);
   box-shadow: 0 0 0 4px var(--cm-primary-soft);
 }
+.stage-track span.done i { border-color: var(--cm-success); background: var(--cm-success); }
 
-.stage-track span.done i {
-  border-color: var(--cm-success);
-  background: var(--cm-success);
-}
-
-.atlas-workspace {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 390px;
-  gap: 18px;
-  align-items: stretch;
-}
-
-.evidence-panel {
-  position: relative;
-  max-height: 650px;
-  overflow: auto;
-  padding: 22px 24px 30px;
+.map-command-center {
+  overflow: hidden;
   border: 1px solid var(--cm-border);
-  border-radius: 14px;
+  border-radius: 18px;
   background: var(--cm-surface);
-  box-shadow: var(--cm-shadow);
+  box-shadow: 0 16px 44px rgba(28, 50, 84, 0.08);
 }
 
-.evidence-panel::before {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 3px;
-  height: 112px;
-  background: linear-gradient(var(--cm-primary), #22d3ee, transparent);
-  content: "";
-}
-
-.evidence-kicker {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.evidence-kicker span { margin: 0; }
-
-.evidence-kicker i {
-  height: 1px;
-  flex: 1;
-  background: var(--cm-border);
-}
-
-.node-depth {
-  margin: 0;
-  color: var(--cm-muted);
-  font-size: 12px;
-}
-
-.evidence-panel h2 {
-  margin: 0;
-  color: var(--cm-heading);
-  font-family: "Songti SC", "STSong", "Noto Serif SC", serif;
-  font-size: 28px;
-  line-height: 1.25;
-}
-
-.node-summary {
-  margin: 8px 0 22px;
-  color: var(--cm-text);
-  line-height: 1.78;
-}
-
-.node-breadcrumb {
-  display: flex;
-  gap: 6px;
-  margin: 20px 0 12px;
-  overflow-x: auto;
-}
-
-.node-breadcrumb button {
-  position: relative;
-  flex: 0 0 auto;
-  padding: 0 14px 0 0;
-  border: 0;
-  color: var(--cm-muted);
-  background: transparent;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.node-breadcrumb button::after {
-  position: absolute;
-  right: 4px;
-  color: var(--cm-border);
-  content: "/";
-}
-.node-breadcrumb button:last-child { color: var(--cm-primary); font-weight: 800; }
-.node-breadcrumb button:last-child::after { display: none; }
-
-.node-meta-row {
+.map-identity {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 7px;
+  gap: 24px;
+  padding: 18px 20px 16px;
 }
 
-.mastery-toggle {
-  padding: 6px 10px;
-  border: 1px solid var(--cm-border);
-  border-radius: 999px;
-  color: var(--cm-muted);
-  background: var(--cm-surface-soft);
-  font-size: 11px;
-  cursor: pointer;
-}
-.mastery-toggle.mastered {
-  border-color: color-mix(in srgb, var(--cm-success) 46%, var(--cm-border));
-  color: var(--cm-success);
-  background: color-mix(in srgb, var(--cm-success) 9%, var(--cm-surface));
-}
-
-.section-caption {
-  display: block;
-  margin-top: 18px;
-}
-
-.key-points { margin-bottom: 20px; }
-.key-points ul {
-  display: grid;
-  gap: 9px;
-  margin: 10px 0 0;
-  padding: 0;
-  list-style: none;
-}
-.key-points li {
-  position: relative;
-  padding-left: 18px;
-  color: var(--cm-text);
-  font-size: 13px;
-  line-height: 1.6;
-}
-.key-points li::before {
-  position: absolute;
-  top: 0.68em;
-  left: 2px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--cm-primary);
-  box-shadow: 0 0 0 4px var(--cm-primary-soft);
-  content: "";
-}
-
-.learning-tip {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 12px;
-  margin-bottom: 20px;
-  padding: 13px 14px;
-  border: 1px solid color-mix(in srgb, #f4c95d 44%, var(--cm-border));
-  border-radius: 10px;
-  background: color-mix(in srgb, #f4c95d 10%, var(--cm-surface));
-}
-.learning-tip span { color: #9a6713; font-size: 11px; font-weight: 800; white-space: nowrap; }
-.learning-tip p { margin: 0; color: var(--cm-text); font-size: 12px; line-height: 1.6; }
-
-.child-navigation { margin-bottom: 20px; }
-.child-navigation > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  margin-top: 10px;
-}
-.child-navigation button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 9px;
-  border: 1px solid var(--cm-border);
-  border-radius: 8px;
-  color: var(--cm-text);
-  background: var(--cm-surface-soft);
-  font-size: 11px;
-  cursor: pointer;
-}
-.child-navigation button:hover { border-color: var(--cm-primary); color: var(--cm-primary); }
-.child-navigation i { color: var(--cm-primary); font-style: normal; }
-
-.node-question {
-  display: grid;
-  gap: 11px;
-  margin: 0 0 24px;
-  padding: 15px;
-  border: 1px solid color-mix(in srgb, var(--cm-primary) 22%, var(--cm-border));
-  border-radius: 10px;
-  background: var(--cm-primary-soft);
-}
-
-.node-question > div:first-child {
-  display: grid;
-  gap: 3px;
-}
-
-.node-question strong { color: var(--cm-heading); }
-.node-question > div:first-child span {
-  color: var(--cm-muted);
-  font-size: 12px;
-}
-
-.question-hint {
-  margin: 0;
-  color: var(--cm-muted);
-  font-size: 12px;
-}
-
-.node-answer {
-  display: grid;
-  gap: 8px;
-  padding-top: 12px;
-  border-top: 1px solid var(--cm-border);
-}
-
-.node-answer > span {
-  color: var(--cm-primary);
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.node-answer p {
-  margin: 0;
-  color: var(--cm-text);
-  line-height: 1.75;
-  white-space: pre-wrap;
-}
-
-.node-answer > div {
-  display: grid;
-  gap: 5px;
-}
-
-.node-answer a {
-  color: var(--cm-primary);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.source-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-top: 18px;
-  border-top: 1px solid var(--cm-border);
-}
-
-.source-heading span {
-  display: grid;
-  width: 26px;
-  height: 26px;
-  place-items: center;
-  border-radius: 50%;
-  color: var(--cm-primary);
-  background: var(--cm-primary-soft);
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.related-heading {
-  margin-top: 22px;
-}
-
-.related-heading .related-spinner {
-  width: auto;
-  height: auto;
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 11px;
-}
-
-.source-cards {
-  display: grid;
-  gap: 12px;
-  margin-top: 14px;
-}
-
-.source-cards article {
-  padding: 14px;
-  border: 1px solid var(--cm-border);
-  border-radius: 10px;
-  background: var(--cm-surface-soft);
-}
-
-.source-cards.related article {
-  border-color: color-mix(in srgb, var(--cm-primary) 26%, var(--cm-border));
-  background: color-mix(in srgb, var(--cm-primary-soft) 32%, var(--cm-surface));
-}
-
-.source-cards article > div {
-  display: grid;
-  gap: 4px;
-}
-
-.source-cards strong {
+.map-identity > div:first-child { min-width: 0; }
+.map-identity h2 {
+  margin: 7px 0 4px;
   overflow: hidden;
   color: var(--cm-heading);
+  font-family: "Source Han Serif SC", "Songti SC", "STSong", serif;
+  font-size: clamp(22px, 2.3vw, 31px);
+  line-height: 1.22;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.source-cards span {
+.map-identity p {
+  margin: 0;
   color: var(--cm-muted);
   font-size: 12px;
 }
 
-.source-cards p {
-  display: -webkit-box;
-  margin: 12px 0;
-  overflow: hidden;
-  color: var(--cm-text);
-  font-size: 13px;
-  line-height: 1.65;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 5;
-}
-
-.source-cards a {
-  color: var(--cm-primary);
-  font-size: 13px;
+.map-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--cm-success);
+  font-size: 10px;
   font-weight: 800;
 }
 
-.related-hint {
-  margin: 12px 0 0;
+.map-status i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.map-status.dirty { color: var(--atlas-amber); }
+.file-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+
+.learning-route {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.65fr) minmax(420px, 1.7fr) minmax(220px, 0.75fr);
+  align-items: center;
+  gap: 20px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--cm-border);
+  border-bottom: 1px solid var(--cm-border);
+  background: color-mix(in srgb, var(--cm-surface-soft) 84%, var(--cm-primary-soft));
+}
+
+.progress-copy {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 4px 10px;
+}
+
+.progress-copy span { color: var(--cm-muted); font-size: 11px; }
+.progress-copy strong {
+  color: var(--atlas-cobalt);
+  font-family: "DIN Alternate", Consolas, monospace;
+  font-size: 20px;
+}
+
+.progress-copy > div {
+  grid-column: 1 / -1;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--cm-border);
+}
+
+.progress-copy i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--atlas-cobalt), var(--atlas-teal));
+  transition: width 0.25s ease;
+}
+
+.learning-route dl {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin: 0;
+}
+
+.learning-route dl > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  justify-content: center;
+  border-right: 1px solid var(--cm-border);
+}
+
+.learning-route dl > div:last-child { border-right: 0; }
+.learning-route dt { color: var(--cm-muted); font-size: 10px; }
+.learning-route dd {
+  margin: 0;
+  color: var(--cm-heading);
+  font-family: "DIN Alternate", Consolas, monospace;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.continue-learning {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 38px 10px 12px;
+  border: 1px solid var(--cm-border);
+  border-radius: 10px;
+  color: inherit;
+  background: var(--cm-surface);
+  text-align: left;
+  cursor: pointer;
+}
+
+.continue-learning span { color: var(--cm-muted); font-size: 10px; }
+.continue-learning strong {
+  overflow: hidden;
+  color: var(--cm-heading);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.continue-learning i {
+  position: absolute;
+  top: 50%;
+  right: 13px;
+  color: var(--atlas-cobalt);
+  font-size: 18px;
+  font-style: normal;
+  transform: translateY(-50%);
+}
+.continue-learning:hover,
+.continue-learning:focus-visible { border-color: var(--atlas-cobalt); outline: none; }
+
+.map-search-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 11px 20px;
+}
+
+.node-search {
+  display: grid;
+  grid-template-columns: minmax(240px, 380px) auto 32px 32px;
+  align-items: center;
+  gap: 6px;
+}
+
+.search-count {
+  min-width: 48px;
   color: var(--cm-muted);
-  font-size: 13px;
-  line-height: 1.6;
+  font-family: "DIN Alternate", Consolas, monospace;
+  font-size: 11px;
+  text-align: center;
+}
+
+.node-search button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--cm-border);
+  border-radius: 8px;
+  color: var(--cm-text);
+  background: var(--cm-surface-soft);
+  cursor: pointer;
+}
+.node-search button:disabled { opacity: 0.35; cursor: not-allowed; }
+.node-search button:not(:disabled):hover { border-color: var(--atlas-cobalt); color: var(--atlas-cobalt); }
+.map-search-row > p { margin: 0; color: var(--cm-muted); font-size: 10px; }
+
+.atlas-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 390px);
+  gap: 16px;
+  align-items: stretch;
 }
 
 .empty-atlas {
   position: relative;
   display: grid;
-  min-height: 480px;
+  min-height: 520px;
   overflow: hidden;
   place-items: center;
-  border: 1px solid rgba(37, 99, 235, 0.16);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--cm-surface) 72%, transparent);
+  border: 1px solid var(--cm-border);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--cm-primary-soft) 72%, transparent), transparent 34%),
+    var(--cm-surface);
   text-align: center;
 }
 
-.empty-atlas > div:last-child {
+.empty-copy {
   position: relative;
   z-index: 2;
+  max-width: 640px;
+  padding: 32px;
 }
 
-.empty-atlas p {
-  margin: 0 0 8px;
-  color: var(--cm-primary);
-  font-size: 13px;
+.empty-copy > span {
+  color: var(--atlas-cobalt);
+  font-size: 11px;
   font-weight: 800;
+  letter-spacing: 0.09em;
 }
 
-.empty-atlas h2 {
-  margin: 0 0 10px;
+.empty-copy h2 {
+  margin: 8px 0 10px;
   color: var(--cm-heading);
-  font-size: clamp(24px, 4vw, 38px);
+  font-family: "Source Han Serif SC", "Songti SC", serif;
+  font-size: clamp(26px, 3vw, 38px);
 }
 
-.empty-atlas span { color: var(--cm-muted); }
-
-.constellation {
-  position: absolute;
-  inset: 0;
-  opacity: 0.42;
+.empty-copy p { margin: 0; color: var(--cm-muted); line-height: 1.7; }
+.empty-copy ol {
+  display: flex;
+  justify-content: center;
+  gap: 22px;
+  margin: 26px 0 0;
+  padding: 0;
+  color: var(--cm-muted);
+  font-size: 12px;
+  list-style: none;
 }
-
-.point,
-.line { position: absolute; }
-
-.point {
-  width: 12px;
-  height: 12px;
-  border: 3px solid color-mix(in srgb, var(--cm-primary) 45%, transparent);
+.empty-copy li { display: flex; align-items: center; gap: 7px; }
+.empty-copy b {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
   border-radius: 50%;
+  color: var(--atlas-cobalt);
+  background: var(--cm-primary-soft);
+  font-family: Consolas, monospace;
+  font-size: 10px;
+}
+
+.empty-map-mark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 720px;
+  height: 360px;
+  opacity: 0.34;
+  transform: translate(-50%, -50%);
+}
+
+.map-node,
+.route { position: absolute; }
+.map-node {
+  z-index: 2;
+  width: 26px;
+  height: 18px;
+  border: 2px solid var(--atlas-cobalt);
+  border-radius: 6px;
   background: var(--cm-surface);
 }
-
-.point.one { top: 22%; left: 18%; }
-.point.two { top: 30%; right: 22%; }
-.point.three { bottom: 22%; left: 28%; }
-.point.four { right: 17%; bottom: 17%; }
-
-.line {
-  width: 38%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--cm-primary), transparent);
-  transform-origin: left;
+.root-node { top: 171px; left: 347px; width: 34px; height: 24px; background: var(--atlas-cobalt); }
+.node-a { top: 58px; left: 92px; border-color: var(--atlas-teal); }
+.node-b { top: 54px; right: 84px; border-color: var(--atlas-amber); }
+.node-c { right: 52px; bottom: 56px; border-color: #7457c6; }
+.route {
+  z-index: 1;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--atlas-cobalt));
+  transform-origin: right center;
 }
-
-.line.a { top: 25%; left: 19%; transform: rotate(8deg); }
-.line.b { top: 34%; left: 28%; transform: rotate(62deg); }
-.line.c { right: 16%; bottom: 22%; transform: rotate(-16deg); }
+.route-a { top: 124px; left: 111px; width: 258px; transform: rotate(24deg); }
+.route-b { top: 124px; right: 103px; width: 265px; transform: rotate(-24deg); }
+.route-c { right: 70px; bottom: 117px; width: 306px; transform: rotate(25deg); }
 
 .state-message {
   margin: 0;
   padding: 12px 14px;
-  border-radius: 8px;
+  border-radius: 10px;
 }
-
 .error-state {
   color: var(--cm-danger);
-  background: color-mix(in srgb, var(--cm-danger) 10%, var(--cm-surface));
+  background: color-mix(in srgb, var(--cm-danger) 9%, var(--cm-surface));
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.6; transform: scale(0.86); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@media (max-width: 1250px) {
+  .control-grid {
+    grid-template-columns: 1fr 1.2fr auto auto;
+  }
+  .history-control { grid-column: 1 / 3; }
+  .generate-button { grid-column: 4; grid-row: 1; }
+  .learning-route { grid-template-columns: 180px 1fr; }
+  .continue-learning { grid-column: 1 / -1; }
 }
 
 @media (max-width: 1080px) {
-  .map-controls {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .atlas-workspace {
-    grid-template-columns: 1fr;
-  }
-
-  .evidence-panel {
-    max-height: none;
-  }
-  .learning-overview { grid-template-columns: 1fr; }
-  .overview-title {
-    grid-template-columns: 1fr auto;
-    align-items: end;
-    padding: 0 0 14px;
-    border-right: 0;
-    border-bottom: 1px solid var(--cm-border);
-  }
-  .map-actions { grid-template-columns: 1fr 1fr auto; }
+  .atlas-workspace { grid-template-columns: 1fr; }
+  .learning-route { grid-template-columns: 1fr; }
+  .learning-route dl > div { justify-content: flex-start; }
+  .continue-learning { grid-column: auto; }
+  .map-search-row { align-items: flex-start; flex-direction: column; }
 }
 
-@media (max-width: 680px) {
+@media (max-width: 760px) {
   .mind-map-view { padding-top: 8px; }
-
   .map-page {
-    width: min(100% - 20px, 1440px);
-    margin-top: 30px;
+    width: min(100% - 20px, 1540px);
+    margin-top: 26px;
   }
-
-  .page-intro {
-    grid-template-columns: 1fr;
-  }
-
-  .intro-mark { display: none; }
-
-  .map-controls {
-    grid-template-columns: 1fr;
-  }
-  .map-actions { grid-template-columns: 1fr; }
-
-  .learning-overview { padding: 16px; }
-  .overview-title { grid-template-columns: 1fr; }
-  .overview-metrics { grid-template-columns: 1fr 1fr; gap: 16px 0; }
-  .overview-metrics article:nth-child(2) { border-right: 0; }
-  .overview-metrics article { padding-left: 8px; }
-
-  .status-copy {
-    grid-template-columns: 1fr;
-  }
-
-  .stage-track {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  .map-meta p {
+  .page-heading { grid-template-columns: 1fr; }
+  .map-snapshot { display: none; }
+  .control-deck { padding: 14px; }
+  .control-deck-heading > div { display: grid; gap: 3px; }
+  .control-grid { grid-template-columns: 1fr; }
+  .history-control,
+  .generate-button { grid-column: auto; grid-row: auto; }
+  .status-copy { grid-template-columns: 1fr auto; }
+  .status-copy > span { grid-column: 1 / -1; justify-self: start; }
+  .stage-track { grid-template-columns: repeat(2, 1fr); }
+  .map-identity { align-items: flex-start; flex-direction: column; }
+  .file-actions { width: 100%; flex-wrap: wrap; }
+  .learning-route dl { grid-template-columns: 1fr 1fr; gap: 11px 0; }
+  .learning-route dl > div:nth-child(2) { border-right: 0; }
+  .node-search {
     width: 100%;
-    margin-left: 0;
-    text-align: left;
+    grid-template-columns: minmax(0, 1fr) auto 32px 32px;
   }
+  .empty-copy ol { align-items: flex-start; flex-direction: column; width: max-content; margin-inline: auto; }
+}
+
+/* XMind 式画布优先工作区：地图生成后只保留紧凑文档栏，把空间让给画布。 */
+.mind-map-view {
+  min-height: 100vh;
+  padding: 12px 0 44px;
+}
+
+.map-page {
+  gap: 12px;
+  width: min(1600px, calc(100% - 24px));
+  margin-top: 24px;
+}
+
+.page-heading { padding-block: 8px 4px; }
+.page-heading h1 { font-size: clamp(34px, 4vw, 50px); }
+
+.control-deck {
+  padding: 15px 17px;
+  border-radius: 13px;
+  box-shadow: 0 10px 30px rgba(28, 50, 84, 0.07);
+}
+
+.control-deck-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.control-deck-actions > button,
+.map-navigator header > button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  color: var(--cm-muted);
+  background: var(--cm-surface-soft);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.generation-ribbon {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(180px, 0.65fr) auto;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 10px 13px;
+  border: 1px solid color-mix(in srgb, var(--atlas-cobalt) 28%, var(--cm-border));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--cm-primary-soft) 50%, var(--cm-surface));
+}
+
+.generation-ribbon.failed {
+  border-color: color-mix(in srgb, var(--cm-danger) 36%, var(--cm-border));
+  background: color-mix(in srgb, var(--cm-danger) 7%, var(--cm-surface));
+}
+
+.ribbon-stage {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.ribbon-stage > i {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--atlas-cobalt);
+  box-shadow: 0 0 0 5px var(--cm-primary-soft);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.failed .ribbon-stage > i { background: var(--cm-danger); box-shadow: none; animation: none; }
+.ribbon-stage > div { display: grid; min-width: 0; gap: 2px; }
+.ribbon-stage span { color: var(--atlas-cobalt); font-size: 10px; font-weight: 800; }
+.ribbon-stage strong { overflow: hidden; color: var(--cm-heading); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.ribbon-progress { height: 4px; overflow: hidden; border-radius: 999px; background: var(--cm-border); }
+.ribbon-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--atlas-cobalt), var(--atlas-teal)); }
+.generation-ribbon > b { color: var(--atlas-cobalt); font-family: "DIN Alternate", Consolas, monospace; font-size: 15px; }
+.generation-ribbon > small { grid-column: 1 / 3; color: var(--cm-warning); font-size: 10px; }
+.generation-ribbon > button { justify-self: end; border: 0; color: var(--atlas-cobalt); background: transparent; font-size: 11px; font-weight: 800; cursor: pointer; }
+
+.map-document-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: minmax(270px, 1fr) minmax(250px, 430px) auto;
+  min-height: 58px;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--cm-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--cm-surface) 94%, transparent);
+  box-shadow: 0 8px 24px rgba(28, 50, 84, 0.08);
+  backdrop-filter: blur(16px);
+}
+
+.document-leading,
+.document-actions,
+.node-search {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.document-leading { gap: 10px; }
+.rail-toggle,
+.plain-action,
+.more-action,
+.shortcut-action {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--cm-border);
+  border-radius: 8px;
+  color: var(--cm-muted);
+  background: var(--cm-surface-soft);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.rail-toggle.active,
+.plain-action.active {
+  border-color: color-mix(in srgb, var(--atlas-cobalt) 34%, var(--cm-border));
+  color: var(--atlas-cobalt);
+  background: var(--cm-primary-soft);
+}
+
+.document-title {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 2px 8px;
+}
+
+.document-title strong {
+  overflow: hidden;
+  color: var(--cm-heading);
+  font-family: "Source Han Serif SC", "Songti SC", "STSong", serif;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-title small {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--cm-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-status { align-self: center; }
+.node-search { display: grid; grid-template-columns: minmax(0, 1fr) auto 30px 30px; gap: 5px; }
+.node-search :deep(.el-input__wrapper) { min-height: 34px; border-radius: 8px; box-shadow: 0 0 0 1px var(--cm-border) inset; }
+.node-search > button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--cm-border);
+  border-radius: 7px;
+  color: var(--cm-muted);
+  background: var(--cm-surface-soft);
+  cursor: pointer;
+}
+.node-search > button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.document-actions { justify-content: flex-end; gap: 6px; }
+.more-action,
+.shortcut-action { width: 34px; padding: 0; letter-spacing: 0.05em; }
+.shortcut-list { display: grid; gap: 9px; color: var(--cm-text); }
+.shortcut-list strong { color: var(--cm-heading); }
+.shortcut-list span { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 12px; }
+kbd {
+  padding: 2px 5px;
+  border: 1px solid var(--cm-border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  color: var(--cm-muted);
+  background: var(--cm-surface-soft);
+  font-family: "DIN Alternate", Consolas, monospace;
+  font-size: 9px;
+}
+
+.learning-strip {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.65fr) minmax(320px, 1.2fr) minmax(220px, 0.75fr);
+  align-items: center;
+  gap: 16px;
+  padding: 9px 12px;
+  border: 1px solid var(--cm-border);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--cm-surface-soft) 82%, var(--cm-primary-soft));
+}
+
+.learning-progress {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 3px 9px;
+}
+.learning-progress span { color: var(--cm-muted); font-size: 10px; }
+.learning-progress strong { color: var(--atlas-cobalt); font-family: "DIN Alternate", Consolas, monospace; font-size: 16px; }
+.learning-progress > div { grid-column: 1 / -1; height: 3px; overflow: hidden; border-radius: 99px; background: var(--cm-border); }
+.learning-progress i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--atlas-cobalt), var(--atlas-teal)); }
+.learning-strip dl { display: grid; grid-template-columns: repeat(3, 1fr); margin: 0; }
+.learning-strip dl > div { display: flex; justify-content: center; gap: 6px; border-right: 1px solid var(--cm-border); }
+.learning-strip dl > div:last-child { border-right: 0; }
+.learning-strip dt { color: var(--cm-muted); font-size: 10px; }
+.learning-strip dd { margin: 0; color: var(--cm-heading); font-family: "DIN Alternate", Consolas, monospace; font-size: 13px; font-weight: 800; }
+
+.learning-strip .continue-learning { min-height: 38px; padding-block: 7px; }
+
+.atlas-workspace {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.atlas-workspace.has-navigator { grid-template-columns: 244px minmax(0, 1fr); }
+.atlas-workspace.has-inspector { grid-template-columns: minmax(0, 1fr) minmax(340px, 380px); }
+.atlas-workspace.has-navigator.has-inspector { grid-template-columns: 244px minmax(0, 1fr) minmax(340px, 380px); }
+
+.map-navigator {
+  display: grid;
+  height: clamp(650px, calc(100vh - 214px), 860px);
+  min-width: 0;
+  overflow: hidden;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  border: 1px solid var(--cm-border);
+  border-radius: 14px;
+  background: var(--cm-surface);
+  box-shadow: 0 14px 38px rgba(28, 50, 84, 0.08);
+}
+
+.map-navigator > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 13px 10px;
+}
+.map-navigator header > div { display: grid; gap: 2px; }
+.map-navigator header span { color: var(--atlas-cobalt); font-size: 10px; font-weight: 800; letter-spacing: 0.08em; }
+.map-navigator header strong { color: var(--cm-heading); font-size: 13px; }
+
+.navigator-filters {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+  margin: 0 10px 9px;
+  padding: 3px;
+  border: 1px solid var(--cm-border);
+  border-radius: 9px;
+  background: var(--cm-surface-soft);
+}
+.navigator-filters button {
+  min-height: 28px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--cm-muted);
+  background: transparent;
+  font-size: 10px;
+  cursor: pointer;
+}
+.navigator-filters button.active { color: var(--atlas-cobalt); background: var(--cm-surface); box-shadow: 0 3px 10px rgba(28, 50, 84, 0.08); }
+
+.outline-tree {
+  min-height: 0;
+  padding: 3px 8px 12px;
+  overflow: auto;
+  scrollbar-color: color-mix(in srgb, var(--cm-muted) 35%, transparent) transparent;
+}
+.outline-tree > button {
+  display: grid;
+  width: 100%;
+  min-height: 34px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px 5px calc(9px + var(--outline-depth) * 14px);
+  border: 0;
+  border-radius: 7px;
+  color: var(--cm-text);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.outline-tree > button:hover { background: var(--cm-surface-soft); }
+.outline-tree > button.selected { color: var(--atlas-cobalt); background: var(--cm-primary-soft); font-weight: 700; }
+.outline-tree > button.focus-root { box-shadow: inset 3px 0 0 var(--atlas-amber); }
+.outline-tree > button > i { width: 7px; height: 7px; border: 1px solid var(--atlas-cobalt); border-radius: 2px; }
+.outline-tree > button.mastered > i { border-color: var(--atlas-teal); background: var(--atlas-teal); }
+.outline-tree > button span { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.outline-tree > button small { display: grid; width: 17px; height: 17px; place-items: center; border-radius: 5px; color: var(--atlas-teal); background: color-mix(in srgb, var(--atlas-teal) 10%, var(--cm-surface)); font-size: 9px; font-weight: 900; }
+.outline-tree > p { margin: 28px 12px; color: var(--cm-muted); font-size: 11px; text-align: center; }
+.map-navigator > footer { display: flex; gap: 12px; padding: 9px 12px; border-top: 1px solid var(--cm-border); color: var(--cm-muted); font-size: 9px; }
+.map-navigator footer span { display: flex; align-items: center; gap: 5px; }
+.map-navigator footer i { width: 7px; height: 7px; border-radius: 2px; }
+.mastered-key { background: var(--atlas-teal); }
+.source-key { border: 1px solid var(--atlas-amber); background: color-mix(in srgb, var(--atlas-amber) 14%, transparent); }
+
+.canvas-stage { position: relative; min-width: 0; }
+.selection-bar,
+.focus-trail {
+  position: absolute;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--atlas-cobalt) 22%, var(--cm-border));
+  background: color-mix(in srgb, var(--cm-surface) 92%, transparent);
+  box-shadow: 0 8px 24px rgba(35, 54, 84, 0.12);
+  backdrop-filter: blur(16px);
+}
+
+.selection-bar {
+  top: 16px;
+  right: 16px;
+  max-width: calc(100% - 310px);
+  gap: 4px;
+  padding: 5px;
+  border-radius: 10px;
+}
+.selection-bar > div { display: grid; min-width: 105px; max-width: 190px; gap: 1px; padding: 0 7px; }
+.selection-bar > div span { color: var(--atlas-cobalt); font-size: 8px; font-weight: 800; letter-spacing: 0.06em; }
+.selection-bar > div strong { overflow: hidden; color: var(--cm-heading); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.selection-bar > button,
+.focus-trail button {
+  min-height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--cm-muted);
+  background: transparent;
+  font-size: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.selection-bar > button:hover,
+.selection-bar > button:focus-visible,
+.focus-trail button:hover,
+.focus-trail button:focus-visible { color: var(--atlas-cobalt); background: var(--cm-primary-soft); outline: none; }
+.selection-bar > button:disabled { opacity: 0.35; cursor: not-allowed; }
+.selection-bar > button.mastered { color: var(--atlas-teal); background: color-mix(in srgb, var(--atlas-teal) 10%, transparent); }
+.selection-bar kbd { margin-left: 3px; }
+
+.focus-trail {
+  top: 72px;
+  left: 16px;
+  max-width: calc(100% - 32px);
+  padding: 3px 5px;
+  overflow-x: auto;
+  border-radius: 9px;
+}
+.focus-trail i { color: var(--cm-border); font-style: normal; }
+.focus-trail .exit-focus { margin-left: 3px; color: var(--atlas-amber); background: color-mix(in srgb, var(--atlas-amber) 9%, transparent); }
+
+.atlas-workspace :deep(.map-inspector) {
+  height: clamp(650px, calc(100vh - 214px), 860px);
+  max-height: none;
+  border-radius: 14px;
+  box-shadow: 0 14px 38px rgba(28, 50, 84, 0.08);
+}
+
+.empty-atlas {
+  min-height: clamp(560px, calc(100vh - 330px), 760px);
+  border-radius: 14px;
+  box-shadow: 0 14px 38px rgba(28, 50, 84, 0.06);
+}
+.construction-copy {
+  position: relative;
+  z-index: 3;
+  display: grid;
+  width: min(820px, calc(100% - 48px));
+  gap: 12px;
+  padding: 28px;
+  border: 1px solid color-mix(in srgb, var(--atlas-cobalt) 26%, var(--cm-border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--cm-surface) 94%, transparent);
+  box-shadow: 0 18px 52px rgba(28, 50, 84, 0.12);
+  backdrop-filter: blur(18px);
+}
+.construction-copy > span { color: var(--atlas-cobalt); font-size: 10px; font-weight: 800; letter-spacing: 0.08em; }
+.construction-copy h2 { margin: 0; color: var(--cm-heading); font-family: "Source Han Serif SC", "Songti SC", serif; font-size: clamp(22px, 3vw, 34px); }
+.construction-copy > p { margin: 0; color: var(--cm-muted); line-height: 1.65; }
+.construction-copy > small { color: var(--cm-muted); font-size: 10px; }
+.construction-copy > .connection-note { color: var(--cm-warning); }
+.construction-progress { height: 6px; overflow: hidden; border-radius: 999px; background: var(--cm-border); }
+.construction-progress > i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--atlas-cobalt), var(--atlas-teal)); transition: width 0.35s ease; }
+.construction-copy .stage-track { grid-template-columns: repeat(7, 1fr); }
+.construction-copy .stage-track span { justify-content: center; }
+.constructing .route { animation: routeGrow 1.5s ease-in-out infinite alternate; }
+.constructing .map-node { animation: nodeBreathe 1.5s ease-in-out infinite; }
+.constructing .node-a { animation-delay: 0.18s; }
+.constructing .node-b { animation-delay: 0.34s; }
+.constructing .node-c { animation-delay: 0.5s; }
+
+@keyframes routeGrow {
+  from { opacity: 0.25; transform: scaleX(0.55); }
+  to { opacity: 0.85; transform: scaleX(1); }
+}
+@keyframes nodeBreathe {
+  0%, 100% { opacity: 0.46; }
+  50% { opacity: 1; box-shadow: 0 0 0 7px var(--cm-primary-soft); }
+}
+
+.zen-mode {
+  height: 100vh;
+  padding: 0;
+  overflow: hidden;
+  background: var(--cm-bg);
+}
+.zen-mode .map-page { width: 100%; height: 100vh; margin: 0; gap: 0; }
+.zen-mode .map-document-bar { min-height: 58px; border-width: 0 0 1px; border-radius: 0; box-shadow: none; }
+.zen-mode .document-title > span,
+.zen-mode .document-title > small { display: none; }
+.zen-mode .document-title { grid-template-columns: minmax(0, 1fr); }
+.zen-mode .atlas-workspace { display: block; height: calc(100vh - 58px); }
+.zen-mode .canvas-stage { height: 100%; }
+.zen-mode .atlas-workspace :deep(.map-inspector) {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  bottom: 14px;
+  z-index: 18;
+  width: min(390px, calc(100% - 28px));
+  height: auto;
+  background: color-mix(in srgb, var(--cm-surface) 96%, transparent);
+  box-shadow: 0 24px 70px rgba(18, 31, 52, 0.22);
+}
+
+.rail-toggle:focus-visible,
+.plain-action:focus-visible,
+.more-action:focus-visible,
+.shortcut-action:focus-visible,
+.node-search > button:focus-visible,
+.navigator-filters button:focus-visible,
+.outline-tree > button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--atlas-cobalt) 24%, transparent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1380px) {
+  .map-document-bar { grid-template-columns: minmax(240px, 1fr) minmax(220px, 360px) auto; }
+  .document-actions .plain-action { display: none; }
+  .selection-bar { top: 72px; max-width: calc(100% - 32px); }
+  .focus-trail { top: 122px; }
+}
+
+@media (max-width: 1280px) {
+  .atlas-workspace.has-navigator { grid-template-columns: minmax(0, 1fr); }
+  .atlas-workspace.has-navigator.has-inspector { grid-template-columns: minmax(0, 1fr) minmax(330px, 360px); }
+  .map-navigator {
+    position: absolute;
+    top: 12px;
+    bottom: 12px;
+    left: 12px;
+    z-index: 14;
+    width: 244px;
+    height: auto;
+    box-shadow: 0 24px 70px rgba(18, 31, 52, 0.2);
+  }
+  .map-document-bar { grid-template-columns: minmax(240px, 1fr) minmax(230px, 330px); }
+  .document-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 980px) {
+  .map-page { width: min(100% - 16px, 1600px); }
+  .map-document-bar { grid-template-columns: 1fr; }
+  .node-search { grid-row: 2; }
+  .atlas-workspace.has-inspector,
+  .atlas-workspace.has-navigator.has-inspector { grid-template-columns: minmax(0, 1fr); }
+  .atlas-workspace :deep(.map-inspector) {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    bottom: 12px;
+    z-index: 16;
+    width: min(390px, calc(100% - 24px));
+    height: auto;
+    background: var(--cm-surface);
+    box-shadow: 0 24px 70px rgba(18, 31, 52, 0.22);
+  }
+  .learning-strip { grid-template-columns: 1fr 1.4fr; }
+  .learning-strip .continue-learning { grid-column: 1 / -1; }
+}
+
+@media (max-width: 720px) {
+  .mind-map-view { padding-top: 6px; }
+  .mind-map-view.zen-mode { padding-top: 0; }
+  .map-page { margin-top: 16px; }
+  .control-grid,
+  .learning-strip { grid-template-columns: 1fr; }
+  .learning-strip dl { margin-block: 4px; }
+  .map-document-bar { position: relative; }
+  .document-title small { display: none; }
+  .selection-bar { top: 62px; right: 10px; left: 10px; max-width: none; overflow-x: auto; }
+  .selection-bar > div { display: none; }
+  .focus-trail { top: 108px; right: 10px; left: 10px; max-width: none; }
+  .map-navigator { top: 8px; bottom: 8px; left: 8px; width: min(260px, calc(100% - 16px)); }
+  .construction-copy { width: calc(100% - 24px); padding: 20px 16px; }
+  .construction-copy .stage-track { grid-template-columns: repeat(2, 1fr); }
+  .generation-ribbon { grid-template-columns: 1fr auto; }
+  .ribbon-progress { grid-column: 1 / -1; }
+  .generation-ribbon > small { grid-column: 1 / -1; }
+  .zen-mode .map-document-bar { min-height: 106px; }
+  .zen-mode .atlas-workspace { height: calc(100vh - 106px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ribbon-stage > i,
+  .constructing .route,
+  .constructing .map-node { animation: none; }
+  .construction-progress > i { transition: none; }
 }
 </style>
