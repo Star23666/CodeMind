@@ -157,6 +157,11 @@ const revealDepth = ref(1);
 const collapsedNodeIds = new Set();
 let graph = null;
 let resizeObserver = null;
+let resizeFrame = 0;
+let resizeRevision = 0;
+let resizePending = false;
+let resizeNeedsFit = false;
+let isGraphReady = false;
 let nodeLookup = new Map();
 let parentLookup = new Map();
 let edgeLookup = new Map();
@@ -349,6 +354,7 @@ function nodeBadges(datum) {
 
 async function renderGraph() {
   const version = ++renderVersion;
+  isGraphReady = false;
   await nextTick();
   if (!canvasHost.value || !props.root) return;
 
@@ -499,6 +505,8 @@ async function renderGraph() {
   await selectNodeById(nodeLookup.has(preferredNodeId) ? preferredNodeId : activeRoot.value.id, false);
   if (props.focusRootId) await applyFocusMode(props.focusRootId, { initial: true });
   if (props.searchTerm) await updateSearch(props.searchTerm);
+  isGraphReady = true;
+  if (resizePending) scheduleCanvasResize();
 }
 
 function waitForReveal(delay) {
@@ -556,7 +564,8 @@ function fullVisibility() {
 
 async function fitNodeIds(nodeIds, animation = false) {
   if (!graph) return;
-  const dataById = new Map(graph.getNodeData().map((node) => [node.id, node]));
+  const targetGraph = graph;
+  const dataById = new Map(targetGraph.getNodeData().map((node) => [node.id, node]));
   const bounds = {
     minX: Number.POSITIVE_INFINITY,
     minY: Number.POSITIVE_INFINITY,
@@ -567,7 +576,8 @@ async function fitNodeIds(nodeIds, animation = false) {
 
   nodeIds.forEach((nodeId) => {
     const datum = dataById.get(nodeId);
-    const position = graph.getElementPosition(nodeId);
+    const position = targetGraph.getElementPosition(nodeId);
+    if (targetGraph.getElementVisibility(nodeId) === "hidden") return;
     if (!datum || !Number.isFinite(position?.[0]) || !Number.isFinite(position?.[1])) return;
     const [width, height] = nodeSize(datum);
     bounds.minX = Math.min(bounds.minX, position[0] - width / 2);
@@ -578,7 +588,7 @@ async function fitNodeIds(nodeIds, animation = false) {
   });
 
   if (!validNodeIds.length) return;
-  const [canvasWidth, canvasHeight] = graph.getSize();
+  const [canvasWidth, canvasHeight] = targetGraph.getSize();
   const contentWidth = Math.max(bounds.maxX - bounds.minX, 1);
   const contentHeight = Math.max(bounds.maxY - bounds.minY, 1);
   const availableWidth = Math.max(canvasWidth - GRAPH_PADDING * 2, 1);
@@ -588,17 +598,17 @@ async function fitNodeIds(nodeIds, animation = false) {
     Math.max(MIN_ZOOM, Math.min(availableWidth / contentWidth, availableHeight / contentHeight)),
   );
 
-  await graph.zoomTo(zoom, animation);
-  await graph.focusElement(validNodeIds, animation);
+  await targetGraph.zoomTo(zoom, animation);
+  if (graph !== targetGraph) return;
+  await targetGraph.focusElement(validNodeIds, animation);
 }
 
 async function fitCurrentView(animation = false) {
   if (!graph) return;
-  const focusedIds = props.focusRootId && nodeLookup.has(props.focusRootId)
+  const nodeIds = props.focusRootId && nodeLookup.has(props.focusRootId)
     ? [...descendantIds(props.focusRootId)]
-    : [];
-  if (focusedIds.length) await fitNodeIds(focusedIds, animation);
-  else await graph.fitView(undefined, animation);
+    : [...nodeLookup.keys()];
+  await fitNodeIds(nodeIds, animation);
 }
 
 async function applyFocusMode(nodeId, options = {}) {
@@ -790,7 +800,7 @@ async function applyPresentationOptions() {
   redoStack.value = [];
   rememberLayout(false);
   if (props.focusRootId) await applyFocusMode(props.focusRootId, { initial: true });
-  else await graph.fitView(undefined, { duration: 240, easing: "ease-out" });
+  else await fitCurrentView({ duration: 240, easing: "ease-out" });
   updateZoomLevel();
   notifyViewChange();
 }
@@ -822,7 +832,7 @@ async function restoreViewState(state) {
     if (Array.isArray(state.viewport_position) && state.viewport_position.length >= 2) {
       await graph.translateTo(state.viewport_position, false);
     } else if (!positions.length) {
-      await graph.fitView();
+      await fitCurrentView();
     }
     updateZoomLevel();
   } finally {
@@ -918,26 +928,36 @@ async function toggleSelectedBranch() {
   notifyViewChange();
 }
 
-onMounted(() => {
-  resizeObserver = new ResizeObserver((entries) => {
-    const entry = entries[0];
-    if (!graph || !entry) return;
-    const { width, height } = entry.contentRect;
-    graph.resize(Math.max(width, 320), Math.max(height, 520));
+function scheduleCanvasResize(shouldFit = false) {
+  resizePending = true;
+  resizeNeedsFit = resizeNeedsFit || shouldFit;
+  const revision = ++resizeRevision;
+  if (resizeFrame) window.cancelAnimationFrame(resizeFrame);
+  resizeFrame = window.requestAnimationFrame(() => {
+    resizeFrame = window.requestAnimationFrame(async () => {
+      resizeFrame = 0;
+      if (revision !== resizeRevision) return;
+      if (!isGraphReady || !graph || !canvasHost.value) return;
+      const targetGraph = graph;
+      const fitAfterResize = resizeNeedsFit;
+      resizePending = false;
+      resizeNeedsFit = false;
+      const { width, height } = canvasHost.value.getBoundingClientRect();
+      targetGraph.resize(Math.max(width, 320), Math.max(height, 520));
+      if (revision !== resizeRevision || graph !== targetGraph) return;
+      if (fitAfterResize) {
+        await fitCurrentView();
+        if (revision === resizeRevision && graph === targetGraph) updateZoomLevel();
+      }
+    });
   });
+}
+
+onMounted(() => {
+  resizeObserver = new ResizeObserver(() => scheduleCanvasResize());
   if (canvasHost.value) resizeObserver.observe(canvasHost.value);
   renderGraph();
 });
-
-async function resizeAndFitCurrentView() {
-  await nextTick();
-  await new Promise((resolve) => window.requestAnimationFrame(resolve));
-  if (!graph || !canvasHost.value) return;
-  const { width, height } = canvasHost.value.getBoundingClientRect();
-  graph.resize(Math.max(width, 320), Math.max(height, 520));
-  await fitCurrentView();
-  updateZoomLevel();
-}
 
 watch(() => props.root, () => renderGraph());
 watch(() => props.searchTerm, updateSearch);
@@ -945,17 +965,26 @@ watch(() => props.selectedNodeId, (nodeId) => {
   if (nodeId && nodeId !== selectedNodeId.value) selectNodeById(nodeId);
 });
 watch(isDark, () => renderGraph());
-watch(() => props.immersive, resizeAndFitCurrentView);
+watch(() => props.immersive, async () => {
+  await nextTick();
+  scheduleCanvasResize(true);
+});
 watch(() => props.focusRootId, (nodeId) => applyFocusMode(nodeId));
 watch(() => props.masteredNodeIds, updateLearningSignals, { deep: true });
 watch([() => props.density, () => props.displayMode], applyPresentationOptions);
 
 onBeforeUnmount(() => {
   renderVersion += 1;
+  resizeRevision += 1;
+  isGraphReady = false;
+  resizePending = false;
+  resizeNeedsFit = false;
+  if (resizeFrame) window.cancelAnimationFrame(resizeFrame);
   resizeObserver?.disconnect();
   isRevealing.value = false;
   isPreparingReveal.value = false;
   graph?.destroy();
+  graph = null;
 });
 </script>
 
