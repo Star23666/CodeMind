@@ -30,7 +30,6 @@
 
 <script setup>
 import { ref } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
 import { UploadFilled } from "@element-plus/icons-vue";
 import { useRouter } from "vue-router";
 import { uploadDocument } from "../../api/documents";

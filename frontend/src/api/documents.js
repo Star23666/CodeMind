@@ -40,6 +40,10 @@ export function reindexDocument(documentId) {
   return request.post(`/documents/${documentId}/reindex`);
 }
 
+export function cancelDocumentProcessing(documentId) {
+  return request.post(`/documents/${documentId}/cancel`);
+}
+
 export function listDocumentChunks(documentId) {
   return request.get(`/documents/${documentId}/chunks`);
 }

@@ -1,6 +1,4 @@
 import { createApp } from 'vue'
-import ElementPlus from 'element-plus'
-import 'element-plus/dist/index.css'
 import './styles/base.css'
 import App from './App.vue'
 import { router } from './router'
@@ -34,7 +32,6 @@ async function bootstrap() {
     }
   })
 
-  app.use(ElementPlus)
   app.use(router)
   await router.isReady()
   app.mount('#app')

@@ -10,6 +10,9 @@ FastAPI 后端负责认证、知识库与文档管理、Embedding 入库、Chrom
 | `app/core/config.py` | `.env` 配置读取和路径解析 |
 | `app/db/session.py` | SQLAlchemy Engine 与 Session |
 | `app/services/document_service.py` | 上传、后台解析、入库、重建和删除 |
+| `app/services/document_job_service.py` | 文档任务并发调度、启动恢复和实例内防重 |
+| `app/services/feedback_service.py` | 问答反馈持久化、归属校验和管理员筛选 |
+| `app/services/health_service.py` | MySQL 与 Chroma 就绪检查 |
 | `app/services/retrieval_service.py` | 问题重写、Embedding、Chroma 召回、过滤与 rerank |
 | `app/services/rag_service.py` | 检索、Prompt、LLM、SSE 流式输出和历史保存的问答编排 |
 | `app/services/mind_map_service.py` | 知识地图结构生成、节点追问和分支扩展 |
@@ -31,6 +34,7 @@ MYSQL_DATABASE=codemind
 LLM_API_KEY=replace_with_llm_key
 LLM_BASE_URL=https://provider.example.com/v1
 LLM_MODEL=replace_with_chat_model
+CHAT_TOTAL_TIMEOUT_SECONDS=60
 
 # 可选：知识地图单独使用更快的纯文本指令模型
 MIND_MAP_MODEL=replace_with_structured_text_model
@@ -40,6 +44,9 @@ MIND_MAP_ENABLE_THINKING=false
 EMBEDDING_API_KEY=replace_with_embedding_key
 EMBEDDING_BASE_URL=https://provider.example.com/v1
 EMBEDDING_MODEL=replace_with_embedding_model
+RETRIEVAL_SCORE_THRESHOLD=0.45
+
+DOCUMENT_WORKER_CONCURRENCY=2
 
 JWT_SECRET_KEY=replace_with_a_long_random_secret
 ```
@@ -70,7 +77,8 @@ python -m uvicorn app.main:app --reload
 
 - API：`http://localhost:8000`
 - Swagger：`http://localhost:8000/docs`
-- 健康检查：`http://localhost:8000/api/health`
+- 存活检查：`http://localhost:8000/api/health/live`
+- 就绪检查：`http://localhost:8000/api/health/ready`
 
 除健康检查、注册和登录外，业务接口需要：
 
@@ -81,6 +89,16 @@ Authorization: Bearer <access_token>
 RAG 问答提供两个接口：`POST /api/chat` 返回完整 JSON；`POST /api/chat/stream` 返回
 `text/event-stream`。流式接口依次发送 `meta`、多个 `token` 和 `done` 事件，只有生成完成并发送
 `done` 后才保存问答历史；处理异常时发送 `error` 事件。客户端断开或生成失败时，不应把未完成回答当作已保存记录。
+
+非流式回答受 `CHAT_TOTAL_TIMEOUT_SECONDS` 硬生成时限约束。检索和生成日志分别记录 Embedding/LLM 模型、检索耗时、首 Token、总耗时和 `finish_reason`。
+
+## 文档任务说明
+
+- 上传和重建只写入 `pending` 状态，由受并发限制的后台 Worker 原子领取。
+- 同一文档不能重复入队；重建中的再次提交返回 `409`。
+- 后端启动时会将中断的 `processing` 文档恢复为 `pending` 并重新调度。
+- 新片段和新向量成功后才替换旧索引；解析、Embedding 或写入失败时保留旧索引。
+- `POST /api/documents/{id}/cancel` 可以取消等待中或处理中的任务。
 
 ## 知识地图说明
 
@@ -100,7 +118,7 @@ cd backend
 python -m pytest -q
 ```
 
-当前基线为 `61 passed`。测试使用 SQLite 和替身服务覆盖主要业务；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、Nginx SSE 代理和知识地图任务恢复、多批次任务链路。
+当前基线为 `80 passed`。测试使用 SQLite 和替身服务覆盖主要业务，其中包括文档重启恢复、重复入队、取消、索引补偿和陈旧向量过滤，反馈持久化与越权，JWT 注销撤销，以及 MySQL/Chroma 就绪探针；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、Nginx SSE 代理和知识地图任务恢复、多批次任务链路。
 
 ## Docker 运行
 

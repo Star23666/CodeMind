@@ -26,7 +26,7 @@ def get_current_user(
         raise _unauthorized()
 
     try:
-        user_id = auth_service.decode_access_token(credentials.credentials)
+        user_id, token_version = auth_service.decode_access_token_details(credentials.credentials)
     except AuthenticationError as exc:
         raise _unauthorized(str(exc)) from exc
 
@@ -35,6 +35,12 @@ def get_current_user(
         raise _unauthorized("用户不存在，请重新登录。")
     if user.status != UserStatus.ACTIVE:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="用户已被禁用。")
+    try:
+        token_is_current = auth_service.is_token_version_current(db, user_id, token_version)
+    except AuthenticationError as exc:
+        raise _unauthorized(str(exc)) from exc
+    if not token_is_current:
+        raise _unauthorized("登录状态已失效，请重新登录。")
     return user
 
 

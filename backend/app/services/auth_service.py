@@ -114,28 +114,62 @@ class AuthService:
         ).mappings().first()
         return self._to_user_read(row) if row is not None else None
 
-    def create_access_token(self, user: UserRead) -> str:
+    def create_access_token(self, user: UserRead, *, token_version: int = 0) -> str:
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(minutes=settings.jwt_expire_minutes)
         payload = {
             "sub": str(user.id),
             "username": user.username,
             "role": user.role.value,
+            "ver": token_version,
             "iat": now,
             "exp": expires_at,
         }
         return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
     def decode_access_token(self, token: str) -> int:
+        user_id, _ = self.decode_access_token_details(token)
+        return user_id
+
+    def decode_access_token_details(self, token: str) -> tuple[int, int]:
         try:
             payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
             subject = payload.get("sub")
             user_id = int(subject)
+            token_version = int(payload.get("ver", 0))
         except (JWTError, TypeError, ValueError) as exc:
             raise AuthenticationError("登录状态无效或已过期，请重新登录。") from exc
-        if user_id <= 0:
+        if user_id <= 0 or token_version < 0:
             raise AuthenticationError("登录状态无效或已过期，请重新登录。")
-        return user_id
+        return user_id, token_version
+
+    def get_token_version(self, db: Session, user_id: int) -> int:
+        value = db.execute(
+            text("SELECT token_version FROM users WHERE id = :user_id"),
+            {"user_id": user_id},
+        ).scalar_one_or_none()
+        if value is None:
+            raise AuthenticationError("用户不存在，请重新登录。")
+        return int(value)
+
+    def is_token_version_current(self, db: Session, user_id: int, token_version: int) -> bool:
+        return self.get_token_version(db, user_id) == token_version
+
+    def revoke_tokens(self, db: Session, user_id: int) -> None:
+        result = db.execute(
+            text(
+                """
+                UPDATE users
+                SET token_version = token_version + 1
+                WHERE id = :user_id
+                """
+            ),
+            {"user_id": user_id},
+        )
+        if result.rowcount != 1:
+            db.rollback()
+            raise AuthenticationError("用户不存在，请重新登录。")
+        db.commit()
 
     def hash_password(self, password: str) -> str:
         return self.password_context.hash(password)

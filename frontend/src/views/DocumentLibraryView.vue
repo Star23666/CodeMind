@@ -77,7 +77,18 @@
             <div class="row-actions" @click.stop>
               <el-button link type="primary" @click="openDocument(document)">查看文档</el-button>
               <el-button link @click="openChunks(document)">查看切片</el-button>
-              <el-button link type="primary" :disabled="document.parse_status === 'processing'" @click="rebuild(document)">重建</el-button>
+              <el-button
+                v-if="['pending', 'processing'].includes(document.parse_status)"
+                link
+                type="warning"
+                @click="cancelProcessing(document)"
+              >取消处理</el-button>
+              <el-button
+                link
+                type="primary"
+                :disabled="['pending', 'processing'].includes(document.parse_status)"
+                @click="rebuild(document)"
+              >重建</el-button>
               <el-button link type="danger" @click="remove(document)">删除</el-button>
             </div>
           </article>
@@ -96,10 +107,14 @@
 
 <script setup>
 import { computed, onMounted, ref } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
 import { Refresh, Search, Upload } from "@element-plus/icons-vue";
 import { useRouter } from "vue-router";
-import { deleteDocument, listDocuments, reindexDocument } from "../api/documents";
+import {
+  cancelDocumentProcessing,
+  deleteDocument,
+  listDocuments,
+  reindexDocument,
+} from "../api/documents";
 import { getHealth } from "../api/health";
 import { listKnowledgeBases } from "../api/knowledgeBases";
 import AppHeader from "../components/layout/AppHeader.vue";
@@ -179,6 +194,16 @@ async function rebuild(document) {
   }
 }
 
+async function cancelProcessing(document) {
+  try {
+    await cancelDocumentProcessing(document.id);
+    ElMessage.success("已取消文档处理任务。");
+    await loadData();
+  } catch (error) {
+    ElMessage.error(error.message);
+  }
+}
+
 async function remove(document) {
   try {
     await ElMessageBox.confirm(
@@ -199,8 +224,8 @@ async function remove(document) {
 function goUpload() { router.push({ name: "documents" }); }
 function fileBadge(type) { return (type || "FILE").slice(0, 4).toUpperCase(); }
 function typeLabel(type) { return ({ md: "Markdown", markdown: "Markdown", txt: "TXT", pdf: "PDF", docx: "Word" })[type] || String(type).toUpperCase(); }
-function statusText(status) { return ({ pending: "等待中", processing: "处理中", completed: "已完成", failed: "失败" })[status] || status; }
-function statusType(status) { return ({ pending: "info", processing: "warning", completed: "success", failed: "danger" })[status] || "info"; }
+function statusText(status) { return ({ pending: "等待中", processing: "处理中", completed: "已完成", failed: "失败", cancelled: "已取消" })[status] || status; }
+function statusType(status) { return ({ pending: "info", processing: "warning", completed: "success", failed: "danger", cancelled: "info" })[status] || "info"; }
 function formatSize(size) {
   if (!size) return "0 B";
   if (size < 1024) return `${size} B`;

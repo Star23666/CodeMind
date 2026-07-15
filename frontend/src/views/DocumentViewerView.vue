@@ -43,7 +43,6 @@
 
 <script setup>
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
 import { Download } from "@element-plus/icons-vue";
 import { useRoute, useRouter } from "vue-router";
 import DOMPurify from "dompurify";

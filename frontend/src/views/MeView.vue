@@ -114,7 +114,6 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
 import { useRouter } from "vue-router";
 import { getHealth } from "../api/health";
 import { listDocuments } from "../api/documents";

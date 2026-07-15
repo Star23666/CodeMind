@@ -6,15 +6,17 @@ CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented
 
 当前已实现：
 
-- JWT 注册、登录和用户数据隔离
+- JWT 注册、登录、持久化注销撤销和用户数据隔离
 - 私人知识库创建、编辑和删除
 - PDF、DOCX、Markdown、TXT 文档上传
 - 文档解析、文本切分和处理状态展示
+- 文档任务并发防重、处理中取消、服务重启恢复和失败时旧索引保留
 - 在线 Embedding API 和 Chroma 向量入库
 - 问题重写、topK 检索、相似度过滤和 rerank
 - 在线 LLM RAG 回答、来源编号校验和 SSE 流式输出
 - 文档库、原始文档预览、片段查看与来源跳转
 - 问答历史列表、详情查看和历史来源快照
+- 用户反馈持久化、重复提交保护和管理员筛选查询
 - 知识地图异步生成、分阶段进度、失败恢复和历史版本管理
 - 总览、章节、概念、细节四类节点，以及关键记忆点和学习建议
 - 节点来源核对、针对性追问、AI 分支扩展和相关资料检索
@@ -22,14 +24,13 @@ CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented
 - 画布缩放、布局、撤销重做、分支折叠、全屏及 PNG/SVG/JSON/Markdown 导出
 - 文档、向量、原始文件和知识库级联清理
 - Docker Compose 本地及服务器部署
+- MySQL、Chroma 就绪检查与独立存活检查
+- 路由懒加载和 G6、Element Plus、文档预览独立分包
 
 后续计划：
 
-- 文档上传和重新索引任务的持久化调度、重启恢复与重复任务防护
-- 用户反馈持久化、问答记录归属校验、管理员反馈页面和相应自动化测试
-- 健康检查增加 MySQL、Chroma 等关键依赖探测
-- 基于固定测试集的相似度阈值评估
-- 前端产物体积优化和项目成果物整理
+- 基于固定测试集继续评估不同 Embedding 模型的检索阈值
+- 管理员反馈可视化页面和项目成果物整理
 
 ## 技术栈
 
@@ -132,6 +133,7 @@ LLM_BASE_URL=https://provider.example.com/v1
 LLM_MODEL=replace_with_chat_model
 LLM_MAX_TOKENS=1200
 LLM_THINKING_BUDGET=512
+CHAT_TOTAL_TIMEOUT_SECONDS=60
 # Qwen3.5/Qwen3.6 留空时会自动使用非思考模式
 # LLM_ENABLE_THINKING=false
 
@@ -146,6 +148,9 @@ MIND_MAP_RETRY_MAX_TOKENS=6400
 EMBEDDING_API_KEY=replace_with_embedding_api_key
 EMBEDDING_BASE_URL=https://provider.example.com/v1
 EMBEDDING_MODEL=replace_with_embedding_model
+RETRIEVAL_SCORE_THRESHOLD=0.45
+
+DOCUMENT_WORKER_CONCURRENCY=2
 
 JWT_SECRET_KEY=replace_with_a_long_random_secret
 ```
@@ -186,6 +191,24 @@ docker compose logs -f mysql
 ## 已有数据库升级
 
 `database/schema.sql` 只会在 MySQL 数据卷第一次初始化时执行。拉取包含数据库结构变更的新代码后，不能只重建镜像，还需要执行对应迁移。
+
+### 2026-07-15：任务可靠性与 JWT 注销
+
+该迁移增加持久化 Token 版本，并允许文档进入 `cancelled` 状态。已有数据库在启动新版后端前执行一次：
+
+Linux、macOS 或 WSL：
+
+```bash
+docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' \
+  < database/migrations/20260715_issue13_reliability.sql
+```
+
+Windows PowerShell：
+
+```powershell
+Get-Content -Raw database\migrations\20260715_issue13_reliability.sql |
+  docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
+```
 
 ### 2026-07-12：思维导图历史与后台任务表
 
@@ -274,7 +297,10 @@ Authorization: Bearer <access_token>
 | -------------- | --------------------------- | ---------------- |
 | `POST`         | `/api/auth/register`        | 注册             |
 | `POST`         | `/api/auth/login`           | 登录并获取 JWT   |
+| `POST`         | `/api/auth/logout`          | 注销并撤销现有 JWT |
 | `GET`          | `/api/auth/me`              | 当前用户         |
+| `GET`          | `/api/health/live`          | 进程存活检查     |
+| `GET`          | `/api/health/ready`         | MySQL、Chroma 就绪检查 |
 | `GET/POST`     | `/api/knowledge-bases`      | 查询或创建知识库 |
 | `PATCH/DELETE` | `/api/knowledge-bases/{id}` | 修改或删除知识库 |
 | `POST`         | `/api/documents/upload`     | 上传文档         |
@@ -282,12 +308,15 @@ Authorization: Bearer <access_token>
 | `GET`          | `/api/documents/{id}`        | 查询文档详情     |
 | `GET`          | `/api/documents/{id}/content` | 读取原始文档   |
 | `POST`         | `/api/documents/{id}/reindex` | 重建文档索引   |
+| `POST`         | `/api/documents/{id}/cancel` | 取消等待中或处理中的任务 |
 | `DELETE`       | `/api/documents/{id}`       | 删除文档及向量   |
 | `POST`         | `/api/search`               | 语义检索         |
 | `POST`         | `/api/chat`                 | RAG 问答         |
 | `POST`         | `/api/chat/stream`          | SSE 流式 RAG 问答 |
 | `GET`          | `/api/qa-records`           | 问答历史列表     |
 | `GET`          | `/api/qa-records/{id}`      | 问答历史详情     |
+| `POST`         | `/api/qa-records/{id}/feedback` | 提交一次评分和反馈 |
+| `GET`          | `/api/admin/feedbacks`      | 管理员筛选反馈   |
 | `POST`         | `/api/mind-maps/jobs`       | 创建导图生成任务 |
 | `GET`          | `/api/mind-maps/jobs/{id}`  | 查询任务进度     |
 | `POST`         | `/api/mind-maps/generate`   | 同步生成导图（调试接口） |
@@ -308,7 +337,7 @@ python -m pip install pytest==8.3.5
 python -m pytest -q
 ```
 
-当前后端测试共 61 项，覆盖认证、权限、文档处理、删除清理、检索降级、Prompt、LLM 异常、RAG 编排、SSE 流式生成、问答历史，以及知识地图生成、JSON Mode、硬总时限、任务恢复、事务一致性、并发控制、历史和接口权限。
+当前后端测试共 80 项，覆盖认证和 JWT 撤销、权限、文档处理与重启恢复、取消和重复任务防护、索引事务补偿与陈旧向量过滤、反馈持久化、健康检查、删除清理、检索降级、Prompt、LLM 异常、RAG 编排、SSE 流式生成、问答历史，以及知识地图生成、JSON Mode、硬总时限、任务恢复、事务一致性、并发控制、历史和接口权限。
 
 Docker 端到端测试已验证前端 Nginx 代理下的注册、登录、知识库创建、文档上传与解析、SSE 问答、来源返回、知识地图生成、任务重启恢复和历史详情落库。当前实测小范围知识地图约 36 秒完成，生成 15 个节点，节点数、历史记录和来源引用均通过一致性校验。
 
@@ -319,6 +348,8 @@ cd frontend
 npm ci
 npm run build
 ```
+
+Issue #13 优化后，首屏只预加载入口和 Vue 运行时，合计约 `62.5 KiB gzip`；G6、Element Plus 和文档预览按路由独立加载。详细记录见 [前端构建优化](docs/前端构建优化.md)。
 
 ## 日常开发流程
 
@@ -376,6 +407,8 @@ Docker Compose 使用三个命名卷：
 
 若浏览器直接提示上传超时，请先执行 `npm ci` 并重新构建前端，确保已包含最新的上传超时配置。
 
+服务重启时，原来的 `processing` 文档会恢复为 `pending` 并自动重新入队。重新索引失败不会先删除旧片段和旧向量；用户也可以在文档库取消 `pending` 或 `processing` 任务。
+
 ### 问题没有召回来源
 
 确认知识库中存在 `completed` 文档，并检查相似度阈值。不要直接把其他 Embedding 模型下的阈值用于当前模型。
@@ -403,6 +436,7 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 - [文档导航与实现状态](docs/README.md)
 - [前端开发说明](frontend/README.md)
+- [前端构建优化记录](docs/前端构建优化.md)
 - [后端开发说明](backend/README.md)
 - [需求分析](docs/需求分析.md)
 - [API 接口设计](docs/API接口设计.md)
@@ -424,4 +458,4 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 ---
 
-文档状态：已按 `main` 提交 `839890b`（合并 PR #11）同步，更新时间为 2026-07-13。
+文档状态：已按 Issue #13 可靠性修复同步，更新时间为 2026-07-15。

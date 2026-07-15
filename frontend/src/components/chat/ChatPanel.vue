@@ -52,10 +52,9 @@
 
 <script setup>
 import { nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { ElMessageBox } from "element-plus";
 import { Search } from "@element-plus/icons-vue";
 import { useRouter } from "vue-router";
-import { streamChatQuestion } from "../../api/chat";
+import { DEFAULT_SCORE_THRESHOLD, streamChatQuestion } from "../../api/chat";
 import { useUserStore } from "../../stores/user";
 import AnswerCard from "./AnswerCard.vue";
 
@@ -78,7 +77,7 @@ const router = useRouter();
 const userStore = useUserStore();
 const question = ref(props.initialQuestion);
 const topK = ref(4);
-const scoreThreshold = ref(0.3);
+const scoreThreshold = ref(DEFAULT_SCORE_THRESHOLD);
 const answer = ref("");
 const answerStatus = ref("等待提问");
 const rewrittenQuestion = ref("");
