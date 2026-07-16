@@ -3,12 +3,39 @@ import inspect
 import logging
 import time
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 from app.core.config import settings
+from app.services.llm_destination_validator import (
+    LlmDestinationError,
+    validate_llm_destination,
+)
 from app.services.prompt_builder import RAG_SYSTEM_MESSAGE
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class LlmRuntimeConfig:
+    api_key: str
+    base_url: str
+    model: str
+    source: str = "system"
+    name: str = "系统默认模型"
+    provider: str = "system"
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.api_key and self.model)
+
+
+def system_llm_runtime_config() -> LlmRuntimeConfig:
+    return LlmRuntimeConfig(
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url,
+        model=settings.llm_model,
+    )
 
 
 AUTO_DISABLE_THINKING_MODEL_PREFIXES = (
@@ -24,6 +51,16 @@ class LlmServiceError(RuntimeError):
 
 
 class LlmClient:
+    async def _validate_destination(self, runtime_config: LlmRuntimeConfig) -> None:
+        try:
+            await validate_llm_destination(
+                base_url=runtime_config.base_url,
+                provider=runtime_config.provider,
+                source=runtime_config.source,
+            )
+        except LlmDestinationError as exc:
+            raise LlmServiceError(str(exc), status_code=400) from exc
+
     def _supports_thinking_toggle(self, model: str) -> bool:
         normalized_model = model.strip().casefold()
         return normalized_model.startswith(AUTO_DISABLE_THINKING_MODEL_PREFIXES)
@@ -65,16 +102,17 @@ class LlmClient:
     def _build_client_kwargs(
         self,
         *,
+        runtime_config: LlmRuntimeConfig,
         timeout_seconds: float | None = None,
         max_retries: int | None = None,
     ) -> dict[str, object]:
         client_kwargs: dict[str, object] = {
-            "api_key": settings.llm_api_key,
+            "api_key": runtime_config.api_key,
             "timeout": timeout_seconds if timeout_seconds is not None else settings.llm_timeout_seconds,
             "max_retries": max_retries if max_retries is not None else settings.llm_max_retries,
         }
-        if settings.llm_base_url:
-            client_kwargs["base_url"] = settings.llm_base_url
+        if runtime_config.base_url:
+            client_kwargs["base_url"] = runtime_config.base_url
         return client_kwargs
 
     async def _close_client(self, client: object | None) -> None:
@@ -103,8 +141,10 @@ class LlmClient:
         enable_thinking: bool | None = None,
         thinking_budget: int | None = None,
         response_format: dict[str, str] | None = None,
+        runtime_config: LlmRuntimeConfig | None = None,
     ) -> str:
-        if not settings.llm_api_key or not settings.llm_model:
+        selected_config = runtime_config or system_llm_runtime_config()
+        if not selected_config.configured:
             return self.generate_local_fallback(prompt)
 
         from openai import (
@@ -117,6 +157,7 @@ class LlmClient:
         )
 
         client_kwargs = self._build_client_kwargs(
+            runtime_config=selected_config,
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
         )
@@ -124,7 +165,7 @@ class LlmClient:
         client = None
         try:
             client = AsyncOpenAI(**client_kwargs)
-            selected_model = model or settings.llm_model
+            selected_model = model or selected_config.model
             selected_enable_thinking = self._resolve_enable_thinking(
                 model=selected_model,
                 enable_thinking=enable_thinking,
@@ -137,6 +178,7 @@ class LlmClient:
                 thinking_attempts.append(False)
 
             for attempt_index, attempt_enable_thinking in enumerate(thinking_attempts):
+                await self._validate_destination(selected_config)
                 request_started = time.perf_counter()
                 request_kwargs = self._build_completion_request_kwargs(
                     enable_thinking=attempt_enable_thinking,
@@ -215,9 +257,11 @@ class LlmClient:
         enable_thinking: bool | None = None,
         thinking_budget: int | None = None,
         response_format: dict[str, str] | None = None,
+        runtime_config: LlmRuntimeConfig | None = None,
     ) -> AsyncIterator[str]:
         """Yield answer deltas while preserving the same provider error contract."""
-        if not settings.llm_api_key or not settings.llm_model:
+        selected_config = runtime_config or system_llm_runtime_config()
+        if not selected_config.configured:
             fallback = self.generate_local_fallback(prompt)
             for start in range(0, len(fallback), 32):
                 await asyncio.sleep(0)
@@ -237,11 +281,12 @@ class LlmClient:
         try:
             client = AsyncOpenAI(
                 **self._build_client_kwargs(
+                    runtime_config=selected_config,
                     timeout_seconds=timeout_seconds,
                     max_retries=max_retries,
                 )
             )
-            selected_model = model or settings.llm_model
+            selected_model = model or selected_config.model
             selected_enable_thinking = self._resolve_enable_thinking(
                 model=selected_model,
                 enable_thinking=enable_thinking,
@@ -254,6 +299,7 @@ class LlmClient:
                 thinking_attempts.append(False)
 
             for attempt_index, attempt_enable_thinking in enumerate(thinking_attempts):
+                await self._validate_destination(selected_config)
                 request_started = time.perf_counter()
                 first_token_ms: float | None = None
                 request_kwargs = self._build_completion_request_kwargs(

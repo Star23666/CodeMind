@@ -18,7 +18,8 @@ from app.schemas.contracts import (
     SourceReference,
 )
 from app.services.knowledge_base_service import knowledge_base_service
-from app.services.llm_client import LlmClient, LlmServiceError, llm_client
+from app.services.llm_client import LlmClient, LlmRuntimeConfig, LlmServiceError, llm_client
+from app.services.llm_config_service import llm_config_service
 from app.services.prompt_builder import build_rag_prompt, sanitize_answer_citations
 
 
@@ -66,10 +67,11 @@ class MindMapService:
 
         source_map = {int(row["chunk_id"]): self._to_source(row) for row in rows}
         fallback_title = document["file_name"] if document else knowledge_base.name
+        runtime_config = llm_config_service.resolve_runtime(db, user_id=owner_id)
 
-        if not settings.llm_api_key or not settings.llm_model:
+        if not runtime_config.configured:
             raise MindMapGenerationError(
-                "思维导图必须经过大模型分析，请先完成服务端 LLM 配置。",
+                "思维导图必须经过大模型分析，请先配置可用的模型。",
                 status_code=503,
             )
 
@@ -93,9 +95,10 @@ class MindMapService:
                         settings.mind_map_merge_max_tokens,
                     ),
                     max_retries=settings.mind_map_max_retries,
-                    model=self._structure_model(),
-                    enable_thinking=self._thinking_option(),
-                    response_format=self._response_format(),
+                    model=self._structure_model(runtime_config),
+                    enable_thinking=self._thinking_option(runtime_config),
+                    response_format=self._response_format(runtime_config),
+                    runtime_config=runtime_config,
                 )
             else:
                 batches = [selected_rows[index:index + 3] for index in range(0, len(selected_rows), 3)]
@@ -112,9 +115,10 @@ class MindMapService:
                             settings.mind_map_batch_max_tokens,
                         ),
                         max_retries=settings.mind_map_max_retries,
-                        model=self._structure_model(),
-                        enable_thinking=self._thinking_option(),
-                        response_format=self._response_format(),
+                        model=self._structure_model(runtime_config),
+                        enable_thinking=self._thinking_option(runtime_config),
+                        response_format=self._response_format(runtime_config),
+                        runtime_config=runtime_config,
                     )
 
                 tasks = [asyncio.create_task(analyze_batch(batch)) for batch in batches]
@@ -148,9 +152,10 @@ class MindMapService:
                         settings.mind_map_merge_max_tokens,
                     ),
                     max_retries=settings.mind_map_max_retries,
-                    model=self._structure_model(),
-                    enable_thinking=self._thinking_option(),
-                    response_format=self._response_format(),
+                    model=self._structure_model(runtime_config),
+                    enable_thinking=self._thinking_option(runtime_config),
+                    response_format=self._response_format(runtime_config),
+                    runtime_config=runtime_config,
                 )
             self._notify(progress_callback, "validating", 80, "正在校验节点层级和原文来源")
             root = self._parse_ai_tree(
@@ -214,9 +219,10 @@ class MindMapService:
         if set(row_map) != set(requested_ids):
             raise ValueError("Mind map source not found")
 
-        if not settings.llm_api_key or not settings.llm_model:
+        runtime_config = llm_config_service.resolve_runtime(db, user_id=owner_id)
+        if not runtime_config.configured:
             raise MindMapGenerationError(
-                "节点问答需要在线大模型，请先完成服务端 LLM 配置。",
+                "节点问答需要在线大模型，请先配置可用的模型。",
                 status_code=503,
             )
 
@@ -233,6 +239,7 @@ class MindMapService:
                 total_timeout_seconds=settings.mind_map_total_timeout_seconds,
                 max_tokens=max(settings.llm_max_tokens, 1200),
                 max_retries=settings.mind_map_max_retries,
+                runtime_config=runtime_config,
             )
         except LlmServiceError as exc:
             raise MindMapGenerationError(str(exc), status_code=exc.status_code) from exc
@@ -259,9 +266,10 @@ class MindMapService:
         if {int(row["chunk_id"]) for row in rows} != set(ids):
             raise ValueError("Mind map source not found")
 
-        if not settings.llm_api_key or not settings.llm_model:
+        runtime_config = llm_config_service.resolve_runtime(db, user_id=owner_id)
+        if not runtime_config.configured:
             raise MindMapGenerationError(
-                "节点展开需要在线大模型，请先完成服务端 LLM 配置。",
+                "节点展开需要在线大模型，请先配置可用的模型。",
                 status_code=503,
             )
 
@@ -280,9 +288,10 @@ class MindMapService:
                     settings.mind_map_batch_max_tokens,
                 ),
                 max_retries=settings.mind_map_max_retries,
-                model=self._structure_model(),
-                enable_thinking=self._thinking_option(),
-                response_format=self._response_format(),
+                model=self._structure_model(runtime_config),
+                enable_thinking=self._thinking_option(runtime_config),
+                response_format=self._response_format(runtime_config),
+                runtime_config=runtime_config,
             )
             source_map = {int(row["chunk_id"]): self._to_source(row) for row in rows}
             return self._parse_ai_tree(
@@ -670,20 +679,23 @@ node_type 只能是 overview、chapter、concept、detail，根节点必须是 o
     def _normalize(self, value: str) -> str:
         return " ".join(value.split())
 
-    def _structure_model(self) -> str:
-        if settings.mind_map_model:
+    def _structure_model(self, runtime_config: LlmRuntimeConfig) -> str:
+        if runtime_config.source == "system" and settings.mind_map_model:
             return settings.mind_map_model
-        if settings.llm_base_url and "siliconflow" in settings.llm_base_url and settings.llm_model == "deepseek-ai/DeepSeek-V4-Pro":
+        if (
+            "siliconflow" in runtime_config.base_url.lower()
+            and runtime_config.model == "deepseek-ai/DeepSeek-V4-Pro"
+        ):
             return "deepseek-ai/DeepSeek-V3.2"
-        return settings.llm_model
+        return runtime_config.model
 
-    def _thinking_option(self) -> bool | None:
-        if settings.llm_base_url and "siliconflow" in settings.llm_base_url.lower():
+    def _thinking_option(self, runtime_config: LlmRuntimeConfig) -> bool | None:
+        if "siliconflow" in runtime_config.base_url.lower():
             return settings.mind_map_enable_thinking
         return None
 
-    def _response_format(self) -> dict[str, str] | None:
-        if settings.llm_base_url and "siliconflow" in settings.llm_base_url.lower():
+    def _response_format(self, runtime_config: LlmRuntimeConfig) -> dict[str, str] | None:
+        if "siliconflow" in runtime_config.base_url.lower():
             return {"type": "json_object"}
         return None
 

@@ -34,6 +34,16 @@
         </article>
       </section>
 
+      <button class="model-settings-entry" type="button" @click="goModelSettings">
+        <span class="entry-icon">AI</span>
+        <span class="entry-copy">
+          <small>AI 模型设置</small>
+          <strong>管理和切换你的大模型 API</strong>
+          <span>管理系统默认与个人模型配置。</span>
+        </span>
+        <span class="entry-action">进入设置 →</span>
+      </button>
+
       <section class="manager-grid">
         <article class="panel create-panel">
           <div class="panel-head">
@@ -257,6 +267,10 @@ function goDocuments() {
   router.push({ name: "documents" });
 }
 
+function goModelSettings() {
+  router.push({ name: "ai-model-settings" });
+}
+
 </script>
 
 <style scoped>
@@ -272,8 +286,69 @@ function goDocuments() {
 
 .page-head,
 .profile-grid,
+.model-settings-entry,
 .manager-grid {
   margin-bottom: 20px;
+}
+
+.model-settings-entry {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 22px;
+  border: 1px solid var(--cm-border);
+  border-radius: var(--cm-radius);
+  color: inherit;
+  background: linear-gradient(120deg, var(--cm-surface), var(--cm-primary-soft));
+  box-shadow: var(--cm-shadow);
+  cursor: pointer;
+  text-align: left;
+  transition: transform 0.18s ease, border-color 0.18s ease;
+}
+
+.model-settings-entry:hover {
+  border-color: var(--cm-primary);
+  transform: translateY(-2px);
+}
+
+.entry-icon {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 16px;
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--cm-primary), #38bdf8);
+  font-weight: 900;
+}
+
+.entry-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 4px;
+}
+
+.entry-copy small {
+  color: var(--cm-primary);
+  font-weight: 800;
+}
+
+.entry-copy strong {
+  color: var(--cm-heading);
+  font-size: 19px;
+}
+
+.entry-copy span,
+.entry-action {
+  color: var(--cm-muted);
+}
+
+.entry-action {
+  flex: 0 0 auto;
+  font-weight: 700;
 }
 
 .page-head,
@@ -450,9 +525,14 @@ function goDocuments() {
   .page-head,
   .profile-panel,
   .stat-panel,
-  .panel-head {
+  .panel-head,
+  .model-settings-entry {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .entry-action {
+    align-self: flex-start;
   }
 }
 </style>

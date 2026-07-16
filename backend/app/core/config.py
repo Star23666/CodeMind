@@ -24,6 +24,15 @@ class Settings(BaseSettings):
     llm_thinking_budget: int = 512
     chat_total_timeout_seconds: float = 60.0
 
+    # Per-user LLM presets. The encryption key must be configured separately
+    # from JWT_SECRET_KEY so credentials can be rotated independently.
+    llm_config_encryption_key: str = ""
+    llm_config_max_presets: int = 5
+    llm_config_test_cooldown_seconds: int = 30
+    llm_config_test_timeout_seconds: float = 30.0
+    llm_openai_compatible_allowed_hosts: str = ""
+    llm_allow_proxy_fake_ip: bool = False
+
     mind_map_model: str = ""
     mind_map_timeout_seconds: float = 600.0
     mind_map_total_timeout_seconds: float = 0.0

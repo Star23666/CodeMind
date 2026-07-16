@@ -58,6 +58,12 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: "/me/ai-models",
+    name: "ai-model-settings",
+    component: () => import("../views/AiModelSettingsView.vue"),
+    meta: { requiresAuth: true },
+  },
+  {
     path: "/login",
     name: "login",
     component: () => import("../views/LoginView.vue"),

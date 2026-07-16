@@ -44,6 +44,7 @@ request.interceptors.response.use(
 
     const requestError = new Error(message);
     requestError.status = error.response?.status;
+    requestError.retryAfter = Number(error.response?.headers?.["retry-after"] || 0);
     return Promise.reject(requestError);
   },
 );
