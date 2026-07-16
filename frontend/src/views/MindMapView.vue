@@ -61,12 +61,17 @@
 
           <label v-if="histories.length" class="history-control">
             <span>历史版本</span>
-            <el-select v-model="selectedHistoryId" placeholder="打开已保存地图" @change="openHistory">
+            <el-select
+              v-model="selectedHistoryId"
+              placeholder="打开已保存地图"
+              :disabled="generating"
+              @change="openHistory"
+            >
               <el-option
                 v-for="item in histories"
                 :key="item.id"
                 :value="item.id"
-                :label="item.title + ' · ' + formatTime(item.updated_at)"
+                :label="historyOptionLabel(item)"
               />
             </el-select>
           </label>
@@ -143,6 +148,21 @@
           </div>
 
           <div class="document-actions" aria-label="地图文件操作">
+            <el-dropdown v-if="histories.length" @command="openHistory">
+              <button type="button" class="plain-action history-action" :disabled="generating">
+                全部地图 {{ histories.length }}⌄
+              </button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item
+                    v-for="item in histories"
+                    :key="item.id"
+                    :command="item.id"
+                    :disabled="item.id === activeHistoryId"
+                  >{{ historyOptionLabel(item) }}</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
             <button type="button" class="plain-action" :class="{ active: inspectorOpen }" @click="inspectorOpen = !inspectorOpen">详情</button>
             <el-button size="small" type="primary" :loading="saving" :disabled="!canSave" @click="saveCurrent">
               {{ saveButtonLabel }}
@@ -193,7 +213,7 @@
             <div><dt>原文覆盖</dt><dd>{{ mapStats.evidenceCoverage }}%</dd></div>
             <div><dt>已掌握</dt><dd>{{ masteredCount }}/{{ learnableNodes.length }}</dd></div>
           </dl>
-          <button v-if="nextLearningNode" type="button" class="continue-learning" @click="openLearningNode(nextLearningNode)">
+          <button v-if="nextLearningNode" type="button" class="continue-learning" @click="continueLearning">
             <span>继续学习</span><strong>{{ nextLearningNode.title }}</strong><i>→</i>
           </button>
         </section>
@@ -353,6 +373,7 @@
 </template>
 
 <script setup>
+import { ElMessageBox } from "element-plus";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import AppHeader from "../components/layout/AppHeader.vue";
 import MindMapCanvas from "../components/mindmap/MindMapCanvas.vue";
@@ -389,6 +410,7 @@ const {
   hasOwnSources,
   healthOnline,
   histories,
+  historyOptionLabel,
   historyViewState,
   isDirty,
   isSelectedMastered,
@@ -421,6 +443,7 @@ const {
   searchStatus,
   searchTerm,
   selectNode,
+  setNodeMastery,
   selectedHistoryId,
   selectedLearningTip,
   selectedNode,
@@ -549,6 +572,35 @@ async function openLearningNode(node) {
   if (!isInsideFocusedBranch(node.id)) exitBranchFocus();
   await nextTick();
   await focusLearningNode(node);
+}
+
+async function continueLearning() {
+  const target = nextLearningNode.value;
+  if (!target) return;
+
+  const current = selectedNode.value;
+  if (current?.depth > 0) {
+    let mastered = false;
+    try {
+      await ElMessageBox.confirm(
+        `“${current.title}”是否已经掌握？`,
+        "继续学习",
+        {
+          confirmButtonText: "已掌握，下一节",
+          cancelButtonText: "还需复习，下一节",
+          distinguishCancelAndClose: true,
+          closeOnClickModal: false,
+          type: "info",
+        },
+      );
+      mastered = true;
+    } catch (action) {
+      if (action !== "cancel") return;
+    }
+    setNodeMastery(current, mastered);
+  }
+
+  await openLearningNode(target);
 }
 
 function changeDensity(value) {
@@ -1395,6 +1447,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleGlobalKeydown)
 .node-search > button:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .document-actions { justify-content: flex-end; gap: 6px; }
+.history-action { white-space: nowrap; }
+.history-action:disabled { opacity: 0.55; cursor: not-allowed; }
 .more-action,
 .shortcut-action { width: 34px; padding: 0; letter-spacing: 0.05em; }
 .shortcut-list { display: grid; gap: 9px; color: var(--cm-text); }

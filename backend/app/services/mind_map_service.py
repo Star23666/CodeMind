@@ -358,7 +358,7 @@ class MindMapService:
                     return await request_answer(retry_kwargs)
 
             try:
-                if total_timeout_seconds is None:
+                if total_timeout_seconds is None or total_timeout_seconds <= 0:
                     return await request_with_length_retry()
                 async with asyncio.timeout(total_timeout_seconds):
                     return await request_with_length_retry()

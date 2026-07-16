@@ -32,6 +32,8 @@ const DEPTH_OPTIONS = [
   { label: "深入", value: 4 },
 ];
 
+const ACTIVE_GENERATION_KEY = "codemind_mind_map_active_generation";
+
 export function useMindMapWorkspace() {
   const route = useRoute();
   const router = useRouter();
@@ -162,8 +164,12 @@ export function useMindMapWorkspace() {
     learnableNodes.value.length ? Math.round((masteredCount.value / learnableNodes.value.length) * 100) : 0,
   );
   const nextLearningNode = computed(() => {
-    const unmastered = learnableNodes.value.filter((node) => !masteredNodeIds.value.has(node.id));
-    return unmastered.find((node) => !node.children?.length) || unmastered[0] || null;
+    const currentIndex = selectedNode.value?.depth > 0
+      ? learnableNodes.value.findIndex((node) => node.id === selectedNode.value.id)
+      : -1;
+    return learnableNodes.value
+      .slice(currentIndex + 1)
+      .find((node) => !masteredNodeIds.value.has(node.id)) || null;
   });
   const mapStats = computed(() => {
     const nodes = allMapNodes.value;
@@ -240,12 +246,19 @@ export function useMindMapWorkspace() {
       knowledgeBases.value = await listKnowledgeBases();
       const requestedId = Number(route.query.knowledge_base_id);
       const requestedBase = knowledgeBases.value.find((item) => item.id === requestedId);
-      knowledgeBaseId.value = requestedBase?.id || knowledgeBases.value[0]?.id || null;
+      const activeGeneration = readActiveGeneration();
+      const activeBase = knowledgeBases.value.find(
+        (item) => item.id === activeGeneration?.knowledgeBaseId,
+      );
+      if (activeGeneration && !activeBase) sessionStorage.removeItem(ACTIVE_GENERATION_KEY);
+      knowledgeBaseId.value = activeBase?.id || requestedBase?.id || knowledgeBases.value[0]?.id || null;
       loadedKnowledgeBaseId.value = knowledgeBaseId.value;
       if (knowledgeBaseId.value) {
         await Promise.all([loadDocuments(), loadHistories()]);
         await resumeActiveJob();
-        await openLatestHistoryWhenIdle();
+        await openLatestHistoryWhenIdle(activeBase?.id || requestedBase?.id || null);
+      } else {
+        await loadHistories();
       }
     } catch (error) {
       loadError.value = error.message;
@@ -282,7 +295,7 @@ export function useMindMapWorkspace() {
     });
     await Promise.all([loadDocuments(), loadHistories()]);
     await resumeActiveJob();
-    await openLatestHistoryWhenIdle();
+    await openLatestHistoryWhenIdle(knowledgeBaseId.value);
   }
 
   function resetWorkspace() {
@@ -306,16 +319,19 @@ export function useMindMapWorkspace() {
 
   async function loadHistories() {
     try {
-      histories.value = knowledgeBaseId.value ? await listMindMapHistories(knowledgeBaseId.value) : [];
+      histories.value = await listMindMapHistories();
     } catch (error) {
       histories.value = [];
       ElMessage.warning(`历史版本读取失败：${error.message}`);
     }
   }
 
-  async function openLatestHistoryWhenIdle() {
+  async function openLatestHistoryWhenIdle(preferredKnowledgeBaseId = null) {
     if (generating.value || mapData.value || !histories.value.length) return;
-    await openHistory(histories.value[0].id, { skipGuard: true });
+    const latestHistory = preferredKnowledgeBaseId
+      ? histories.value.find((item) => item.knowledge_base_id === preferredKnowledgeBaseId)
+      : histories.value[0];
+    if (latestHistory) await openHistory(latestHistory.id, { skipGuard: true });
   }
 
   async function openHistory(historyId, options = {}) {
@@ -328,6 +344,15 @@ export function useMindMapWorkspace() {
     try {
       const history = await getMindMapHistory(historyId);
       if (!history.result?.root) throw new Error("历史版本缺少有效地图数据");
+      if (history.knowledge_base_id !== knowledgeBaseId.value) {
+        knowledgeBaseId.value = history.knowledge_base_id;
+        loadedKnowledgeBaseId.value = history.knowledge_base_id;
+        await router.replace({
+          name: "mind-map",
+          query: { knowledge_base_id: history.knowledge_base_id },
+        });
+        await loadDocuments();
+      }
       mapData.value = history.result;
       activeHistoryId.value = history.id;
       selectedHistoryId.value = history.id;
@@ -448,6 +473,7 @@ export function useMindMapWorkspace() {
       });
       sessionStorage.setItem(activeJobKey(), generationJob.value.job_id);
       sessionStorage.setItem(startedAtKey(), String(Date.now()));
+      writeActiveGeneration(generationJob.value.job_id, knowledgeBaseId.value);
       startTracking();
     } catch (error) {
       loadError.value = error.message;
@@ -516,9 +542,14 @@ export function useMindMapWorkspace() {
 
   function toggleSelectedMastery() {
     if (!selectedNode.value || selectedNode.value.depth === 0) return;
+    setNodeMastery(selectedNode.value, !masteredNodeIds.value.has(selectedNode.value.id));
+  }
+
+  function setNodeMastery(node, mastered) {
+    if (!node || node.depth === 0) return;
     const next = new Set(masteredNodeIds.value);
-    if (next.has(selectedNode.value.id)) next.delete(selectedNode.value.id);
-    else next.add(selectedNode.value.id);
+    if (mastered) next.add(node.id);
+    else next.delete(node.id);
     masteredNodeIds.value = next;
     saveMastery();
   }
@@ -681,6 +712,23 @@ export function useMindMapWorkspace() {
     return `codemind_mind_map_target_${knowledgeBaseId.value}`;
   }
 
+  function readActiveGeneration() {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(ACTIVE_GENERATION_KEY) || "null");
+      if (!saved?.jobId || !Number.isFinite(Number(saved.knowledgeBaseId))) return null;
+      return { jobId: saved.jobId, knowledgeBaseId: Number(saved.knowledgeBaseId) };
+    } catch {
+      return null;
+    }
+  }
+
+  function writeActiveGeneration(jobId, activeKnowledgeBaseId) {
+    sessionStorage.setItem(ACTIVE_GENERATION_KEY, JSON.stringify({
+      jobId,
+      knowledgeBaseId: activeKnowledgeBaseId,
+    }));
+  }
+
   function createGenerationTarget() {
     const selectedDocument = documents.value.find((item) => item.id === documentId.value);
     const selectedBase = knowledgeBases.value.find((item) => item.id === knowledgeBaseId.value);
@@ -709,15 +757,25 @@ export function useMindMapWorkspace() {
   }
 
   function clearActiveJob(preserveTarget = false) {
+    const jobId = sessionStorage.getItem(activeJobKey());
     sessionStorage.removeItem(activeJobKey());
     sessionStorage.removeItem(startedAtKey());
     if (!preserveTarget) sessionStorage.removeItem(targetKey());
+    const activeGeneration = readActiveGeneration();
+    if (activeGeneration?.jobId === jobId || activeGeneration?.knowledgeBaseId === knowledgeBaseId.value) {
+      sessionStorage.removeItem(ACTIVE_GENERATION_KEY);
+    }
   }
 
   async function resumeActiveJob() {
     restoreGenerationTarget();
-    const jobId = sessionStorage.getItem(activeJobKey());
+    const activeGeneration = readActiveGeneration();
+    const jobId = activeGeneration?.knowledgeBaseId === knowledgeBaseId.value
+      ? activeGeneration.jobId
+      : sessionStorage.getItem(activeJobKey());
     if (!jobId) return;
+    sessionStorage.setItem(activeJobKey(), jobId);
+    writeActiveGeneration(jobId, knowledgeBaseId.value);
     try {
       generationJob.value = await getMindMapJob(jobId);
       if (generationJob.value.status === "completed") {
@@ -901,6 +959,13 @@ export function useMindMapWorkspace() {
     return value ? new Date(value).toLocaleString("zh-CN") : "";
   }
 
+  function historyOptionLabel(history) {
+    const knowledgeBaseName = knowledgeBases.value.find(
+      (item) => item.id === history.knowledge_base_id,
+    )?.name || `知识库 #${history.knowledge_base_id}`;
+    return `${history.title} · ${knowledgeBaseName} · ${formatTime(history.updated_at)}`;
+  }
+
   return {
     activeHistoryId,
     askNode,
@@ -933,6 +998,7 @@ export function useMindMapWorkspace() {
     healthOnline,
     histories,
     historyViewState,
+    historyOptionLabel,
     isDirty,
     isSelectedMastered,
     knowledgeBaseId,
@@ -964,6 +1030,7 @@ export function useMindMapWorkspace() {
     searchStatus,
     searchTerm,
     selectNode,
+    setNodeMastery,
     selectedHistoryId,
     selectedLearningTip,
     selectedNode,

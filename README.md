@@ -144,7 +144,9 @@ LLM_ALLOW_PROXY_FAKE_IP=false
 
 # 可选：为空时复用 LLM_MODEL
 MIND_MAP_MODEL=replace_with_structured_text_model
-MIND_MAP_TOTAL_TIMEOUT_SECONDS=150
+MIND_MAP_TIMEOUT_SECONDS=600
+# 每次模型调用（含结构化输出重试）的墙钟总时限，生产环境建议保持有限值
+MIND_MAP_TOTAL_TIMEOUT_SECONDS=900
 MIND_MAP_ENABLE_THINKING=false
 MIND_MAP_BATCH_MAX_TOKENS=1600
 MIND_MAP_MERGE_MAX_TOKENS=4096
@@ -159,6 +161,10 @@ DOCUMENT_WORKER_CONCURRENCY=2
 
 JWT_SECRET_KEY=replace_with_a_long_random_secret
 ```
+
+`MIND_MAP_TIMEOUT_SECONDS` 是连接、读取、写入等网络阶段的超时；`MIND_MAP_TOTAL_TIMEOUT_SECONDS`
+才是每次知识地图模型调用的墙钟总时限。管理员可以显式设为 `0` 关闭总时限，但异常上游若持续零星返回
+数据而不结束，可能长期占用 3 个全局导图 LLM 槽位，因此生产环境不建议这样配置。
 
 注意事项：
 
@@ -364,7 +370,7 @@ python -m pip install pytest==8.3.5
 python -m pytest -q
 ```
 
-当前后端测试共 80 项，覆盖认证和 JWT 撤销、权限、文档处理与重启恢复、取消和重复任务防护、索引事务补偿与陈旧向量过滤、反馈持久化、健康检查、删除清理、检索降级、Prompt、LLM 异常、RAG 编排、SSE 流式生成、问答历史，以及知识地图生成、JSON Mode、硬总时限、任务恢复、事务一致性、并发控制、历史和接口权限。
+当前后端测试共 93 项，覆盖认证和 JWT 撤销、权限、个人模型配置与 SSRF 防护、文档处理与重启恢复、取消和重复任务防护、索引事务补偿与陈旧向量过滤、反馈持久化、健康检查、删除清理、检索降级、Prompt、LLM 异常、RAG 编排、SSE 流式生成、问答历史，以及知识地图生成、JSON Mode、流式硬总时限、并发槽位释放、任务恢复、事务一致性、并发控制、历史和接口权限。
 
 Docker 端到端测试已验证前端 Nginx 代理下的注册、登录、知识库创建、文档上传与解析、SSE 问答、来源返回、知识地图生成、任务重启恢复和历史详情落库。当前实测小范围知识地图约 36 秒完成，生成 15 个节点，节点数、历史记录和来源引用均通过一致性校验。
 

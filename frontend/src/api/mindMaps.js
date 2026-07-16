@@ -17,7 +17,10 @@ export function askMindMapNode(payload) {
 }
 
 export function listMindMapHistories(knowledgeBaseId) {
-  return request.get("/mind-maps/histories", { params: { knowledge_base_id: knowledgeBaseId } });
+  const config = knowledgeBaseId
+    ? { params: { knowledge_base_id: knowledgeBaseId } }
+    : undefined;
+  return request.get("/mind-maps/histories", config);
 }
 
 export function getMindMapHistory(historyId) {
