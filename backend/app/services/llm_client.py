@@ -43,6 +43,20 @@ AUTO_DISABLE_THINKING_MODEL_PREFIXES = (
     "qwen/qwen3.6-",
 )
 
+MODEL_NOT_FOUND_ERROR_MARKERS = (
+    "model_not_found",
+    "model not found",
+    "model does not exist",
+    "model doesn't exist",
+    "unknown model",
+    "invalid model",
+    "no access to model",
+    "do not have access to model",
+    "模型不存在",
+    "未找到模型",
+    "无权访问该模型",
+)
+
 
 class LlmServiceError(RuntimeError):
     def __init__(self, message: str, *, status_code: int = 503) -> None:
@@ -51,6 +65,22 @@ class LlmServiceError(RuntimeError):
 
 
 class LlmClient:
+    def _api_status_error_message(self, exc: Exception) -> str:
+        status_code = getattr(exc, "status_code", None)
+        error_text = " ".join(
+            str(value)
+            for value in (exc, getattr(exc, "body", None))
+            if value is not None
+        ).casefold()
+
+        if status_code in (401, 403):
+            return "大模型服务认证失败或无访问权限，请检查 API Key。"
+        if any(marker in error_text for marker in MODEL_NOT_FOUND_ERROR_MARKERS):
+            return "模型不存在或当前 API Key 无权访问该模型，请检查模型名称。"
+        if status_code == 404:
+            return "模型或 API 接口不存在，请检查模型名称与 API Base URL。"
+        return "大模型服务返回异常，请稍后重试。"
+
     async def _validate_destination(self, runtime_config: LlmRuntimeConfig) -> None:
         try:
             await validate_llm_destination(
@@ -228,7 +258,10 @@ class LlmClient:
             raise
         except AuthenticationError as exc:
             self._log_provider_error(exc)
-            raise LlmServiceError("大模型服务认证失败，请检查服务端配置。", status_code=502) from exc
+            raise LlmServiceError(
+                "大模型服务认证失败，请检查 API Key。",
+                status_code=502,
+            ) from exc
         except RateLimitError as exc:
             self._log_provider_error(exc)
             raise LlmServiceError("大模型服务请求过于频繁，请稍后重试。") from exc
@@ -237,7 +270,10 @@ class LlmClient:
             raise LlmServiceError("大模型服务连接超时或暂时不可用，请稍后重试。") from exc
         except APIStatusError as exc:
             self._log_provider_error(exc)
-            raise LlmServiceError("大模型服务返回异常，请稍后重试。", status_code=502) from exc
+            raise LlmServiceError(
+                self._api_status_error_message(exc),
+                status_code=502,
+            ) from exc
         except Exception as exc:
             self._log_provider_error(exc)
             raise LlmServiceError("大模型服务暂时不可用，请稍后重试。") from exc
@@ -376,7 +412,10 @@ class LlmClient:
             raise
         except AuthenticationError as exc:
             self._log_provider_error(exc)
-            raise LlmServiceError("大模型服务认证失败，请检查服务端配置。", status_code=502) from exc
+            raise LlmServiceError(
+                "大模型服务认证失败，请检查 API Key。",
+                status_code=502,
+            ) from exc
         except RateLimitError as exc:
             self._log_provider_error(exc)
             raise LlmServiceError("大模型服务请求过于频繁，请稍后重试。") from exc
@@ -385,7 +424,10 @@ class LlmClient:
             raise LlmServiceError("大模型服务连接超时或暂时不可用，请稍后重试。") from exc
         except APIStatusError as exc:
             self._log_provider_error(exc)
-            raise LlmServiceError("大模型服务返回异常，请稍后重试。", status_code=502) from exc
+            raise LlmServiceError(
+                self._api_status_error_message(exc),
+                status_code=502,
+            ) from exc
         except Exception as exc:
             self._log_provider_error(exc)
             raise LlmServiceError("大模型服务暂时不可用，请稍后重试。") from exc
@@ -403,7 +445,11 @@ class LlmClient:
         return "\n".join(answer_parts)
 
     def _log_provider_error(self, exc: Exception) -> None:
-        logger.warning("LLM provider request failed: %s", type(exc).__name__, exc_info=True)
+        logger.warning(
+            "LLM provider request failed (type=%s, status=%s)",
+            type(exc).__name__,
+            getattr(exc, "status_code", None),
+        )
 
 
 llm_client = LlmClient()

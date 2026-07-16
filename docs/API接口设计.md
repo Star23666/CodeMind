@@ -28,6 +28,13 @@
 | 认证     | POST   | `/api/auth/login`                                | 用户登录               |
 | 认证     | POST   | `/api/auth/logout`                               | 用户退出               |
 | 认证     | GET    | `/api/auth/me`                                   | 获取当前用户           |
+| 个人模型 | GET    | `/api/me/llm-configs`                            | 查询配置与当前模型     |
+| 个人模型 | POST   | `/api/me/llm-configs`                            | 新增个人模型配置       |
+| 个人模型 | PUT    | `/api/me/llm-configs/{config_id}`                | 更新个人模型配置       |
+| 个人模型 | DELETE | `/api/me/llm-configs/{config_id}`                | 删除个人模型配置       |
+| 个人模型 | POST   | `/api/me/llm-configs/{config_id}/test`           | 测试模型连接           |
+| 个人模型 | POST   | `/api/me/llm-configs/{config_id}/activate`       | 启用个人模型配置       |
+| 个人模型 | POST   | `/api/me/llm-configs/use-system-default`         | 切换到系统默认模型     |
 | 知识库   | GET    | `/api/knowledge-bases`                           | 查询知识库列表         |
 | 知识库   | POST   | `/api/knowledge-bases`                           | 创建知识库             |
 | 知识库   | PATCH  | `/api/knowledge-bases/{knowledge_base_id}`       | 更新知识库             |
@@ -131,6 +138,22 @@ POST /api/auth/logout
 ```
 
 退出会持久化递增当前用户的 `token_version`。本次登录签发的 JWT 以及同版本的其他 JWT 会立即失效，再次访问受保护接口返回 `401`；重新登录后获取新版本 Token。
+
+## 3.5 个人大模型配置
+
+个人模型接口均要求 JWT，且只能访问当前用户自己的配置。新增配置请求包含 `name`、`provider`、
+`base_url`、`model` 和 `api_key`；查询响应仅返回 `masked_api_key`，不会返回完整密钥。
+
+配置需要先调用测试接口并成功，才能启用。测试失败时返回受控错误并保存 `test_status=failed`：
+
+- API Key 无效或无权限：提示认证失败。
+- 上游连接或读取超时：提示连接超时。
+- 模型名错误或无权使用模型：提示模型不存在或无权访问。
+- HTTP 404 但供应商未提供明确错误码：提示检查模型名称与 API Base URL。
+
+当前用户启用个人配置后，RAG 问答、SSE 和知识地图都传递同一个用户运行时配置；个人模型调用失败时
+不会自动使用系统模型。停用或删除个人配置后使用 `.env` 中的系统模型。Embedding 不属于 BYOK 范围。
+AI 出题尚由 Issue #18 跟踪，实现时必须复用相同的用户运行时配置解析。
 
 ## 4. 知识库接口
 
