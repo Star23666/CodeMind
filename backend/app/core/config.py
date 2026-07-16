@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     chat_total_timeout_seconds: float = 60.0
 
     mind_map_model: str = ""
-    mind_map_timeout_seconds: float = 120.0
-    mind_map_total_timeout_seconds: float = 150.0
+    mind_map_timeout_seconds: float = 600.0
+    mind_map_total_timeout_seconds: float = 0.0
     mind_map_max_retries: int = 0
     mind_map_enable_thinking: bool = False
     mind_map_batch_max_tokens: int = 1600

@@ -38,7 +38,9 @@ CHAT_TOTAL_TIMEOUT_SECONDS=60
 
 # 可选：知识地图单独使用更快的纯文本指令模型
 MIND_MAP_MODEL=replace_with_structured_text_model
-MIND_MAP_TOTAL_TIMEOUT_SECONDS=150
+MIND_MAP_TIMEOUT_SECONDS=600
+# 设为 0 表示关闭整体耗时上限，真实的模型或网络异常仍会报错
+MIND_MAP_TOTAL_TIMEOUT_SECONDS=0
 MIND_MAP_ENABLE_THINKING=false
 
 EMBEDDING_API_KEY=replace_with_embedding_key

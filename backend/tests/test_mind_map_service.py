@@ -304,6 +304,18 @@ class MindMapServiceTest(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 504)
 
+    def test_non_positive_total_timeout_allows_slow_generation_to_finish(self) -> None:
+        service = MindMapService(client=ConcurrencyTrackingLlmClient())
+
+        answer = run_async(
+            service._generate_answer(
+                "slow prompt",
+                total_timeout_seconds=0,
+            )
+        )
+
+        self.assertIn('"title": "操作系统"', answer)
+
     def test_structured_generation_retries_once_with_larger_output_budget(self) -> None:
         client = LengthThenSuccessStreamingLlmClient()
         service = MindMapService(client=client)
