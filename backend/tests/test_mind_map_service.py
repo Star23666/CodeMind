@@ -128,6 +128,32 @@ class LengthThenSuccessStreamingLlmClient:
         yield '{"title":"重试成功"}'
 
 
+class TricklingStreamingLlmClient:
+    def __init__(self, *, normal_delay: float = 0.02) -> None:
+        self.normal_delay = normal_delay
+        self.active_calls = 0
+        self.max_active_calls = 0
+        self.cancelled_calls = 0
+
+    async def stream_answer(self, prompt: str, **kwargs):
+        self.active_calls += 1
+        self.max_active_calls = max(self.max_active_calls, self.active_calls)
+        try:
+            if prompt.startswith("stuck"):
+                try:
+                    while True:
+                        yield "x"
+                        await asyncio.sleep(0.002)
+                except asyncio.CancelledError:
+                    self.cancelled_calls += 1
+                    raise
+
+            await asyncio.sleep(self.normal_delay)
+            yield '{"title":"正常完成"}'
+        finally:
+            self.active_calls -= 1
+
+
 class MindMapServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.engine = create_engine("sqlite+pysqlite:///:memory:")
@@ -315,6 +341,54 @@ class MindMapServiceTest(unittest.TestCase):
         )
 
         self.assertIn('"title": "操作系统"', answer)
+
+    def test_trickling_stream_timeout_releases_slots_for_follow_up_request(self) -> None:
+        client = TricklingStreamingLlmClient()
+        service = MindMapService(client=client)
+
+        async def run_stuck_then_normal():
+            timed_out = await asyncio.gather(
+                *(
+                    service._generate_answer(
+                        f"stuck-{index}",
+                        total_timeout_seconds=0.03,
+                    )
+                    for index in range(service.llm_concurrency)
+                ),
+                return_exceptions=True,
+            )
+            follow_up = await asyncio.wait_for(
+                service._generate_answer(
+                    "normal-follow-up",
+                    total_timeout_seconds=0.2,
+                ),
+                timeout=0.3,
+            )
+            return timed_out, follow_up
+
+        timed_out, follow_up = run_async(run_stuck_then_normal())
+
+        self.assertEqual(client.max_active_calls, service.llm_concurrency)
+        self.assertEqual(client.cancelled_calls, service.llm_concurrency)
+        self.assertEqual(client.active_calls, 0)
+        self.assertTrue(all(isinstance(error, LlmServiceError) for error in timed_out))
+        self.assertTrue(all(error.status_code == 504 for error in timed_out))
+        self.assertIn('"title":"正常完成"', follow_up)
+
+    def test_slow_stream_completes_within_total_timeout(self) -> None:
+        client = TricklingStreamingLlmClient(normal_delay=0.04)
+        service = MindMapService(client=client)
+
+        answer = run_async(
+            service._generate_answer(
+                "normal-slow",
+                total_timeout_seconds=0.2,
+            )
+        )
+
+        self.assertIn('"title":"正常完成"', answer)
+        self.assertEqual(client.cancelled_calls, 0)
+        self.assertEqual(client.active_calls, 0)
 
     def test_structured_generation_retries_once_with_larger_output_budget(self) -> None:
         client = LengthThenSuccessStreamingLlmClient()

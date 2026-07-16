@@ -42,8 +42,8 @@ LLM_CONFIG_ENCRYPTION_KEY=replace_with_a_separate_random_secret
 # 可选：知识地图单独使用更快的纯文本指令模型
 MIND_MAP_MODEL=replace_with_structured_text_model
 MIND_MAP_TIMEOUT_SECONDS=600
-# 设为 0 表示关闭整体耗时上限，真实的模型或网络异常仍会报错
-MIND_MAP_TOTAL_TIMEOUT_SECONDS=0
+# 每次模型调用（含结构化输出重试）的墙钟总时限
+MIND_MAP_TOTAL_TIMEOUT_SECONDS=900
 MIND_MAP_ENABLE_THINKING=false
 
 EMBEDDING_API_KEY=replace_with_embedding_key
@@ -117,7 +117,8 @@ RAG 问答提供两个接口：`POST /api/chat` 返回完整 JSON；`POST /api/c
 
 - `POST /api/mind-maps/jobs` 创建后台任务，`GET /api/mind-maps/jobs/{job_id}` 查询进度。
 - 1～3 个资料片段会单次生成；更大范围先分批提炼，再合并为总览、章节、概念和细节节点。
-- 结构生成通过 LLM 流式响应收集文本，并受每次请求总时限约束；知识地图可单独配置纯文本模型和关闭思考模式。
+- 结构生成通过 LLM 流式响应收集文本，并受每次模型调用的墙钟总时限约束；首次生成和结构化输出长度重试共享该时限，超时会取消流并释放全局 LLM 并发槽位。
+- `MIND_MAP_TOTAL_TIMEOUT_SECONDS=0` 仅作为管理员显式关闭保护的特殊选项；异常上游持续零星输出但不结束时可能永久占用 3 个全局槽位，生产环境应保留有限值。
 - 后端重启时，处于等待或处理中的知识地图任务会自动重新排队，客户端可继续查询原任务 ID。
 - 每个节点可包含 `key_points`、`learning_tip`、原文来源和子节点。
 - 同一后端实例的知识地图 LLM 调用并发上限为 3；分批调用失败时会取消剩余请求。
@@ -131,7 +132,7 @@ cd backend
 python -m pytest -q
 ```
 
-当前基线为 `90 passed`。测试使用 SQLite 和替身服务覆盖主要业务，其中包括个人模型配置与 SSRF 防护、文档重启恢复、重复入队、取消、索引补偿和陈旧向量过滤，反馈持久化与越权，JWT 注销撤销，以及 MySQL/Chroma 就绪探针；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、Nginx SSE 代理和知识地图任务恢复、多批次任务链路。
+当前基线为 `93 passed`。测试使用 SQLite 和替身服务覆盖主要业务，其中包括个人模型配置与 SSRF 防护、知识地图流式总超时和并发槽位释放、文档重启恢复、重复入队、取消、索引补偿和陈旧向量过滤，反馈持久化与越权，JWT 注销撤销，以及 MySQL/Chroma 就绪探针；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、Nginx SSE 代理和知识地图任务恢复、多批次任务链路。
 
 ## Docker 运行
 
