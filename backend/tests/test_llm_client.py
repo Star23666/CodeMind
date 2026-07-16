@@ -5,6 +5,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
+from openai import (
+    APITimeoutError,
+    AuthenticationError,
+    BadRequestError,
+    NotFoundError,
+)
+
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
@@ -24,6 +32,19 @@ class FailingCompletions:
 class FailingClient:
     def __init__(self) -> None:
         self.chat = type("Chat", (), {"completions": FailingCompletions()})()
+
+
+class ProviderErrorCompletions:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def create(self, **kwargs):
+        raise self.error
+
+
+class ProviderErrorClient:
+    def __init__(self, error: Exception) -> None:
+        self.chat = SimpleNamespace(completions=ProviderErrorCompletions(error))
 
 
 class RecordingCompletions:
@@ -171,6 +192,82 @@ class LlmClientTest(unittest.TestCase):
                 run_async(client.generate_answer("test prompt"))
 
         self.assertIn("大模型服务", str(context.exception))
+
+    def test_provider_error_logging_does_not_include_exception_detail(self):
+        client = LlmClient()
+        error = RuntimeError("provider echoed secret sk-user-secret-1234")
+
+        with patch("app.services.llm_client.logger.warning") as warning:
+            client._log_provider_error(error)
+
+        warning.assert_called_once_with(
+            "LLM provider request failed (type=%s, status=%s)",
+            "RuntimeError",
+            None,
+        )
+        self.assertNotIn("sk-user-secret-1234", repr(warning.call_args))
+
+    def _assert_provider_error_message(
+        self,
+        error: Exception,
+        expected: str,
+        *,
+        status_code: int = 502,
+    ) -> None:
+        client = LlmClient()
+        with (
+            patch("app.services.llm_client.settings.llm_api_key", "test-key"),
+            patch("app.services.llm_client.settings.llm_model", "test-model"),
+            patch("openai.AsyncOpenAI", return_value=ProviderErrorClient(error)),
+            patch("app.services.llm_client.logger.warning"),
+        ):
+            with self.assertRaises(LlmServiceError) as context:
+                run_async(client.generate_answer("test prompt"))
+
+        self.assertEqual(context.exception.status_code, status_code)
+        self.assertIn(expected, str(context.exception))
+
+    def test_authentication_failure_has_specific_message(self):
+        request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+        response = httpx.Response(401, request=request)
+        error = AuthenticationError(
+            "invalid api key",
+            response=response,
+            body={"error": {"code": "invalid_api_key"}},
+        )
+
+        self._assert_provider_error_message(error, "认证失败")
+
+    def test_timeout_has_specific_message(self):
+        request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+
+        self._assert_provider_error_message(
+            APITimeoutError(request=request),
+            "连接超时",
+            status_code=503,
+        )
+
+    def test_not_found_status_identifies_model_or_base_url(self):
+        request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+        response = httpx.Response(404, request=request)
+        error = NotFoundError(
+            "not found",
+            response=response,
+            body={"error": {"code": "not_found"}},
+        )
+
+        self._assert_provider_error_message(error, "模型或 API 接口不存在")
+
+    def test_model_not_found_body_is_identified_for_bad_request(self):
+        request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+        response = httpx.Response(400, request=request)
+        error = BadRequestError(
+            "request rejected",
+            response=response,
+            body={"error": {"code": "model_not_found"}},
+        )
+
+        self._assert_provider_error_message(error, "模型不存在")
 
     def test_qwen36_automatically_disables_thinking_when_setting_is_unset(self):
         client = LlmClient()

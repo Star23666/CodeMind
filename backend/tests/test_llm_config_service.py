@@ -18,6 +18,7 @@ from app.services.llm_config_service import (
     LlmConfigRateLimitError,
     LlmConfigService,
 )
+from app.services.llm_client import LlmServiceError
 
 
 def run_async(coro):
@@ -223,6 +224,44 @@ class LlmConfigServiceTest(unittest.TestCase):
         refreshed = self.service.get(self.session, user_id=1, config_id=created.id)
         self.assertTrue(result.success)
         self.assertEqual(refreshed.test_status.value, "success")
+
+    def test_connection_test_preserves_specific_provider_failures(self):
+        created = self._create()
+        failure_messages = (
+            "大模型服务认证失败，请检查 API Key。",
+            "大模型服务连接超时或暂时不可用，请稍后重试。",
+            "模型不存在或当前 API Key 无权访问该模型，请检查模型名称。",
+        )
+
+        for message in failure_messages:
+            with self.subTest(message=message):
+                self.service._test_rate_limiter.reset()
+                with (
+                    patch.object(
+                        self.service,
+                        "_ensure_public_destination",
+                        new=AsyncMock(),
+                    ),
+                    patch(
+                        "app.services.llm_config_service.llm_client.generate_answer",
+                        new=AsyncMock(
+                            side_effect=LlmServiceError(message, status_code=502)
+                        ),
+                    ),
+                ):
+                    with self.assertRaises(LlmServiceError) as context:
+                        run_async(
+                            self.service.test_config(
+                                self.session,
+                                user_id=1,
+                                config_id=created.id,
+                            )
+                        )
+
+                refreshed = self.service.get(self.session, user_id=1, config_id=created.id)
+                self.assertEqual(str(context.exception), message)
+                self.assertEqual(refreshed.test_status.value, "failed")
+                self.assertEqual(refreshed.test_message, message)
 
     def test_proxy_fake_ip_requires_explicit_development_setting(self):
         fake_ip_result = [
