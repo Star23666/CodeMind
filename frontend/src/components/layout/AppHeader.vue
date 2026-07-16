@@ -1,10 +1,11 @@
 <template>
   <header class="app-header">
-    <RouterLink class="brand" to="/">
-      <span class="brand-mark">
-        <el-icon><Cpu /></el-icon>
-      </span>
-      <span>CodeMind</span>
+    <RouterLink class="brand" to="/" aria-label="CodeMind 首页">
+      <img
+        :class="['brand-logo', { 'brand-logo--dark': isDark }]"
+        :src="codeMindLogo"
+        alt="CodeMind"
+      />
     </RouterLink>
 
     <nav class="nav-links" aria-label="主导航">
@@ -38,9 +39,11 @@
 </template>
 
 <script setup>
-import { Cpu, Moon, Sunny } from "@element-plus/icons-vue";
+import { Moon, Sunny } from "@element-plus/icons-vue";
+import { ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { logoutUser } from "../../api/auth";
+import codeMindLogo from "../../assets/codemind-wordmark.png";
 import { useTheme } from "../../composables/useTheme";
 import { useUserStore } from "../../stores/user";
 
@@ -120,20 +123,31 @@ async function logout() {
 }
 
 .brand {
-  gap: 10px;
-  color: var(--cm-heading);
-  font-size: 19px;
-  font-weight: 800;
+  align-self: stretch;
+  width: fit-content;
 }
 
-.brand-mark {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  place-items: center;
-  border-radius: var(--cm-radius);
-  color: #ffffff;
-  background: linear-gradient(135deg, var(--cm-primary), #38bdf8);
+.brand-logo {
+  display: block;
+  width: 164px;
+  height: auto;
+  object-fit: contain;
+  transition:
+    filter 0.2s ease,
+    transform 0.2s ease;
+}
+
+.brand:hover .brand-logo {
+  filter: drop-shadow(0 5px 10px rgba(37, 99, 235, 0.2));
+  transform: translateY(-1px);
+}
+
+.brand-logo--dark {
+  filter: brightness(0) invert(1) drop-shadow(0 0 8px rgba(56, 189, 248, 0.25));
+}
+
+.brand:hover .brand-logo--dark {
+  filter: brightness(0) invert(1) drop-shadow(0 5px 12px rgba(56, 189, 248, 0.34));
 }
 
 .nav-links {
@@ -194,6 +208,10 @@ async function logout() {
 }
 
 @media (max-width: 560px) {
+  .brand-logo {
+    width: 150px;
+  }
+
   .nav-links {
     width: 100%;
     overflow-x: auto;

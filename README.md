@@ -134,6 +134,11 @@ LLM_MODEL=replace_with_chat_model
 LLM_MAX_TOKENS=1200
 LLM_THINKING_BUDGET=512
 CHAT_TOTAL_TIMEOUT_SECONDS=60
+LLM_CONFIG_ENCRYPTION_KEY=replace_with_a_separate_random_secret_at_least_32_chars
+# 仅在需要其他 OpenAI 兼容服务时填写精确域名，多个域名用逗号分隔
+LLM_OPENAI_COMPATIBLE_ALLOWED_HOSTS=
+# 仅本地 Clash fake-IP 开发环境可显式改为 true，生产环境保持 false
+LLM_ALLOW_PROXY_FAKE_IP=false
 # Qwen3.5/Qwen3.6 留空时会自动使用非思考模式
 # LLM_ENABLE_THINKING=false
 
@@ -159,6 +164,9 @@ JWT_SECRET_KEY=replace_with_a_long_random_secret
 
 - 两份文件中的 `MYSQL_PASSWORD` 应保持一致。
 - `BASE_URL` 填 API 根地址，例如 `https://provider.example.com/v1`，不要填写具体的 `/chat/completions`、`/embeddings` 或 `/rerank` 路径。
+- `LLM_CONFIG_ENCRYPTION_KEY` 必须使用至少 32 字符的独立随机密钥，不要与 JWT 密钥复用。
+- 个人模型配置中的硅基流动和 OpenAI 分别只允许官方 API 域名；其他 OpenAI 兼容域名必须由服务器管理员加入 `LLM_OPENAI_COMPATIBLE_ALLOWED_HOSTS`。
+- 后端会在测试连接和每次实际 LLM 请求前重新解析域名并拒绝本机、私网、链路本地及保留地址。`LLM_ALLOW_PROXY_FAKE_IP` 只能用于显式启用本地代理的开发环境。
 - 使用 `Qwen/Qwen3.6-35B-A3B` 时，普通 RAG 默认关闭思考以避免思考过程耗尽输出额度；显式开启思考后若尚未产生正文就达到长度上限，后端会自动关闭思考重试。
 - 不要提交 `.env`、`backend/.env`、API Key、JWT Secret 或数据库密码。
 
@@ -191,6 +199,25 @@ docker compose logs -f mysql
 ## 已有数据库升级
 
 `database/schema.sql` 只会在 MySQL 数据卷第一次初始化时执行。拉取包含数据库结构变更的新代码后，不能只重建镜像，还需要执行对应迁移。
+
+### 2026-07-15：用户大模型配置
+
+该迁移创建个人模型预设和当前模型偏好表。部署前必须先在 `backend/.env` 配置
+`LLM_CONFIG_ENCRYPTION_KEY=<至少32字符的独立随机密钥>`，再对已有数据库执行一次：
+
+Linux、macOS 或 WSL：
+
+```bash
+docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' \
+  < database/migrations/20260715_create_user_llm_configs.sql
+```
+
+Windows PowerShell：
+
+```powershell
+Get-Content -Raw database\migrations\20260715_create_user_llm_configs.sql |
+  docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
+```
 
 ### 2026-07-15：任务可靠性与 JWT 注销
 

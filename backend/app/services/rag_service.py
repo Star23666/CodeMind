@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.schemas.contracts import ChatRequest, ChatResponse
 from app.services.llm_client import LlmClient, LlmServiceError, llm_client
+from app.services.llm_config_service import llm_config_service
 from app.services.prompt_builder import build_rag_prompt, sanitize_answer_citations
 from app.services.qa_history_service import QaHistoryService, qa_history_service
 from app.services.retrieval_service import RetrievalService, retrieval_service
@@ -23,10 +24,12 @@ class RagService:
         retrieval_service: RetrievalService = retrieval_service,
         llm_client: LlmClient = llm_client,
         history_service: QaHistoryService = qa_history_service,
+        config_service=llm_config_service,
     ) -> None:
         self.retrieval_service = retrieval_service
         self.llm_client = llm_client
         self.history_service = history_service
+        self.config_service = config_service
 
     async def answer_question(
         self,
@@ -41,18 +44,20 @@ class RagService:
         )
 
         if prompt:
+            runtime_config = self.config_service.resolve_runtime(db, user_id=user_id)
             generation_started = time.perf_counter()
             try:
                 async with asyncio.timeout(settings.chat_total_timeout_seconds):
                     answer = await self.llm_client.generate_answer(
                         prompt,
                         enable_thinking=settings.llm_enable_thinking,
+                        runtime_config=runtime_config,
                     )
             except TimeoutError as exc:
                 logger.warning(
                     "RAG non-stream generation exceeded hard timeout "
                     "(model=%s, timeout_seconds=%s)",
-                    settings.llm_model,
+                    runtime_config.model,
                     settings.chat_total_timeout_seconds,
                 )
                 raise LlmServiceError(
@@ -62,7 +67,7 @@ class RagService:
             answer = sanitize_answer_citations(answer, source_count=len(sources))
             logger.info(
                 "RAG generation completed (mode=non_stream, model=%s, generation_ms=%.1f)",
-                settings.llm_model,
+                runtime_config.model,
                 (time.perf_counter() - generation_started) * 1000,
             )
         else:
@@ -112,12 +117,14 @@ class RagService:
         }
 
         if prompt:
+            runtime_config = self.config_service.resolve_runtime(db, user_id=user_id)
             answer_parts: list[str] = []
             generation_started = time.perf_counter()
             first_token_ms: float | None = None
             async for token in self.llm_client.stream_answer(
                 prompt,
                 enable_thinking=settings.llm_enable_thinking,
+                runtime_config=runtime_config,
             ):
                 if first_token_ms is None:
                     first_token_ms = (time.perf_counter() - generation_started) * 1000
@@ -131,7 +138,7 @@ class RagService:
             logger.info(
                 "RAG generation completed "
                 "(mode=stream, model=%s, first_token_ms=%.1f, generation_ms=%.1f)",
-                settings.llm_model,
+                runtime_config.model,
                 first_token_ms or 0.0,
                 (time.perf_counter() - generation_started) * 1000,
             )

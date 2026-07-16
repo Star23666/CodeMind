@@ -36,6 +36,9 @@ LLM_BASE_URL=https://provider.example.com/v1
 LLM_MODEL=replace_with_chat_model
 CHAT_TOTAL_TIMEOUT_SECONDS=60
 
+# 独立用于加密用户保存的模型 API Key，至少 32 个随机字符
+LLM_CONFIG_ENCRYPTION_KEY=replace_with_a_separate_random_secret
+
 # 可选：知识地图单独使用更快的纯文本指令模型
 MIND_MAP_MODEL=replace_with_structured_text_model
 MIND_MAP_TOTAL_TIMEOUT_SECONDS=150
@@ -90,6 +93,14 @@ RAG 问答提供两个接口：`POST /api/chat` 返回完整 JSON；`POST /api/c
 `text/event-stream`。流式接口依次发送 `meta`、多个 `token` 和 `done` 事件，只有生成完成并发送
 `done` 后才保存问答历史；处理异常时发送 `error` 事件。客户端断开或生成失败时，不应把未完成回答当作已保存记录。
 
+用户可在“我的 → AI 模型设置”中最多保存 5 套 OpenAI 兼容模型预设。API Key
+使用 `LLM_CONFIG_ENCRYPTION_KEY` 加密后写入数据库，接口只返回末四位；预设必须测试成功后才能启用。
+测试由后端限制为单用户单并发、至少间隔 30 秒。未启用个人预设时，
+系统默认项会展示并使用 `.env` 中的 `LLM_MODEL`。
+硅基流动和 OpenAI 预设只能使用各自官方域名，其他兼容域名需要服务端通过
+`LLM_OPENAI_COMPATIBLE_ALLOWED_HOSTS` 显式放行。测试连接、普通问答、SSE 和知识地图的
+每次实际请求前都会重新检查 DNS 解析结果，拒绝本机、私网、链路本地和保留地址。
+
 非流式回答受 `CHAT_TOTAL_TIMEOUT_SECONDS` 硬生成时限约束。检索和生成日志分别记录 Embedding/LLM 模型、检索耗时、首 Token、总耗时和 `finish_reason`。
 
 ## 文档任务说明
@@ -118,7 +129,7 @@ cd backend
 python -m pytest -q
 ```
 
-当前基线为 `80 passed`。测试使用 SQLite 和替身服务覆盖主要业务，其中包括文档重启恢复、重复入队、取消、索引补偿和陈旧向量过滤，反馈持久化与越权，JWT 注销撤销，以及 MySQL/Chroma 就绪探针；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、Nginx SSE 代理和知识地图任务恢复、多批次任务链路。
+当前基线为 `90 passed`。测试使用 SQLite 和替身服务覆盖主要业务，其中包括个人模型配置与 SSRF 防护、文档重启恢复、重复入队、取消、索引补偿和陈旧向量过滤，反馈持久化与越权，JWT 注销撤销，以及 MySQL/Chroma 就绪探针；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、Nginx SSE 代理和知识地图任务恢复、多批次任务链路。
 
 ## Docker 运行
 
