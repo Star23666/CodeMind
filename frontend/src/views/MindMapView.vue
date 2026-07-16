@@ -213,8 +213,14 @@
             <div><dt>原文覆盖</dt><dd>{{ mapStats.evidenceCoverage }}%</dd></div>
             <div><dt>已掌握</dt><dd>{{ masteredCount }}/{{ learnableNodes.length }}</dd></div>
           </dl>
-          <button v-if="nextLearningNode" type="button" class="continue-learning" @click="continueLearning">
-            <span>继续学习</span><strong>{{ nextLearningNode.title }}</strong><i>→</i>
+          <button
+            v-if="nextLearningNode || selectedNode?.depth > 0"
+            type="button"
+            class="continue-learning"
+            @click="continueLearning"
+          >
+            <span>{{ nextLearningNode ? "继续学习" : "完成本轮" }}</span>
+            <strong>{{ nextLearningNode?.title || selectedNode?.title }}</strong><i>→</i>
           </button>
         </section>
 
@@ -275,8 +281,12 @@
 
             <div v-if="selectedNode" class="selection-bar" aria-label="选中节点快捷操作">
               <div><span>{{ selectedNodeTypeLabel }}</span><strong>{{ selectedNode.title }}</strong></div>
-              <button type="button" :disabled="!selectedNode.children?.length" @click="enterBranchFocus(selectedNode)">聚焦分支 <kbd>F</kbd></button>
-              <button type="button" :disabled="!selectedNode.children?.length" @click="toggleSelectedBranch">收起/展开</button>
+              <button type="button" :disabled="!selectedNode.children?.length" @click="toggleBranchFocus(selectedNode)">
+                {{ selectedIsFocusRoot ? "退出聚焦" : "聚焦分支" }} <kbd>F</kbd>
+              </button>
+              <button type="button" :disabled="!selectedNode.children?.length" @click="toggleSelectedBranch">
+                {{ selectedBranchCollapsed ? "展开分支" : "收起分支" }}
+              </button>
               <button v-if="selectedNode.depth > 0" type="button" :class="{ mastered: isSelectedMastered }" @click="toggleSelectedMastery">
                 {{ isSelectedMastered ? "已掌握 ✓" : "标记掌握" }}
               </button>
@@ -296,6 +306,7 @@
               :construction-revision="mapConstructionRevision"
               :immersive="zenMode"
               @select="selectNode"
+              @branch-state-change="handleBranchStateChange"
               @view-change="handleCanvasViewChange"
               @search-change="handleSearchStatus"
               @density-change="changeDensity"
@@ -330,6 +341,29 @@
           />
         </section>
       </template>
+
+      <section v-else-if="histories.length && !generating && !generationJob" class="history-library" aria-label="全部已生成知识地图">
+        <header>
+          <div>
+            <span>全部知识地图</span>
+            <h2>从已生成记录继续学习</h2>
+            <p>这里汇总所有知识库的地图，不受上方当前知识库选择限制。</p>
+          </div>
+          <strong>{{ histories.length }} 张</strong>
+        </header>
+        <div class="history-shelf">
+          <button v-for="item in histories" :key="item.id" type="button" @click="openHistory(item.id)">
+            <span class="history-route" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span class="history-meta">
+              <b>{{ historyKnowledgeBaseName(item) }}</b>
+              <time>{{ formatTime(item.updated_at) }}</time>
+            </span>
+            <strong>{{ item.title }}</strong>
+            <small>{{ item.node_count }} 个知识节点</small>
+            <em>打开地图 →</em>
+          </button>
+        </div>
+      </section>
 
       <section v-else class="empty-atlas" :class="{ constructing: generating }">
         <div class="empty-map-mark" aria-hidden="true">
@@ -373,7 +407,7 @@
 </template>
 
 <script setup>
-import { ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import AppHeader from "../components/layout/AppHeader.vue";
 import KnowledgeBaseOptions from "../components/knowledge/KnowledgeBaseOptions.vue";
@@ -411,6 +445,7 @@ const {
   hasOwnSources,
   healthOnline,
   histories,
+  historyKnowledgeBaseName,
   historyOptionLabel,
   historyViewState,
   isDirty,
@@ -468,6 +503,7 @@ const outlineFilter = ref("all");
 const focusRootId = ref("");
 const layoutDensity = ref("comfortable");
 const displayMode = ref("detail");
+const selectedBranchCollapsed = ref(false);
 const searchInputRef = ref(null);
 let inspectorBeforeZen = true;
 
@@ -512,6 +548,9 @@ const focusPath = computed(() => {
   if (!focusRootId.value || !mapData.value?.root) return [];
   return (findNodePath(mapData.value.root, focusRootId.value) || []).slice(1);
 });
+const selectedIsFocusRoot = computed(() => Boolean(
+  focusRootId.value && selectedNode.value?.id === focusRootId.value,
+));
 
 function findNode(node, nodeId) {
   if (!node || !nodeId) return null;
@@ -575,13 +614,16 @@ async function openLearningNode(node) {
   await focusLearningNode(node);
 }
 
-async function continueLearning() {
-  const target = nextLearningNode.value;
-  if (!target) return;
+function toggleBranchFocus(node = selectedNode.value) {
+  if (node?.id && node.id === focusRootId.value) exitBranchFocus();
+  else enterBranchFocus(node);
+}
 
+async function continueLearning() {
   const current = selectedNode.value;
+  let mastered = null;
   if (current?.depth > 0) {
-    let mastered = false;
+    mastered = false;
     try {
       await ElMessageBox.confirm(
         `“${current.title}”是否已经掌握？`,
@@ -601,6 +643,13 @@ async function continueLearning() {
     setNodeMastery(current, mastered);
   }
 
+  await nextTick();
+  const target = nextLearningNode.value;
+  if (!target) {
+    if (mastered === true) ElMessage.success("本轮学习已完成，所有知识点都已掌握。");
+    else ElMessage.info("当前知识点已保留为待复习，本轮没有其他未掌握章节。");
+    return;
+  }
   await openLearningNode(target);
 }
 
@@ -614,8 +663,13 @@ function changeDisplayMode(value) {
   commitViewPreference({ display_mode: displayMode.value });
 }
 
-function toggleSelectedBranch() {
-  canvasRef.value?.toggleSelectedBranch?.();
+function handleBranchStateChange(state) {
+  if (state?.nodeId !== selectedNode.value?.id) return;
+  selectedBranchCollapsed.value = Boolean(state.collapsed);
+}
+
+async function toggleSelectedBranch() {
+  await canvasRef.value?.toggleSelectedBranch?.();
 }
 
 async function openInspector() {
@@ -671,7 +725,7 @@ function handleGlobalKeydown(event) {
   }
   if (key === "f") {
     event.preventDefault();
-    enterBranchFocus();
+    toggleBranchFocus();
   } else if (key === "z") {
     event.preventDefault();
     toggleZenMode();
@@ -695,6 +749,7 @@ watch(historyViewState, (state) => {
 watch(() => mapData.value?.root?.id, () => {
   setupOpen.value = false;
   outlineFilter.value = "all";
+  selectedBranchCollapsed.value = false;
 });
 
 onMounted(() => window.addEventListener("keydown", handleGlobalKeydown));
@@ -1120,6 +1175,97 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleGlobalKeydown)
   align-items: stretch;
 }
 
+.history-library {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+  border: 1px solid var(--cm-border);
+  border-radius: 16px;
+  background: var(--cm-surface);
+  box-shadow: 0 14px 38px rgba(28, 50, 84, 0.06);
+}
+
+.history-library > header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--cm-border);
+}
+
+.history-library > header span {
+  color: var(--atlas-cobalt);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+
+.history-library > header h2 {
+  margin: 5px 0 4px;
+  color: var(--cm-heading);
+  font-family: "Source Han Serif SC", "Songti SC", serif;
+  font-size: clamp(22px, 2.4vw, 32px);
+}
+
+.history-library > header p { margin: 0; color: var(--cm-muted); font-size: 12px; }
+.history-library > header > strong {
+  color: var(--atlas-cobalt);
+  font-family: "DIN Alternate", Consolas, monospace;
+  font-size: 24px;
+  white-space: nowrap;
+}
+
+.history-shelf {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 12px;
+}
+
+.history-shelf > button {
+  position: relative;
+  display: grid;
+  min-height: 154px;
+  padding: 15px 16px 14px 54px;
+  overflow: hidden;
+  border: 1px solid var(--cm-border);
+  border-radius: 12px;
+  color: var(--cm-text);
+  background: color-mix(in srgb, var(--cm-surface-soft) 72%, var(--cm-surface));
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.history-shelf > button:hover,
+.history-shelf > button:focus-visible {
+  border-color: color-mix(in srgb, var(--atlas-cobalt) 48%, var(--cm-border));
+  box-shadow: 0 12px 28px rgba(47, 94, 229, 0.11);
+  transform: translateY(-2px);
+}
+
+.history-shelf > button:focus-visible { outline: 3px solid color-mix(in srgb, var(--atlas-cobalt) 22%, transparent); }
+.history-meta { display: flex; min-width: 0; justify-content: space-between; gap: 10px; }
+.history-meta b { overflow: hidden; color: var(--atlas-cobalt); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.history-meta time { color: var(--cm-muted); font-size: 9px; white-space: nowrap; }
+.history-shelf > button > strong {
+  align-self: end;
+  overflow: hidden;
+  color: var(--cm-heading);
+  font-family: "Source Han Serif SC", "Songti SC", serif;
+  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-shelf > button > small { color: var(--cm-muted); font-size: 10px; }
+.history-shelf > button > em { align-self: end; color: var(--atlas-cobalt); font-size: 11px; font-style: normal; font-weight: 800; }
+.history-route { position: absolute; top: 18px; bottom: 18px; left: 20px; width: 20px; }
+.history-route::before { position: absolute; top: 8px; bottom: 8px; left: 6px; width: 1px; background: color-mix(in srgb, var(--atlas-cobalt) 38%, var(--cm-border)); content: ""; }
+.history-route i { position: absolute; left: 2px; z-index: 1; width: 9px; height: 9px; border: 2px solid var(--cm-surface); border-radius: 50%; background: var(--atlas-cobalt); }
+.history-route i:nth-child(1) { top: 4px; }
+.history-route i:nth-child(2) { top: calc(50% - 4px); background: var(--atlas-teal); }
+.history-route i:nth-child(3) { bottom: 4px; background: var(--atlas-amber); }
+
 .empty-atlas {
   position: relative;
   display: grid;
@@ -1271,6 +1417,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleGlobalKeydown)
     grid-template-columns: minmax(0, 1fr) auto 32px 32px;
   }
   .empty-copy ol { align-items: flex-start; flex-direction: column; width: max-content; margin-inline: auto; }
+  .history-library { padding: 16px; }
+  .history-library > header { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .history-shelf { grid-template-columns: 1fr; }
 }
 
 /* XMind 式画布优先工作区：地图生成后只保留紧凑文档栏，把空间让给画布。 */
@@ -1802,6 +1951,9 @@ kbd {
   .ribbon-stage > i,
   .constructing .route,
   .constructing .map-node { animation: none; }
-  .construction-progress > i { transition: none; }
+  .construction-progress > i,
+  .history-shelf > button { transition: none; }
+  .history-shelf > button:hover,
+  .history-shelf > button:focus-visible { transform: none; }
 }
 </style>

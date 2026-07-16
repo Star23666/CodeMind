@@ -134,6 +134,7 @@ const props = defineProps({
 });
 
 const emit = defineEmits([
+  "branch-state-change",
   "select",
   "view-change",
   "search-change",
@@ -172,6 +173,7 @@ let renderVersion = 0;
 let isRestoring = false;
 let presentedConstructionRevision = 0;
 let focusSnapshot = null;
+let focusModePromise = Promise.resolve();
 
 const masteredIdSet = computed(() => new Set(props.masteredNodeIds));
 const activeRoot = computed(() => findTreeNode(props.root, props.focusRootId) || props.root);
@@ -464,10 +466,12 @@ async function renderGraph() {
         align: true,
         onCollapse: (id) => {
           collapsedNodeIds.add(id);
+          emitBranchState(id);
           notifyViewChange();
         },
         onExpand: (id) => {
           collapsedNodeIds.delete(id);
+          emitBranchState(id);
           notifyViewChange();
         },
       },
@@ -564,6 +568,37 @@ function fullVisibility() {
   return visibility;
 }
 
+function visibleNodeIds(scopeRootId = props.focusRootId) {
+  const scopedIds = scopeRootId && nodeLookup.has(scopeRootId)
+    ? descendantIds(scopeRootId)
+    : new Set(nodeLookup.keys());
+  const visibleIds = new Set(scopedIds);
+  collapsedNodeIds.forEach((collapsedId) => {
+    if (!scopedIds.has(collapsedId)) return;
+    descendantIds(collapsedId).forEach((nodeId) => {
+      if (nodeId !== collapsedId) visibleIds.delete(nodeId);
+    });
+  });
+  return visibleIds;
+}
+
+function visibilityForScope(scopeRootId = props.focusRootId) {
+  const visibleIds = visibleNodeIds(scopeRootId);
+  const visibility = {};
+  nodeLookup.forEach((_, id) => { visibility[id] = visibleIds.has(id) ? "visible" : "hidden"; });
+  edgeLookup.forEach((edge, id) => {
+    visibility[id] = visibleIds.has(edge.source) && visibleIds.has(edge.target) ? "visible" : "hidden";
+  });
+  return { visibility, visibleIds };
+}
+
+async function applyScopeVisibility(scopeRootId = props.focusRootId) {
+  if (!graph) return new Set();
+  const state = visibilityForScope(scopeRootId);
+  await graph.setElementVisibility(state.visibility, false);
+  return state.visibleIds;
+}
+
 function currentViewportCenter() {
   if (!graph) return [0, 0];
   const [width, height] = graph.getSize();
@@ -628,10 +663,7 @@ async function fitNodeIds(nodeIds, animation = false) {
 
 async function fitCurrentView(animation = false) {
   if (!graph) return;
-  const nodeIds = props.focusRootId && nodeLookup.has(props.focusRootId)
-    ? [...descendantIds(props.focusRootId)]
-    : [...nodeLookup.keys()];
-  await fitNodeIds(nodeIds, animation);
+  await fitNodeIds([...visibleNodeIds()], animation);
 }
 
 async function applyFocusMode(nodeId, options = {}) {
@@ -640,7 +672,7 @@ async function applyFocusMode(nodeId, options = {}) {
 
   if (!validNodeId) {
     graph.setLayout(layoutOptions());
-    await graph.setElementVisibility(fullVisibility(), false);
+    await applyScopeVisibility("");
     if (focusSnapshot?.positions?.length) {
       graph.updateNodeData(focusSnapshot.positions);
       await graph.draw();
@@ -656,6 +688,10 @@ async function applyFocusMode(nodeId, options = {}) {
     return;
   }
 
+  if (collapsedNodeIds.has(validNodeId)) {
+    await graph.expandElement(validNodeId, { animation: false, align: false });
+    collapsedNodeIds.delete(validNodeId);
+  }
   if (!focusSnapshot) {
     focusSnapshot = {
       positions: currentLayout(),
@@ -668,13 +704,7 @@ async function applyFocusMode(nodeId, options = {}) {
     await graph.draw();
   }
 
-  const visibleNodes = descendantIds(validNodeId);
-  const visibility = {};
-  nodeLookup.forEach((_, id) => { visibility[id] = visibleNodes.has(id) ? "visible" : "hidden"; });
-  edgeLookup.forEach((edge, id) => {
-    visibility[id] = visibleNodes.has(edge.source) && visibleNodes.has(edge.target) ? "visible" : "hidden";
-  });
-  await graph.setElementVisibility(visibility, false);
+  const visibleNodes = await applyScopeVisibility(validNodeId);
   graph.setLayout(layoutOptions((node) => visibleNodes.has(node.id)));
   await graph.layout();
   await fitNodeIds(
@@ -684,6 +714,14 @@ async function applyFocusMode(nodeId, options = {}) {
   updateZoomLevel();
   await selectNodeById(validNodeId, false);
   if (!options.initial) notifyViewChange();
+}
+
+function queueFocusMode(nodeId, options = {}) {
+  const nextOperation = focusModePromise
+    .catch(() => {})
+    .then(() => applyFocusMode(nodeId, options));
+  focusModePromise = nextOperation;
+  return nextOperation;
 }
 
 function rememberLayout(shouldNotify = false) {
@@ -750,12 +788,21 @@ async function applyVisualStates() {
   await graph.setElementState(states, false);
 }
 
+function emitBranchState(nodeId = selectedNodeId.value) {
+  emit("branch-state-change", {
+    nodeId,
+    collapsed: collapsedNodeIds.has(nodeId),
+    hasChildren: Boolean(nodeLookup.get(nodeId)?.children?.length),
+  });
+}
+
 async function selectNodeById(nodeId, shouldFocus = false, shouldNotify = false) {
   if (!graph || !nodeLookup.has(nodeId)) return;
   selectedNodeId.value = nodeId;
   await applyVisualStates();
   if (shouldFocus) await graph.focusElement(nodeId, { duration: 320 });
   emit("select", nodeLookup.get(nodeId));
+  emitBranchState(nodeId);
   if (shouldNotify) notifyViewChange();
 }
 
@@ -793,6 +840,14 @@ async function stepSearch(direction = 1) {
 }
 
 async function focusNode(nodeId) {
+  await focusModePromise.catch(() => {});
+  if (!graph || !nodeLookup.has(nodeId)) return;
+  for (const ancestorId of pathTo(nodeId).slice(0, -1)) {
+    if (!collapsedNodeIds.has(ancestorId)) continue;
+    await graph.expandElement(ancestorId, { animation: false, align: false });
+    collapsedNodeIds.delete(ancestorId);
+  }
+  await applyScopeVisibility();
   await selectNodeById(nodeId, true, true);
 }
 
@@ -823,7 +878,10 @@ async function applyPresentationOptions() {
   redoStack.value = [];
   rememberLayout(false);
   if (props.focusRootId) await applyFocusMode(props.focusRootId, { initial: true });
-  else await fitCurrentView({ duration: 240, easing: "ease-out" });
+  else {
+    await applyScopeVisibility();
+    await fitCurrentView({ duration: 240, easing: "ease-out" });
+  }
   updateZoomLevel();
   notifyViewChange();
 }
@@ -963,6 +1021,7 @@ async function centerRoot() {
 async function reflow() {
   if (!graph) return;
   collapsedNodeIds.clear();
+  await applyScopeVisibility();
   const focusedIds = props.focusRootId && nodeLookup.has(props.focusRootId)
     ? descendantIds(props.focusRootId)
     : null;
@@ -977,6 +1036,7 @@ async function reflow() {
 }
 
 async function toggleSelectedBranch() {
+  await focusModePromise.catch(() => {});
   if (!graph || !selectedHasChildren.value) return;
   const nodeId = selectedNodeId.value;
   if (collapsedNodeIds.has(nodeId)) {
@@ -986,6 +1046,9 @@ async function toggleSelectedBranch() {
     await graph.collapseElement(nodeId, { animation: true, align: true });
     collapsedNodeIds.add(nodeId);
   }
+  await applyScopeVisibility();
+  await fitCurrentView({ duration: 220, easing: "ease-out" });
+  emitBranchState(nodeId);
   notifyViewChange();
 }
 
@@ -1030,7 +1093,7 @@ watch(() => props.immersive, async () => {
   await nextTick();
   scheduleCanvasResize(true);
 });
-watch(() => props.focusRootId, (nodeId) => applyFocusMode(nodeId));
+watch(() => props.focusRootId, (nodeId) => queueFocusMode(nodeId));
 watch(() => props.masteredNodeIds, updateLearningSignals, { deep: true });
 watch([() => props.density, () => props.displayMode], applyPresentationOptions);
 

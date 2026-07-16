@@ -164,12 +164,17 @@ export function useMindMapWorkspace() {
     learnableNodes.value.length ? Math.round((masteredCount.value / learnableNodes.value.length) * 100) : 0,
   );
   const nextLearningNode = computed(() => {
+    if (!learnableNodes.value.length) return null;
     const currentIndex = selectedNode.value?.depth > 0
       ? learnableNodes.value.findIndex((node) => node.id === selectedNode.value.id)
       : -1;
-    return learnableNodes.value
-      .slice(currentIndex + 1)
-      .find((node) => !masteredNodeIds.value.has(node.id)) || null;
+    const candidates = currentIndex >= 0
+      ? [
+        ...learnableNodes.value.slice(currentIndex + 1),
+        ...learnableNodes.value.slice(0, currentIndex),
+      ]
+      : learnableNodes.value;
+    return candidates.find((node) => !masteredNodeIds.value.has(node.id)) || null;
   });
   const mapStats = computed(() => {
     const nodes = allMapNodes.value;
@@ -960,10 +965,13 @@ export function useMindMapWorkspace() {
   }
 
   function historyOptionLabel(history) {
-    const knowledgeBaseName = knowledgeBases.value.find(
+    return `${history.title} · ${historyKnowledgeBaseName(history)} · ${formatTime(history.updated_at)}`;
+  }
+
+  function historyKnowledgeBaseName(history) {
+    return knowledgeBases.value.find(
       (item) => item.id === history.knowledge_base_id,
     )?.name || `知识库 #${history.knowledge_base_id}`;
-    return `${history.title} · ${knowledgeBaseName} · ${formatTime(history.updated_at)}`;
   }
 
   return {
@@ -997,6 +1005,7 @@ export function useMindMapWorkspace() {
     hasOwnSources,
     healthOnline,
     histories,
+    historyKnowledgeBaseName,
     historyViewState,
     historyOptionLabel,
     isDirty,
