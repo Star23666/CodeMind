@@ -58,20 +58,33 @@ CREATE TABLE IF NOT EXISTS user_llm_preferences (
 
 CREATE TABLE IF NOT EXISTS knowledge_bases (
   id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
-  owner_id BIGINT UNSIGNED NOT NULL,
+  owner_id BIGINT UNSIGNED NULL,
   name VARCHAR(100) NOT NULL,
   description TEXT NULL,
   visibility VARCHAR(20) NOT NULL DEFAULT 'private',
+  global_public_key TINYINT
+    GENERATED ALWAYS AS (CASE WHEN visibility = 'public' THEN 1 ELSE NULL END) STORED,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uk_knowledge_bases_owner_name (owner_id, name),
+  UNIQUE KEY uk_knowledge_bases_global_public (global_public_key),
   KEY idx_knowledge_bases_owner_id (owner_id),
   KEY idx_knowledge_bases_visibility (visibility),
   CONSTRAINT fk_knowledge_bases_owner
     FOREIGN KEY (owner_id) REFERENCES users(id)
     ON DELETE CASCADE,
-  CONSTRAINT chk_knowledge_bases_visibility CHECK (visibility IN ('private', 'public'))
+  CONSTRAINT chk_knowledge_bases_visibility CHECK (visibility IN ('private', 'public')),
+  CONSTRAINT chk_knowledge_bases_scope CHECK (
+    (visibility = 'private' AND owner_id IS NOT NULL)
+    OR (visibility = 'public' AND owner_id IS NULL)
+  )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO knowledge_bases (owner_id, name, description, visibility)
+SELECT NULL, '公共知识库', '所有登录用户共同维护和检索的公共计算机知识资料。', 'public'
+WHERE NOT EXISTS (
+  SELECT 1 FROM knowledge_bases WHERE visibility = 'public'
+);
 
 CREATE TABLE IF NOT EXISTS documents (
   id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,

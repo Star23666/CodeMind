@@ -3,9 +3,10 @@ import sys
 import unittest
 from pathlib import Path
 import socket
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import sessionmaker
 
 
@@ -394,6 +395,19 @@ class LlmConfigServiceTest(unittest.TestCase):
                 monotonic.return_value = float(attempt * 2)
                 limiter.acquire(user_id=1)
                 limiter.release(user_id=1)
+
+    def test_mysql_missing_preference_table_uses_system_model(self):
+        db = Mock()
+        db.execute.side_effect = ProgrammingError(
+            "SELECT * FROM user_llm_preferences",
+            {},
+            RuntimeError("Table 'codemind.user_llm_preferences' doesn't exist"),
+        )
+
+        runtime = self.service.resolve_runtime(db, user_id=1)
+
+        self.assertEqual(runtime.source, "system")
+        self.assertEqual(runtime.model, "env-system-model")
 
 
 if __name__ == "__main__":

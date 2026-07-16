@@ -45,6 +45,29 @@ class DocumentReliabilityTest(unittest.TestCase):
             connection.execute(
                 text(
                     """
+                    CREATE TABLE users (
+                        id INTEGER PRIMARY KEY,
+                        role TEXT NOT NULL DEFAULT 'user'
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE knowledge_bases (
+                        id INTEGER PRIMARY KEY,
+                        owner_id INTEGER,
+                        name TEXT NOT NULL DEFAULT 'test',
+                        description TEXT,
+                        visibility TEXT NOT NULL
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
                     CREATE TABLE documents (
                         id INTEGER PRIMARY KEY,
                         knowledge_base_id INTEGER NOT NULL,
@@ -58,6 +81,15 @@ class DocumentReliabilityTest(unittest.TestCase):
                         chunk_count INTEGER NOT NULL DEFAULT 0,
                         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                     )
+                    """
+                )
+            )
+            connection.execute(text("INSERT INTO users (id) VALUES (7)"))
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO knowledge_bases (id, owner_id, visibility)
+                    VALUES (10, 7, 'private')
                     """
                 )
             )

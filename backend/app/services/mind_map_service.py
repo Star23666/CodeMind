@@ -54,10 +54,25 @@ class MindMapService:
         request: MindMapGenerateRequest,
         progress_callback: Callable[[str, int, str], None] | None = None,
     ) -> MindMapResponse:
-        knowledge_base = knowledge_base_service.get_owned(db, request.knowledge_base_id, owner_id)
+        knowledge_base = knowledge_base_service.get_readable(
+            db,
+            request.knowledge_base_id,
+            owner_id,
+        )
+        scope_owner_id = (
+            None if knowledge_base.visibility.value == "public" else owner_id
+        )
         self._notify(progress_callback, "collecting", 10, "正在确认知识库和资料范围")
-        document = self._get_document_scope(db, owner_id=owner_id, request=request)
-        rows = self._load_completed_chunks(db, owner_id=owner_id, request=request)
+        document = self._get_document_scope(
+            db,
+            owner_id=scope_owner_id,
+            request=request,
+        )
+        rows = self._load_completed_chunks(
+            db,
+            owner_id=scope_owner_id,
+            request=request,
+        )
         if not rows:
             scope_name = "该文档" if request.document_id else "该知识库"
             raise MindMapGenerationError(
@@ -193,17 +208,24 @@ class MindMapService:
         owner_id: int,
         request: MindMapQuestionRequest,
     ) -> MindMapQuestionResponse:
-        knowledge_base_service.get_owned(db, request.knowledge_base_id, owner_id)
+        knowledge_base = knowledge_base_service.get_readable(
+            db,
+            request.knowledge_base_id,
+            owner_id,
+        )
+        owner_condition = (
+            "" if knowledge_base.visibility.value == "public" else "AND d.owner_id = :owner_id"
+        )
         requested_ids = list(dict.fromkeys(request.source_chunk_ids))
         query = text(
-            """
+            f"""
             SELECT c.id AS chunk_id, c.document_id, c.chunk_index, c.chunk_text,
                    c.page_no, d.file_name
             FROM document_chunks c
             JOIN documents d ON d.id = c.document_id
             WHERE c.id IN :chunk_ids
               AND d.knowledge_base_id = :knowledge_base_id
-              AND d.owner_id = :owner_id
+              {owner_condition}
               AND d.parse_status = 'completed'
             """
         ).bindparams(bindparam("chunk_ids", expanding=True))
@@ -253,13 +275,20 @@ class MindMapService:
         )
 
     async def expand_node(self, db: Session, *, owner_id: int, request: MindMapExpandRequest) -> MindMapNode:
-        knowledge_base_service.get_owned(db, request.knowledge_base_id, owner_id)
+        knowledge_base = knowledge_base_service.get_readable(
+            db,
+            request.knowledge_base_id,
+            owner_id,
+        )
+        owner_condition = (
+            "" if knowledge_base.visibility.value == "public" else "AND d.owner_id = :owner_id"
+        )
         ids = list(dict.fromkeys(request.source_chunk_ids))
-        query = text("""
+        query = text(f"""
             SELECT c.id AS chunk_id, c.document_id, c.chunk_index, c.chunk_text, c.page_no, d.file_name
             FROM document_chunks c JOIN documents d ON d.id=c.document_id
             WHERE c.id IN :chunk_ids AND d.knowledge_base_id=:knowledge_base_id
-              AND d.owner_id=:owner_id AND d.parse_status='completed'
+              {owner_condition} AND d.parse_status='completed'
         """).bindparams(bindparam("chunk_ids", expanding=True))
         rows = db.execute(query, {"chunk_ids": ids, "knowledge_base_id": request.knowledge_base_id,
                                   "owner_id": owner_id}).mappings().all()
@@ -368,18 +397,25 @@ class MindMapService:
                     status_code=504,
                 ) from exc
 
-    def _get_document_scope(self, db: Session, *, owner_id: int, request: MindMapGenerateRequest):
+    def _get_document_scope(
+        self,
+        db: Session,
+        *,
+        owner_id: int | None,
+        request: MindMapGenerateRequest,
+    ):
         if request.document_id is None:
             return None
 
+        owner_condition = "" if owner_id is None else "AND owner_id = :owner_id"
         row = db.execute(
             text(
-                """
+                f"""
                 SELECT id, file_name, parse_status
                 FROM documents
                 WHERE id = :document_id
                   AND knowledge_base_id = :knowledge_base_id
-                  AND owner_id = :owner_id
+                  {owner_condition}
                 """
             ),
             {
@@ -394,8 +430,15 @@ class MindMapService:
             raise MindMapGenerationError("该文档尚未完成解析，暂时不能生成思维导图。")
         return row
 
-    def _load_completed_chunks(self, db: Session, *, owner_id: int, request: MindMapGenerateRequest):
+    def _load_completed_chunks(
+        self,
+        db: Session,
+        *,
+        owner_id: int | None,
+        request: MindMapGenerateRequest,
+    ):
         document_filter = "AND d.id = :document_id" if request.document_id is not None else ""
+        owner_filter = "" if owner_id is None else "AND d.owner_id = :owner_id"
         params = {
             "knowledge_base_id": request.knowledge_base_id,
             "owner_id": owner_id,
@@ -411,7 +454,7 @@ class MindMapService:
                 FROM document_chunks c
                 JOIN documents d ON d.id = c.document_id
                 WHERE d.knowledge_base_id = :knowledge_base_id
-                  AND d.owner_id = :owner_id
+                  {owner_filter}
                   AND d.parse_status = 'completed'
                   {document_filter}
                 ORDER BY d.id ASC, c.chunk_index ASC

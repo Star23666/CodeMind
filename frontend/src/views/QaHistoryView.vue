@@ -18,7 +18,7 @@
             <el-input v-model="keyword" :prefix-icon="Search" clearable placeholder="匹配问题关键词" />
             <el-select v-model="selectedBaseId" placeholder="全部知识库">
               <el-option label="全部知识库" :value="null" />
-              <el-option v-for="base in knowledgeBases" :key="base.id" :label="base.name" :value="base.id" />
+              <KnowledgeBaseOptions :bases="knowledgeBases" />
             </el-select>
           </div>
 
@@ -77,6 +77,7 @@ import { getHealth } from "../api/health";
 import { listKnowledgeBases } from "../api/knowledgeBases";
 import { getQaRecord, listQaRecords } from "../api/qaHistory";
 import SourceList from "../components/chat/SourceList.vue";
+import KnowledgeBaseOptions from "../components/knowledge/KnowledgeBaseOptions.vue";
 import AppHeader from "../components/layout/AppHeader.vue";
 
 const healthOnline = ref(false);

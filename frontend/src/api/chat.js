@@ -7,7 +7,7 @@ export function sendChatQuestion(payload) {
   return request.post(
     "/chat",
     {
-      knowledge_base_id: payload.knowledge_base_id || 1,
+      knowledge_base_id: payload.knowledge_base_id,
       question: payload.question,
       top_k: payload.top_k ?? 4,
       score_threshold: payload.score_threshold ?? DEFAULT_SCORE_THRESHOLD,
@@ -58,7 +58,7 @@ export async function streamChatQuestion(payload, { onMeta, onToken, onDone, sig
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify({
-      knowledge_base_id: payload.knowledge_base_id || 1,
+      knowledge_base_id: payload.knowledge_base_id,
       question: payload.question,
       top_k: payload.top_k ?? 4,
       score_threshold: payload.score_threshold ?? DEFAULT_SCORE_THRESHOLD,

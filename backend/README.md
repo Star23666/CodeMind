@@ -10,6 +10,7 @@ FastAPI 后端负责认证、知识库与文档管理、Embedding 入库、Chrom
 | `app/core/config.py` | `.env` 配置读取和路径解析 |
 | `app/db/session.py` | SQLAlchemy Engine 与 Session |
 | `app/services/document_service.py` | 上传、后台解析、入库、重建和删除 |
+| `app/services/knowledge_base_service.py` | 公共/私人知识库作用域和读取、上传、管理权限 |
 | `app/services/document_job_service.py` | 文档任务并发调度、启动恢复和实例内防重 |
 | `app/services/feedback_service.py` | 问答反馈持久化、归属校验和管理员筛选 |
 | `app/services/health_service.py` | MySQL 与 Chroma 就绪检查 |
@@ -18,6 +19,7 @@ FastAPI 后端负责认证、知识库与文档管理、Embedding 入库、Chrom
 | `app/services/mind_map_service.py` | 知识地图结构生成、节点追问和分支扩展 |
 | `app/services/mind_map_job_service.py` | 异步任务状态、进度和结果持久化 |
 | `app/services/mind_map_history_service.py` | 地图历史版本和画布状态持久化 |
+| `scripts/promote_admin.py` | 将已注册用户安全提升为管理员 |
 | `tests/` | 后端自动化测试 |
 
 ## 环境配置
@@ -107,6 +109,14 @@ RAG 问答提供两个接口：`POST /api/chat` 返回完整 JSON；`POST /api/c
 启用个人预设后，问答和知识地图不会在调用失败时自动回退到系统模型。Embedding 继续使用服务器统一配置。
 AI 出题由 Issue #18 实现，接入时必须复用 `llm_config_service.resolve_runtime`。
 
+知识库分为两种作用域：私人库按 `knowledge_base_id + owner_id` 隔离；唯一的全局公共库按
+`knowledge_base_id` 聚合所有上传者的文档。所有登录用户可读取、上传和检索公共资料，上传者可管理
+自己的公共文档，管理员可编辑公共库信息并管理全部公共文档。公共库没有固定 ID，也不能删除。
+
+已有数据库需要先执行 `database/migrations/20260716_create_global_public_knowledge_base.sql`。管理员通过
+`python scripts/promote_admin.py --username <用户名>` 或 `--email <邮箱>` 初始化；脚本不创建默认账号，
+普通注册接口也不能指定管理员角色。
+
 非流式回答受 `CHAT_TOTAL_TIMEOUT_SECONDS` 硬生成时限约束。检索和生成日志分别记录 Embedding/LLM 模型、检索耗时、首 Token、总耗时和 `finish_reason`。
 
 ## 文档任务说明
@@ -136,7 +146,7 @@ cd backend
 python -m pytest -q
 ```
 
-当前基线为 `100 passed`。测试使用 SQLite 和替身服务覆盖主要业务，其中包括个人模型配置、连接错误分类、敏感日志与 SSRF 防护、问答和知识地图个人模型路由、知识地图流式总超时和并发槽位释放、文档重启恢复、重复入队、取消、索引补偿和陈旧向量过滤，反馈持久化与越权，JWT 注销撤销，以及 MySQL/Chroma 就绪探针；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、Nginx SSE 代理和知识地图任务恢复、多批次任务链路。
+当前基线为 `110 passed`。测试使用 SQLite 和替身服务覆盖主要业务，其中包括全局公共库唯一性、跨用户公共文档访问和管理、私人库隔离、管理员初始化、删除清理、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、问答和知识地图个人模型路由、知识地图流式总超时和并发槽位释放、文档重启恢复、重复入队、取消、索引补偿和陈旧向量过滤，反馈持久化与越权，JWT 注销撤销，以及 MySQL/Chroma 就绪探针；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、公共库跨用户检索、权限按钮和数据同步清理。
 
 ## Docker 运行
 

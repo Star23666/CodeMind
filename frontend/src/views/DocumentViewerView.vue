@@ -13,8 +13,12 @@
           <el-tag :type="statusType(document?.parse_status)" effect="light">
             {{ statusText(document?.parse_status) }}
           </el-tag>
+          <el-tag v-if="document?.knowledge_base_visibility === 'public'" effect="plain">公共资料</el-tag>
           <h1>{{ document?.file_name || "正在读取文档" }}</h1>
           <p v-if="document">{{ typeLabel(document.file_type) }} · {{ formatSize(document.file_size) }}</p>
+          <p v-if="document?.knowledge_base_visibility === 'public'">
+            上传者：{{ document.uploader_username || `用户 ${document.owner_id}` }}
+          </p>
         </div>
         <div class="head-actions">
           <el-button @click="openChunks">查看切片</el-button>

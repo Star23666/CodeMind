@@ -1,6 +1,6 @@
 # CodeMind
 
-CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented Generation，检索增强生成）知识库系统。用户可以上传课程资料、实验文档和技术文档，在自己的知识库中进行语义检索，并获得带原文来源的 AI 回答。
+CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented Generation，检索增强生成）知识库系统。用户可以上传课程资料、实验文档和技术文档，在私人知识库或全站公共知识库中进行语义检索，并获得带原文来源的 AI 回答。
 
 ## 功能概览
 
@@ -8,6 +8,8 @@ CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented
 
 - JWT 注册、登录、持久化注销撤销和用户数据隔离
 - 私人知识库创建、编辑和删除
+- 唯一全局公共知识库，支持所有登录用户共同上传、检索、问答和核对来源
+- 公共文档上传者权限与最小管理员管理：用户管理自己的文档，管理员管理全部公共文档
 - PDF、DOCX、Markdown、TXT 文档上传
 - 文档解析、文本切分和处理状态展示
 - 文档任务并发防重、处理中取消、服务重启恢复和失败时旧索引保留
@@ -71,6 +73,7 @@ MySQL 保存用户、知识库、文档、片段、问答历史和反馈等结�
 CodeMind/
 ├─ backend/
 │  ├─ app/                 FastAPI 应用与业务服务
+│  ├─ scripts/             管理员初始化等运维脚本
 │  ├─ tests/               后端自动化测试
 │  ├─ Dockerfile
 │  └─ requirements.txt
@@ -208,6 +211,34 @@ docker compose logs -f mysql
 
 `database/schema.sql` 只会在 MySQL 数据卷第一次初始化时执行。拉取包含数据库结构变更的新代码后，不能只重建镜像，还需要执行对应迁移。
 
+### 2026-07-16：全局公共知识库
+
+该迁移将 `knowledge_bases.owner_id` 调整为可空，为公共知识库增加数据库唯一约束和作用域检查约束，并创建唯一的全局公共知识库。公共库的 ID 由数据库生成，业务代码不会假设它是 `1`。
+
+Linux、macOS 或 WSL：
+
+```bash
+docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' \
+  < database/migrations/20260716_create_global_public_knowledge_base.sql
+```
+
+Windows PowerShell：
+
+```powershell
+Get-Content -Raw database\migrations\20260716_create_global_public_knowledge_base.sql |
+  docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
+```
+
+迁移后，先通过普通注册页面创建一个用户，再在服务器上安全提升为管理员：
+
+```bash
+docker compose exec backend python scripts/promote_admin.py --username <用户名>
+# 或
+docker compose exec backend python scripts/promote_admin.py --email <邮箱>
+```
+
+脚本只提升已存在用户，不包含默认管理员账号或硬编码密码。普通注册接口始终创建 `user` 角色。
+
 ### 2026-07-15：用户大模型配置
 
 该迁移创建个人模型预设和当前模型偏好表。部署前必须先在 `backend/.env` 配置
@@ -314,8 +345,8 @@ Get-Content -Raw database\migrations\20260711_preserve_qa_source_snapshots.sql |
 ## 使用流程
 
 1. 注册账号并登录。
-2. 在“我的”页面创建知识库。
-3. 在“文档上传”页面选择知识库并上传资料。
+2. 在“我的”页面创建私人知识库，或直接使用全站唯一的公共知识库。
+3. 在“文档上传”页面选择私人或公共知识库并上传资料。
 4. 等待文档状态变为 `completed`。
 5. 返回“AI 问答”页面选择知识库并提问。
 6. 查看回答中的来源片段和相关度。
@@ -323,6 +354,7 @@ Get-Content -Raw database\migrations\20260711_preserve_qa_source_snapshots.sql |
 8. 在“问答历史”中回看回答；原文被删除后仍保留来源快照。
 9. 进入“知识地图”异步生成学习结构，并查看节点类型、记忆点、学习建议和原文覆盖率。
 10. 搜索或定位节点，标记本机掌握状态，对节点追问、扩展分支或导出地图。
+11. 公共文档只能由上传者或管理员重建、取消和删除；公共知识库本身不能删除。
 
 如果检索不到资料，请先确认文档处理状态、Embedding 配置和相似度阈值。阈值与 Embedding 模型及切分粒度有关，更换模型后必须重新评估。
 
@@ -344,8 +376,8 @@ Authorization: Bearer <access_token>
 | `GET`          | `/api/auth/me`              | 当前用户         |
 | `GET`          | `/api/health/live`          | 进程存活检查     |
 | `GET`          | `/api/health/ready`         | MySQL、Chroma 就绪检查 |
-| `GET/POST`     | `/api/knowledge-bases`      | 查询或创建知识库 |
-| `PATCH/DELETE` | `/api/knowledge-bases/{id}` | 修改或删除知识库 |
+| `GET/POST`     | `/api/knowledge-bases`      | 查询“公共 + 我的私人”知识库，或创建私人库 |
+| `PATCH/DELETE` | `/api/knowledge-bases/{id}` | 修改或删除知识库；公共库仅管理员可编辑且不能删除 |
 | `POST`         | `/api/documents/upload`     | 上传文档         |
 | `GET`          | `/api/documents`            | 查询文档列表     |
 | `GET`          | `/api/documents/{id}`        | 查询文档详情     |
@@ -380,9 +412,9 @@ python -m pip install pytest==8.3.5
 python -m pytest -q
 ```
 
-当前后端测试共 100 项，覆盖认证和 JWT 撤销、权限、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、文档处理与重启恢复、取消和重复任务防护、索引事务补偿与陈旧向量过滤、反馈持久化、健康检查、删除清理、检索降级、Prompt、LLM 异常、RAG 编排、SSE 流式生成、问答历史，以及知识地图生成、个人模型路由、JSON Mode、流式硬总时限、并发槽位释放、任务恢复、事务一致性、并发控制、历史和接口权限。
+当前后端测试共 110 项，覆盖认证和 JWT 撤销、公共/私人知识库跨用户权限、管理员初始化、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、文档处理与重启恢复、取消和重复任务防护、索引事务补偿与陈旧向量过滤、反馈持久化、健康检查、删除清理、检索降级、Prompt、LLM 异常、RAG 编排、SSE 流式生成、问答历史，以及知识地图生成、个人模型路由、JSON Mode、流式硬总时限、并发槽位释放、任务恢复、事务一致性、并发控制、历史和接口权限。
 
-Docker 端到端测试已验证前端 Nginx 代理下的注册、登录、知识库创建、文档上传与解析、SSE 问答、来源返回、知识地图生成、任务重启恢复和历史详情落库。当前实测小范围知识地图约 36 秒完成，生成 15 个节点，节点数、历史记录和来源引用均通过一致性校验。
+Docker 端到端测试已验证前端 Nginx 代理下的注册、登录、公共与私人知识库隔离、跨用户公共文档检索和问答、来源片段与原文查看、上传者/管理员重建和删除、MySQL/文件/Chroma 同步清理、知识地图生成、任务重启恢复和历史详情落库。当前实测小范围知识地图约 36 秒完成，生成 15 个节点，节点数、历史记录和来源引用均通过一致性校验。
 
 前端生产构建检查：
 
@@ -501,4 +533,4 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 ---
 
-文档状态：已按 Issue #13 可靠性修复同步，更新时间为 2026-07-15。
+文档状态：已按 Issue #15 全局公共知识库同步，更新时间为 2026-07-16。

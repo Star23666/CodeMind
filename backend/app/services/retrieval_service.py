@@ -6,6 +6,7 @@ from sqlalchemy import text
 from app.db.session import SessionLocal
 from app.schemas.contracts import ChatRequest, SearchRequest, SourceReference
 from app.services.embedding_client import EmbeddingServiceError, embedding_client
+from app.services.knowledge_base_service import knowledge_base_service
 from app.services.vector_store import VectorSearchHit, get_vector_store
 
 
@@ -74,6 +75,7 @@ class RetrievalService:
         *,
         user_id: int,
     ) -> list[SourceReference]:
+        scope_owner_id = self._scope_owner_id(request.knowledge_base_id, user_id)
         try:
             query_embedding = embedding_client.embed_texts([query])[0]
         except EmbeddingServiceError as exc:
@@ -83,7 +85,7 @@ class RetrievalService:
             hits = get_vector_store().search(
                 embedding=query_embedding,
                 knowledge_base_id=request.knowledge_base_id,
-                owner_id=user_id,
+                owner_id=scope_owner_id,
                 top_k=request.top_k,
             )
         except Exception as exc:
@@ -95,7 +97,7 @@ class RetrievalService:
         hits = self._filter_current_hits(
             hits,
             knowledge_base_id=request.knowledge_base_id,
-            user_id=user_id,
+            owner_id=scope_owner_id,
         )
         sources = [
             self._hit_to_source(hit)
@@ -116,14 +118,22 @@ class RetrievalService:
     def _has_searchable_content(self, knowledge_base_id: int, user_id: int) -> bool:
         db = SessionLocal()
         try:
+            knowledge_base = knowledge_base_service.get_readable(
+                db,
+                knowledge_base_id,
+                user_id,
+            )
+            owner_condition = (
+                "" if knowledge_base.visibility.value == "public" else "AND d.owner_id = :owner_id"
+            )
             count = db.execute(
                 text(
-                    """
+                    f"""
                     SELECT COUNT(*)
                     FROM document_chunks c
                     JOIN documents d ON d.id = c.document_id
                     WHERE d.knowledge_base_id = :knowledge_base_id
-                      AND d.owner_id = :owner_id
+                      {owner_condition}
                     """
                 ),
                 {"knowledge_base_id": knowledge_base_id, "owner_id": user_id},
@@ -142,24 +152,25 @@ class RetrievalService:
         hits: list[VectorSearchHit],
         *,
         knowledge_base_id: int,
-        user_id: int,
+        owner_id: int | None,
     ) -> list[VectorSearchHit]:
         if not hits:
             return []
 
         db = SessionLocal()
         try:
+            owner_condition = "" if owner_id is None else "AND d.owner_id = :owner_id"
             rows = db.execute(
                 text(
-                    """
+                    f"""
                     SELECT c.vector_id
                     FROM document_chunks c
                     JOIN documents d ON d.id = c.document_id
                     WHERE d.knowledge_base_id = :knowledge_base_id
-                      AND d.owner_id = :owner_id
+                      {owner_condition}
                     """
                 ),
-                {"knowledge_base_id": knowledge_base_id, "owner_id": user_id},
+                {"knowledge_base_id": knowledge_base_id, "owner_id": owner_id},
             ).mappings()
             current_vector_ids = {str(row["vector_id"]) for row in rows}
             return [hit for hit in hits if hit.vector_id in current_vector_ids]
@@ -168,6 +179,20 @@ class RetrievalService:
             raise RetrievalServiceError(
                 "暂时无法校验知识库检索结果，请稍后重试。"
             ) from exc
+        finally:
+            db.close()
+
+    def _scope_owner_id(self, knowledge_base_id: int, user_id: int) -> int | None:
+        db = SessionLocal()
+        try:
+            knowledge_base = knowledge_base_service.get_readable(
+                db,
+                knowledge_base_id,
+                user_id,
+            )
+            return None if knowledge_base.visibility.value == "public" else user_id
+        except ValueError as exc:
+            raise RetrievalServiceError("知识库不存在或无权访问。", status_code=404) from exc
         finally:
             db.close()
 

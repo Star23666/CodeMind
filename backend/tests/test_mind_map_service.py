@@ -774,7 +774,17 @@ class MindMapServiceTest(unittest.TestCase):
 
     def _create_schema(self) -> None:
         with self.engine.begin() as connection:
-            connection.execute(text("CREATE TABLE users (id INTEGER PRIMARY KEY)"))
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE users (
+                        id INTEGER PRIMARY KEY,
+                        username VARCHAR(50) NOT NULL,
+                        role VARCHAR(20) NOT NULL DEFAULT 'user'
+                    )
+                    """
+                )
+            )
             connection.execute(
                 text(
                     """
@@ -860,7 +870,12 @@ class MindMapServiceTest(unittest.TestCase):
             )
 
     def _seed_completed_document(self, db) -> None:
-        db.execute(text("INSERT INTO users (id) VALUES (1)"))
+        db.execute(
+            text(
+                "INSERT INTO users (id, username, role) "
+                "VALUES (1, 'mind-map-owner', 'user')"
+            )
+        )
         db.execute(
             text(
                 "INSERT INTO knowledge_bases (id, owner_id, name, description, visibility) "

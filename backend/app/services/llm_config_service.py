@@ -6,7 +6,7 @@ import time
 
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -390,7 +390,7 @@ class LlmConfigService:
                 ),
                 {"user_id": user_id},
             ).mappings().first()
-        except OperationalError as exc:
+        except (OperationalError, ProgrammingError) as exc:
             error_text = str(exc).casefold()
             if "user_llm_preferences" in error_text and (
                 "no such table" in error_text or "doesn't exist" in error_text
