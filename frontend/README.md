@@ -23,9 +23,13 @@ Vue 3 前端提供认证、知识库管理、文档处理、RAG 问答、问答�
 | `/history` | `QaHistoryView` | 问答历史和来源快照 |
 | `/mind-map` | `MindMapView` | 知识地图生成与学习 |
 | `/me` | `MeView` | 用户和知识库管理 |
+| `/me/ai-models` | `AiModelSettingsView` | 个人大模型配置、测试和启停 |
 | `/login`、`/register` | 认证页面 | 登录和注册 |
 
 除首页和认证页面的公开外观外，业务路由通过用户 Store 和 JWT 状态保护；后端仍会独立校验所有资源归属。
+
+AI 模型设置页只向后端提交 API Key，不直接请求模型服务，也不将密钥写入 `localStorage`。
+保存后仅显示末四位掩码；配置必须测试成功后才能启用，停用或删除后恢复系统模型。
 
 ## 本地开发
 

@@ -25,7 +25,7 @@ from app.schemas.contracts import (
     MindMapResponse,
     UserRead,
 )
-from app.services.llm_client import LlmServiceError
+from app.services.llm_client import LlmRuntimeConfig, LlmServiceError
 from app.services.mind_map_history_service import MindMapHistoryService
 from app.services.mind_map_job_service import MindMapJobService
 from app.services.mind_map_service import MindMapGenerationError, MindMapService
@@ -41,11 +41,13 @@ class FakeLlmClient:
         self.last_prompt = None
         self.prompts = []
         self.last_system_message = None
+        self.last_kwargs = None
 
     async def generate_answer(self, prompt: str, **kwargs) -> str:
         self.last_prompt = prompt
         self.prompts.append(prompt)
         self.last_system_message = kwargs.get("system_message")
+        self.last_kwargs = kwargs
         return self.response
 
 
@@ -237,6 +239,45 @@ class MindMapServiceTest(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 503)
         self.assertIn("必须经过大模型分析", str(context.exception))
+
+    def test_generation_uses_the_owners_personal_model_config(self) -> None:
+        client = FakeLlmClient(
+            """{
+              "title": "个人模型生成的知识地图",
+              "children": [{
+                "title": "测试概念",
+                "summary": "来自个人模型的内容",
+                "source_chunk_ids": [11],
+                "children": []
+              }]
+            }"""
+        )
+        service = MindMapService(client=client)
+        personal_config = LlmRuntimeConfig(
+            api_key="personal-key",
+            base_url="https://api.siliconflow.cn/v1",
+            model="personal-model",
+            source="personal",
+            name="个人模型",
+            provider="siliconflow",
+        )
+
+        with patch(
+            "app.services.mind_map_service.llm_config_service.resolve_runtime",
+            return_value=personal_config,
+        ) as resolve_runtime:
+            response = run_async(
+                service.generate(
+                    self.db,
+                    owner_id=1,
+                    request=MindMapGenerateRequest(knowledge_base_id=10),
+                )
+            )
+
+        resolve_runtime.assert_called_once_with(self.db, user_id=1)
+        self.assertEqual(response.generation_mode, "ai")
+        self.assertIs(client.last_kwargs["runtime_config"], personal_config)
+        self.assertEqual(client.last_kwargs["model"], "personal-model")
 
     def test_generation_limits_parallel_llm_calls(self) -> None:
         for chunk_id in range(13, 26):

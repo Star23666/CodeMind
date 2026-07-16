@@ -162,6 +162,8 @@ class RagGenerationTest(unittest.TestCase):
         self.assertEqual(response.sources[0].chunk_id, 10)
         self.assertTrue(llm.called)
         self.assertFalse(llm.last_kwargs["enable_thinking"])
+        self.assertEqual(llm.last_kwargs["runtime_config"].source, "personal")
+        self.assertEqual(llm.last_kwargs["runtime_config"].model, "test-model")
         self.assertIn("[来源1]", llm.last_prompt)
         self.assertEqual(history.saved["user_id"], 7)
         self.assertIs(history.saved["db"], fake_db)
@@ -232,6 +234,7 @@ class RagGenerationTest(unittest.TestCase):
         self.assertEqual(events[-1]["event"], "done")
         self.assertEqual(events[-1]["data"]["qa_record_id"], 1001)
         self.assertFalse(llm.last_kwargs["enable_thinking"])
+        self.assertEqual(llm.last_kwargs["runtime_config"].source, "personal")
         self.assertEqual(history.saved["answer"], "进程负责资源分配，线程负责 CPU 调度。[来源1]")
 
     def test_source_context_has_global_budget_and_untrusted_data_guardrail(self):
