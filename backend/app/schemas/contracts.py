@@ -5,6 +5,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.config import settings
+
 
 class UserRole(str, Enum):
     USER = "user"
@@ -54,6 +56,7 @@ class ParseStatus(str, Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class UserCreate(BaseModel):
@@ -335,7 +338,7 @@ class MindMapJobRead(BaseModel):
 
 class RetrievalOptions(BaseModel):
     top_k: int = Field(default=4, ge=1, le=10)
-    score_threshold: float = Field(default=0.77, ge=-1, le=1)
+    score_threshold: float = Field(default=settings.retrieval_score_threshold, ge=-1, le=1)
     rerank_top_n: int = Field(default=2, ge=1, le=10)
     enable_rewrite: bool = True
     enable_rerank: bool = True

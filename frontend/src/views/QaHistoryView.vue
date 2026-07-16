@@ -72,7 +72,6 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
 import { Refresh, Search } from "@element-plus/icons-vue";
 import { getHealth } from "../api/health";
 import { listKnowledgeBases } from "../api/knowledgeBases";

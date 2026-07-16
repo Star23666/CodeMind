@@ -1,4 +1,5 @@
 import logging
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,6 +18,18 @@ from app.services.vector_store import get_vector_store
 
 
 logger = logging.getLogger(__name__)
+
+
+class DocumentBusyError(ValueError):
+    pass
+
+
+class DocumentNotProcessingError(ValueError):
+    pass
+
+
+class DocumentProcessingCancelled(RuntimeError):
+    pass
 
 
 class DocumentService:
@@ -170,18 +183,71 @@ class DocumentService:
         return self._to_chunk_read(row)
 
     def queue_reindex(self, db: Session, *, document_id: int, owner_id: int) -> None:
-        self.get_owned_document(db, document_id, owner_id)
-        db.execute(
+        document = self.get_owned_document(db, document_id, owner_id)
+        if document.parse_status in {"pending", "processing"}:
+            raise DocumentBusyError("Document is already queued or processing")
+        result = db.execute(
             text(
                 """
                 UPDATE documents
-                SET parse_status = 'pending', error_message = NULL, chunk_count = 0
-                WHERE id = :document_id AND owner_id = :owner_id
+                SET parse_status = 'pending', error_message = NULL
+                WHERE id = :document_id
+                  AND owner_id = :owner_id
+                  AND parse_status = :previous_status
+                """
+            ),
+            {
+                "document_id": document_id,
+                "owner_id": owner_id,
+                "previous_status": document.parse_status.value,
+            },
+        )
+        db.commit()
+        if result.rowcount != 1:
+            raise DocumentBusyError("Document state changed while queuing reindex")
+
+    def cancel_processing(self, db: Session, *, document_id: int, owner_id: int) -> None:
+        self.get_owned_document(db, document_id, owner_id)
+        result = db.execute(
+            text(
+                """
+                UPDATE documents
+                SET parse_status = 'cancelled', error_message = '文档处理已由用户取消。'
+                WHERE id = :document_id
+                  AND owner_id = :owner_id
+                  AND parse_status IN ('pending', 'processing')
                 """
             ),
             {"document_id": document_id, "owner_id": owner_id},
         )
         db.commit()
+        if result.rowcount != 1:
+            raise DocumentNotProcessingError("Document is not queued or processing")
+
+    def recover_incomplete_documents(self, db: Session) -> list[int]:
+        db.execute(
+            text(
+                """
+                UPDATE documents
+                SET parse_status = 'pending',
+                    error_message = '上次处理因服务重启中断，正在自动恢复。'
+                WHERE parse_status = 'processing'
+                """
+            )
+        )
+        rows = db.execute(
+            text(
+                """
+                SELECT id
+                FROM documents
+                WHERE parse_status = 'pending'
+                ORDER BY created_at ASC, id ASC
+                """
+            )
+        ).mappings()
+        document_ids = [int(row["id"]) for row in rows]
+        db.commit()
+        return document_ids
 
     def delete_document(self, db: Session, *, document_id: int, owner_id: int) -> None:
         row = self._get_document_row(db, document_id, owner_id, include_path=True)
@@ -244,14 +310,16 @@ class DocumentService:
     def process_document(self, document_id: int) -> None:
         db = SessionLocal()
         inserted_vector_ids: list[str] = []
+        old_vector_ids: list[str] = []
 
         try:
+            if not self._claim_pending_document(db, document_id):
+                return
             document = self._get_document_row(db, document_id, include_path=True)
             if document is None:
                 return
-
-            self._mark_status(db, document_id, "processing", chunk_count=0, error_message=None)
-            self._clear_existing_index(db, document_id)
+            document = dict(document)
+            db.rollback()
 
             blocks = document_parser.parse(document["file_path"], document["file_type"])
             chunks = text_splitter.split_blocks(blocks)
@@ -259,11 +327,24 @@ class DocumentService:
                 raise DocumentParseError("文档解析失败：未提取到可用文字。")
 
             embeddings = embedding_client.embed_texts([chunk.text for chunk in chunks])
+            if not self._lock_processing_document(db, document_id):
+                db.rollback()
+                raise DocumentProcessingCancelled()
+
+            old_vector_ids = self._list_vector_ids(db, document_id)
+            db.execute(
+                text("DELETE FROM document_chunks WHERE document_id = :document_id"),
+                {"document_id": document_id},
+            )
             metadatas = []
             texts = []
+            run_id = uuid4().hex[:12]
 
             for chunk in chunks:
-                vector_id = f"kb{document['knowledge_base_id']}-doc{document_id}-chunk{chunk.chunk_index}"
+                vector_id = (
+                    f"kb{document['knowledge_base_id']}-doc{document_id}"
+                    f"-run{run_id}-chunk{chunk.chunk_index}"
+                )
                 result = db.execute(
                     text(
                         """
@@ -320,11 +401,22 @@ class DocumentService:
                 commit=False,
             )
             db.commit()
+            self._safe_delete_vectors(old_vector_ids)
+        except DocumentProcessingCancelled:
+            db.rollback()
+            self._safe_delete_vectors(inserted_vector_ids)
+            logger.info("Document %s processing was cancelled", document_id)
         except (DocumentParseError, EmbeddingServiceError) as exc:
             db.rollback()
             self._safe_delete_vectors(inserted_vector_ids)
             logger.warning("Document %s processing failed: %s", document_id, exc)
-            self._mark_status(db, document_id, "failed", chunk_count=0, error_message=str(exc))
+            self._mark_status(
+                db,
+                document_id,
+                "failed",
+                error_message=str(exc),
+                required_current_status="processing",
+            )
         except Exception:
             db.rollback()
             self._safe_delete_vectors(inserted_vector_ids)
@@ -333,8 +425,8 @@ class DocumentService:
                 db,
                 document_id,
                 "failed",
-                chunk_count=0,
                 error_message="文档处理失败，请稍后重试；若问题持续，请检查后端日志。",
+                required_current_status="processing",
             )
         finally:
             db.close()
@@ -425,16 +517,53 @@ class DocumentService:
         ).mappings()
         return [row["vector_id"] for row in rows]
 
-    def _clear_existing_index(self, db: Session, document_id: int) -> None:
-        get_vector_store().delete_ids(self._list_vector_ids(db, document_id))
-        db.execute(text("DELETE FROM document_chunks WHERE document_id = :document_id"), {"document_id": document_id})
+    def _claim_pending_document(self, db: Session, document_id: int) -> bool:
+        result = db.execute(
+            text(
+                """
+                UPDATE documents
+                SET parse_status = 'processing', error_message = NULL
+                WHERE id = :document_id AND parse_status = 'pending'
+                """
+            ),
+            {"document_id": document_id},
+        )
         db.commit()
+        return result.rowcount == 1
+
+    def _lock_processing_document(self, db: Session, document_id: int) -> bool:
+        lock_clause = "" if db.bind is not None and db.bind.dialect.name == "sqlite" else " FOR UPDATE"
+        row = db.execute(
+            text(
+                "SELECT parse_status FROM documents "
+                "WHERE id = :document_id" + lock_clause
+            ),
+            {"document_id": document_id},
+        ).mappings().first()
+        return row is not None and row["parse_status"] == "processing"
 
     def _safe_delete_vectors(self, vector_ids: list[str]) -> None:
-        try:
-            get_vector_store().delete_ids(vector_ids)
-        except Exception:
-            pass
+        if not vector_ids:
+            return
+        for attempt in range(1, 4):
+            try:
+                get_vector_store().delete_ids(vector_ids)
+                return
+            except Exception:
+                if attempt == 3:
+                    logger.exception(
+                        "Failed to delete %s stale document vectors after %s attempts",
+                        len(vector_ids),
+                        attempt,
+                    )
+                    return
+                logger.warning(
+                    "Retrying stale vector cleanup (attempt=%s, vector_count=%s)",
+                    attempt,
+                    len(vector_ids),
+                    exc_info=True,
+                )
+                time.sleep(0.1 * attempt)
 
     def _mark_status(
         self,
@@ -445,7 +574,8 @@ class DocumentService:
         chunk_count: int | None = None,
         error_message: str | None = None,
         commit: bool = True,
-    ) -> None:
+        required_current_status: str | None = None,
+    ) -> bool:
         assignments = ["parse_status = :parse_status", "error_message = :error_message"]
         params: dict[str, object] = {
             "document_id": document_id,
@@ -457,12 +587,21 @@ class DocumentService:
             assignments.append("chunk_count = :chunk_count")
             params["chunk_count"] = chunk_count
 
-        db.execute(
-            text(f"UPDATE documents SET {', '.join(assignments)} WHERE id = :document_id"),
+        status_condition = ""
+        if required_current_status is not None:
+            status_condition = " AND parse_status = :required_current_status"
+            params["required_current_status"] = required_current_status
+
+        result = db.execute(
+            text(
+                f"UPDATE documents SET {', '.join(assignments)} "
+                f"WHERE id = :document_id{status_condition}"
+            ),
             params,
         )
         if commit:
             db.commit()
+        return result.rowcount == 1
 
     def _unlink_file(self, path: Path) -> None:
         try:

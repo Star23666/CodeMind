@@ -3,7 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -120,6 +120,17 @@ class ThinkingFallbackClient:
 
 
 class LlmClientTest(unittest.TestCase):
+    def setUp(self):
+        self.destination_validator = AsyncMock()
+        self.destination_patch = patch(
+            "app.services.llm_client.validate_llm_destination",
+            new=self.destination_validator,
+        )
+        self.destination_patch.start()
+
+    def tearDown(self):
+        self.destination_patch.stop()
+
     def test_provider_uses_configured_timeout_retries_and_output_limit(self):
         client = LlmClient()
         recording_client = RecordingClient()
@@ -145,6 +156,7 @@ class LlmClientTest(unittest.TestCase):
         self.assertEqual(constructor_kwargs["max_retries"], 1)
         self.assertEqual(recording_client.completions.kwargs["max_tokens"], 345)
         self.assertTrue(recording_client.closed)
+        self.destination_validator.assert_awaited_once()
 
     def test_provider_failure_becomes_controlled_service_error(self):
         client = LlmClient()
@@ -211,6 +223,7 @@ class LlmClientTest(unittest.TestCase):
             streaming_client.completions.kwargs["response_format"],
             {"type": "json_object"},
         )
+        self.destination_validator.assert_awaited_once()
 
     def test_stream_preserves_output_limit_error(self):
         client = LlmClient()

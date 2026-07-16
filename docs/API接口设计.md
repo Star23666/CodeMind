@@ -7,7 +7,7 @@
 - 文件上传：`multipart/form-data`
 - 认证：除健康检查、注册和登录外，受保护接口使用 `Authorization: Bearer <token>`
 - 时间格式：ISO 8601 字符串
-- 相似度分数：余弦相似度范围为 `[-1, 1]`，默认过滤阈值为 `0.77`
+- 相似度分数：余弦相似度范围为 `[-1, 1]`，默认过滤阈值为 `0.45`
 
 通用错误响应：
 
@@ -21,7 +21,9 @@
 
 | 模块     | 方法   | 路径                                             | 说明                   |
 | -------- | ------ | ------------------------------------------------ | ---------------------- |
-| 健康检查 | GET    | `/api/health`                                    | 检查后端服务状态       |
+| 健康检查 | GET    | `/api/health/live`                               | 检查 API 进程存活      |
+| 健康检查 | GET    | `/api/health/ready`                              | 检查 MySQL、Chroma 就绪 |
+| 健康检查 | GET    | `/api/health`                                    | 兼容的就绪检查别名     |
 | 认证     | POST   | `/api/auth/register`                             | 用户注册               |
 | 认证     | POST   | `/api/auth/login`                                | 用户登录               |
 | 认证     | POST   | `/api/auth/logout`                               | 用户退出               |
@@ -36,6 +38,7 @@
 | 文档     | GET    | `/api/documents/{document_id}/content`           | 内联读取原始文档       |
 | 文档     | DELETE | `/api/documents/{document_id}`                   | 删除文档和向量索引     |
 | 文档     | POST   | `/api/documents/{document_id}/reindex`           | 重新入库文档           |
+| 文档     | POST   | `/api/documents/{document_id}/cancel`            | 取消文档处理任务       |
 | 文档     | GET    | `/api/documents/{document_id}/chunks`            | 查询文档片段           |
 | 文档     | GET    | `/api/documents/{document_id}/chunks/{chunk_id}` | 按文档定位查询单个片段 |
 | 文档     | GET    | `/api/chunks/{chunk_id}`                         | 查询单个片段           |
@@ -56,6 +59,8 @@
 | 历史     | GET    | `/api/qa-records/{qa_record_id}`                 | 查询问答详情           |
 | 反馈     | POST   | `/api/qa-records/{qa_record_id}/feedback`        | 提交回答反馈           |
 | 管理     | GET    | `/api/admin/feedbacks`                           | 管理端查看反馈         |
+
+健康检查不调用在线 LLM 或 Embedding。`/health/live` 只要进程可响应就返回 `200`；`/health/ready` 和兼容路径 `/health` 会分别探测 MySQL 与 Chroma，任一不可用时返回 `503` 和具体 `checks`。Docker 后端健康检查使用 readiness。
 
 ## 3. 认证接口
 
@@ -118,6 +123,14 @@ GET /api/auth/me
 ```
 
 响应字段同用户注册响应。
+
+### 3.4 用户退出
+
+```text
+POST /api/auth/logout
+```
+
+退出会持久化递增当前用户的 `token_version`。本次登录签发的 JWT 以及同版本的其他 JWT 会立即失效，再次访问受保护接口返回 `401`；重新登录后获取新版本 Token。
 
 ## 4. 知识库接口
 
@@ -223,7 +236,7 @@ GET /api/documents?knowledge_base_id=1&parse_status=completed
 | 参数                | 必填 | 说明                                                                  |
 | ------------------- | ---- | --------------------------------------------------------------------- |
 | `knowledge_base_id` | 否   | 按知识库过滤                                                          |
-| `parse_status`      | 否   | 按处理状态过滤，取值为 `pending`、`processing`、`completed`、`failed` |
+| `parse_status`      | 否   | 按处理状态过滤，取值为 `pending`、`processing`、`completed`、`failed`、`cancelled` |
 
 响应为 `DocumentRead[]`，字段同上传文档响应。
 
@@ -251,7 +264,17 @@ POST /api/documents/{document_id}/reindex
 }
 ```
 
-### 5.5 查询文档片段
+同一文档处于 `pending` 或 `processing` 时再次重建返回 `409`。重建会先完成新内容解析和向量化，再原子替换 MySQL 片段并清理旧向量；失败或取消时保留上一次已完成索引。
+
+### 5.5 取消文档处理
+
+```text
+POST /api/documents/{document_id}/cancel
+```
+
+仅 `pending` 或 `processing` 状态可以取消，成功后状态变为 `cancelled`；其他状态返回 `409`。后端重启会把中断的 `processing` 文档恢复为 `pending` 并重新入队。
+
+### 5.6 查询文档片段
 
 ```text
 GET /api/documents/{document_id}/chunks
@@ -288,7 +311,7 @@ POST /api/search
   "knowledge_base_id": 1,
   "query": "进程和线程有什么区别？",
   "top_k": 4,
-  "score_threshold": 0.77,
+  "score_threshold": 0.45,
   "rerank_top_n": 2,
   "enable_rewrite": true,
   "enable_rerank": true
@@ -331,7 +354,7 @@ POST /api/chat
   "knowledge_base_id": 1,
   "question": "操作系统中的进程和线程有什么区别？",
   "top_k": 4,
-  "score_threshold": 0.77,
+  "score_threshold": 0.45,
   "rerank_top_n": 2,
   "enable_rewrite": true,
   "enable_rerank": true
@@ -343,7 +366,7 @@ POST /api/chat
 1. 根据上下文可选重写问题。
 2. 调用 Embedding API 生成问题向量。
 3. 在 Chroma 中召回 `top_k=4` 个候选片段。
-4. 按 `score_threshold=0.77` 过滤低相似度片段。
+4. 按 `score_threshold=0.45` 过滤低相似度片段。
 5. 可选 rerank，并默认保留前 `rerank_top_n=2` 个片段进入 prompt。
 6. 调用在线 LLM API 生成回答。
 7. 将回答写入 `qa_records`，来源写入 `qa_sources`。
@@ -592,9 +615,9 @@ POST /api/qa-records/{qa_record_id}/feedback
 }
 ```
 
-当前状态：该接口只返回演示响应，没有查询问答归属，也没有写入 `feedbacks` 表；管理员列表当前返回空数组。前端尚未接入，不能作为已完成的持久化功能。
+后端只允许当前用户对本人问答记录提交反馈，并写入 `feedbacks` 表。同一用户对同一问答只能提交一次，重复提交返回 `409`；不存在或不属于当前用户的问答返回 `404`。
 
-演示响应：
+响应：
 
 ```json
 {
@@ -606,6 +629,14 @@ POST /api/qa-records/{qa_record_id}/feedback
   "created_at": "2026-07-08T10:05:00"
 }
 ```
+
+### 9.4 管理员查询反馈
+
+```text
+GET /api/admin/feedbacks?rating=5&user_id=1&knowledge_base_id=1
+```
+
+仅 `admin` 角色可以访问，普通用户返回 `403`。`rating`、`user_id` 和 `knowledge_base_id` 均为可选筛选条件，响应为真实持久化的 `FeedbackRead[]`，按创建时间和编号倒序排列。
 
 ## 10. 字段一致性要求
 
@@ -623,8 +654,8 @@ POST /api/qa-records/{qa_record_id}/feedback
 | `history_id`           | `mind_map_histories.id`                                              | 地图历史版本编号                         |
 | `node_type`            | `mind_map_histories.result_json`                                     | 地图节点类型，不单独占数据库列           |
 
-后端实现位于 `backend/app/api/routes.py`、`backend/app/services/` 和 `backend/app/schemas/contracts.py`。当前已接入 JWT、MySQL、Chroma、Embedding、在线 LLM、问答历史和知识地图；反馈持久化和检索评估仍需继续完善。知识地图结构化调用使用流式 LLM 响应和一次瞬时错误重试，真实 Docker 多批次任务已完成验证。
+后端实现位于 `backend/app/api/routes.py`、`backend/app/services/` 和 `backend/app/schemas/contracts.py`。当前已接入可撤销 JWT、MySQL、Chroma、Embedding、在线 LLM、问答历史、反馈持久化、可靠文档任务和知识地图。知识地图结构化调用使用流式 LLM 响应和一次瞬时错误重试，真实 Docker 多批次任务已完成验证；固定测试集与不同 Embedding 模型的最终阈值评估仍需持续进行。
 
 ---
 
-文档状态：已按 `main` 提交 `839890b` 同步，更新时间为 2026-07-13。
+文档状态：已按 Issue #13 可靠性修复同步，更新时间为 2026-07-15。

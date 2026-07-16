@@ -165,7 +165,7 @@
             <el-select v-model="form.provider" style="width: 100%" @change="applyProviderSuggestion">
               <el-option label="硅基流动" value="siliconflow" />
               <el-option label="OpenAI" value="openai" />
-              <el-option label="其他 OpenAI 兼容服务" value="openai_compatible" />
+              <el-option label="其他兼容服务（需管理员放行）" value="openai_compatible" />
             </el-select>
           </el-form-item>
         </div>

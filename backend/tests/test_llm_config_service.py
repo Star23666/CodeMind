@@ -155,6 +155,10 @@ class LlmConfigServiceTest(unittest.TestCase):
 
         with self.assertRaises(LlmConfigError):
             self.service.get(self.session, user_id=2, config_id=created.id)
+        with self.assertRaises(LlmConfigError):
+            self.service.activate(self.session, user_id=2, config_id=created.id)
+        with self.assertRaises(LlmConfigError):
+            self.service.delete(self.session, user_id=2, config_id=created.id)
 
     def test_deleting_active_config_returns_to_system_default(self):
         created = self._create()
@@ -220,34 +224,123 @@ class LlmConfigServiceTest(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(refreshed.test_status.value, "success")
 
-    def test_proxy_fake_ip_dns_result_is_allowed_but_private_ip_is_rejected(self):
+    def test_proxy_fake_ip_requires_explicit_development_setting(self):
         fake_ip_result = [
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("198.18.1.248", 0))
         ]
-        private_ip_result = [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.8", 0))
-        ]
 
-        with patch(
-            "app.services.llm_config_service.socket.getaddrinfo",
-            return_value=fake_ip_result,
-        ):
-            run_async(
-                self.service._ensure_public_destination(
-                    "https://api.siliconflow.cn/v1"
-                )
-            )
-
-        with patch(
-            "app.services.llm_config_service.socket.getaddrinfo",
-            return_value=private_ip_result,
+        with (
+            patch(
+                "app.services.llm_destination_validator.socket.getaddrinfo",
+                return_value=fake_ip_result,
+            ),
+            patch(
+                "app.services.llm_destination_validator.settings.llm_allow_proxy_fake_ip",
+                False,
+            ),
         ):
             with self.assertRaises(LlmConfigError):
                 run_async(
                     self.service._ensure_public_destination(
-                        "https://internal.example/v1"
+                        "https://api.siliconflow.cn/v1",
+                        provider="siliconflow",
                     )
                 )
+
+        with (
+            patch(
+                "app.services.llm_destination_validator.socket.getaddrinfo",
+                return_value=fake_ip_result,
+            ),
+            patch(
+                "app.services.llm_destination_validator.settings.llm_allow_proxy_fake_ip",
+                True,
+            ),
+        ):
+            run_async(
+                self.service._ensure_public_destination(
+                    "https://api.siliconflow.cn/v1",
+                    provider="siliconflow",
+                )
+            )
+
+    def test_private_ipv4_and_ipv6_dns_results_are_rejected(self):
+        for family, address in (
+            (socket.AF_INET, "10.0.0.8"),
+            (socket.AF_INET6, "fd00::8"),
+        ):
+            dns_result = [(family, socket.SOCK_STREAM, 6, "", (address, 443))]
+            with patch(
+                "app.services.llm_destination_validator.socket.getaddrinfo",
+                return_value=dns_result,
+            ):
+                with self.assertRaises(LlmConfigError):
+                    run_async(
+                        self.service._ensure_public_destination(
+                            "https://api.siliconflow.cn/v1",
+                            provider="siliconflow",
+                        )
+                    )
+
+    def test_destination_is_resolved_again_for_each_request(self):
+        public_result = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ]
+        private_result = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))
+        ]
+        with patch(
+            "app.services.llm_destination_validator.socket.getaddrinfo",
+            side_effect=[public_result, private_result],
+        ) as resolver:
+            run_async(
+                self.service._ensure_public_destination(
+                    "https://api.siliconflow.cn/v1",
+                    provider="siliconflow",
+                )
+            )
+            with self.assertRaises(LlmConfigError):
+                run_async(
+                    self.service._ensure_public_destination(
+                        "https://api.siliconflow.cn/v1",
+                        provider="siliconflow",
+                    )
+                )
+
+        self.assertEqual(resolver.call_count, 2)
+
+    def test_openai_compatible_host_requires_server_allowlist(self):
+        public_result = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ]
+        with patch(
+            "app.services.llm_destination_validator.settings.llm_openai_compatible_allowed_hosts",
+            "",
+        ):
+            with self.assertRaises(LlmConfigError):
+                run_async(
+                    self.service._ensure_public_destination(
+                        "https://gateway.example/v1",
+                        provider="openai_compatible",
+                    )
+                )
+
+        with (
+            patch(
+                "app.services.llm_destination_validator.settings.llm_openai_compatible_allowed_hosts",
+                "gateway.example",
+            ),
+            patch(
+                "app.services.llm_destination_validator.socket.getaddrinfo",
+                return_value=public_result,
+            ),
+        ):
+            run_async(
+                self.service._ensure_public_destination(
+                    "https://gateway.example/v1",
+                    provider="openai_compatible",
+                )
+            )
 
     def test_rate_limiter_has_no_hourly_attempt_cap(self):
         limiter = self.service._test_rate_limiter

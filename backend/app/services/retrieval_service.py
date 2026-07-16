@@ -92,6 +92,11 @@ class RetrievalService:
                 "知识库检索服务暂时不可用，请稍后重试。"
             ) from exc
 
+        hits = self._filter_current_hits(
+            hits,
+            knowledge_base_id=request.knowledge_base_id,
+            user_id=user_id,
+        )
         sources = [
             self._hit_to_source(hit)
             for hit in hits
@@ -119,7 +124,6 @@ class RetrievalService:
                     JOIN documents d ON d.id = c.document_id
                     WHERE d.knowledge_base_id = :knowledge_base_id
                       AND d.owner_id = :owner_id
-                      AND d.parse_status = 'completed'
                     """
                 ),
                 {"knowledge_base_id": knowledge_base_id, "owner_id": user_id},
@@ -129,6 +133,40 @@ class RetrievalService:
             logger.exception("Failed to inspect searchable knowledge base content")
             raise RetrievalServiceError(
                 "暂时无法检查知识库资料状态，请稍后重试。"
+            ) from exc
+        finally:
+            db.close()
+
+    def _filter_current_hits(
+        self,
+        hits: list[VectorSearchHit],
+        *,
+        knowledge_base_id: int,
+        user_id: int,
+    ) -> list[VectorSearchHit]:
+        if not hits:
+            return []
+
+        db = SessionLocal()
+        try:
+            rows = db.execute(
+                text(
+                    """
+                    SELECT c.vector_id
+                    FROM document_chunks c
+                    JOIN documents d ON d.id = c.document_id
+                    WHERE d.knowledge_base_id = :knowledge_base_id
+                      AND d.owner_id = :owner_id
+                    """
+                ),
+                {"knowledge_base_id": knowledge_base_id, "owner_id": user_id},
+            ).mappings()
+            current_vector_ids = {str(row["vector_id"]) for row in rows}
+            return [hit for hit in hits if hit.vector_id in current_vector_ids]
+        except Exception as exc:
+            logger.exception("Failed to validate vector search hits against MySQL")
+            raise RetrievalServiceError(
+                "暂时无法校验知识库检索结果，请稍后重试。"
             ) from exc
         finally:
             db.close()

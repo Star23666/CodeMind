@@ -1,8 +1,7 @@
 import json
-from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -48,7 +47,14 @@ from app.services.auth_service import (
     RegistrationConflictError,
     auth_service,
 )
-from app.services.document_service import document_service
+from app.services.document_job_service import document_job_service
+from app.services.document_service import (
+    DocumentBusyError,
+    DocumentNotProcessingError,
+    document_service,
+)
+from app.services.feedback_service import FeedbackConflictError, feedback_service
+from app.services.health_service import health_service
 from app.services.knowledge_base_service import knowledge_base_service
 from app.services.llm_client import LlmServiceError
 from app.services.llm_config_service import (
@@ -70,9 +76,26 @@ def _sse_event(event: str, data: dict[str, object]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-@router.get("/health")
-async def health_check() -> dict[str, str]:
+def _readiness_response():
+    report = health_service.check_readiness()
+    if report["status"] != "ok":
+        return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=report)
+    return report
+
+
+@router.get("/health/live")
+def liveness_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/health/ready", response_model=None)
+def readiness_check():
+    return _readiness_response()
+
+
+@router.get("/health", response_model=None)
+def health_check():
+    return _readiness_response()
 
 
 @router.post("/auth/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
@@ -95,11 +118,20 @@ async def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenRe
         ) from exc
     except DisabledUserError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-    return TokenResponse(access_token=auth_service.create_access_token(user))
+    return TokenResponse(
+        access_token=auth_service.create_access_token(
+            user,
+            token_version=auth_service.get_token_version(db, user.id),
+        )
+    )
 
 
 @router.post("/auth/logout", response_model=ActionResponse)
-async def logout(current_user: UserRead = Depends(get_current_user)) -> ActionResponse:
+async def logout(
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ActionResponse:
+    auth_service.revoke_tokens(db, current_user.id)
     return ActionResponse(status="ok", message=f"用户 {current_user.username} 已退出登录。")
 
 
@@ -301,7 +333,6 @@ async def list_documents(
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def upload_document(
-    background_tasks: BackgroundTasks,
     knowledge_base_id: int = Form(...),
     file: UploadFile = File(...),
     current_user: UserRead = Depends(get_current_user),
@@ -317,7 +348,7 @@ async def upload_document(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在。") from exc
 
-    background_tasks.add_task(document_service.process_document, document.id)
+    document_job_service.enqueue(document.id)
     return document
 
 
@@ -380,17 +411,39 @@ async def delete_document(
 @router.post("/documents/{document_id}/reindex", response_model=ActionResponse)
 async def reindex_document(
     document_id: int,
-    background_tasks: BackgroundTasks,
     current_user: UserRead = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ActionResponse:
     try:
         document_service.queue_reindex(db, document_id=document_id, owner_id=current_user.id)
+    except DocumentBusyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="文档已经在等待处理或正在处理中。",
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在。") from exc
 
-    background_tasks.add_task(document_service.process_document, document_id)
+    document_job_service.enqueue(document_id)
     return ActionResponse(status="processing", message=f"Document {document_id} entered the ingest pipeline.")
+
+
+@router.post("/documents/{document_id}/cancel", response_model=ActionResponse)
+async def cancel_document_processing(
+    document_id: int,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ActionResponse:
+    try:
+        document_service.cancel_processing(db, document_id=document_id, owner_id=current_user.id)
+    except DocumentNotProcessingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="文档当前不在等待处理或处理中。",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在。") from exc
+    return ActionResponse(status="cancelled", message=f"Document {document_id} processing was cancelled.")
 
 
 @router.get("/documents/{document_id}/chunks", response_model=list[DocumentChunkRead])
@@ -713,17 +766,32 @@ async def submit_feedback(
     qa_record_id: int,
     payload: FeedbackCreate,
     current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> FeedbackRead:
-    return FeedbackRead(
-        id=1,
-        qa_record_id=qa_record_id,
-        user_id=current_user.id,
-        rating=payload.rating,
-        comment=payload.comment,
-        created_at=datetime.utcnow(),
-    )
+    try:
+        return feedback_service.submit(
+            db,
+            qa_record_id=qa_record_id,
+            user_id=current_user.id,
+            payload=payload,
+        )
+    except FeedbackConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="问答记录不存在。") from exc
 
 
 @router.get("/admin/feedbacks", response_model=list[FeedbackRead])
-async def list_feedbacks(admin_user: UserRead = Depends(require_admin)) -> list[FeedbackRead]:
-    return []
+async def list_feedbacks(
+    rating: int | None = Query(default=None, ge=1, le=5),
+    user_id: int | None = Query(default=None, ge=1),
+    knowledge_base_id: int | None = Query(default=None, ge=1),
+    admin_user: UserRead = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> list[FeedbackRead]:
+    return feedback_service.list_for_admin(
+        db,
+        rating=rating,
+        user_id=user_id,
+        knowledge_base_id=knowledge_base_id,
+    )

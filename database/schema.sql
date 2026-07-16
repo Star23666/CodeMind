@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
   email VARCHAR(120) NOT NULL,
   role VARCHAR(20) NOT NULL DEFAULT 'user',
   status VARCHAR(20) NOT NULL DEFAULT 'active',
+  token_version INT UNSIGNED NOT NULL DEFAULT 0,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uk_users_username (username),
@@ -95,7 +96,7 @@ CREATE TABLE IF NOT EXISTS documents (
     FOREIGN KEY (knowledge_base_id) REFERENCES knowledge_bases(id)
     ON DELETE CASCADE,
   CONSTRAINT chk_documents_parse_status
-    CHECK (parse_status IN ('pending', 'processing', 'completed', 'failed'))
+    CHECK (parse_status IN ('pending', 'processing', 'completed', 'failed', 'cancelled'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS document_chunks (

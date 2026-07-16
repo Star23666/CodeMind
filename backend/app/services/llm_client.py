@@ -1,10 +1,15 @@
 import asyncio
 import inspect
 import logging
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 from app.core.config import settings
+from app.services.llm_destination_validator import (
+    LlmDestinationError,
+    validate_llm_destination,
+)
 from app.services.prompt_builder import RAG_SYSTEM_MESSAGE
 
 
@@ -46,6 +51,16 @@ class LlmServiceError(RuntimeError):
 
 
 class LlmClient:
+    async def _validate_destination(self, runtime_config: LlmRuntimeConfig) -> None:
+        try:
+            await validate_llm_destination(
+                base_url=runtime_config.base_url,
+                provider=runtime_config.provider,
+                source=runtime_config.source,
+            )
+        except LlmDestinationError as exc:
+            raise LlmServiceError(str(exc), status_code=400) from exc
+
     def _supports_thinking_toggle(self, model: str) -> bool:
         normalized_model = model.strip().casefold()
         return normalized_model.startswith(AUTO_DISABLE_THINKING_MODEL_PREFIXES)
@@ -163,6 +178,8 @@ class LlmClient:
                 thinking_attempts.append(False)
 
             for attempt_index, attempt_enable_thinking in enumerate(thinking_attempts):
+                await self._validate_destination(selected_config)
+                request_started = time.perf_counter()
                 request_kwargs = self._build_completion_request_kwargs(
                     enable_thinking=attempt_enable_thinking,
                     thinking_budget=thinking_budget,
@@ -181,6 +198,13 @@ class LlmClient:
                     **request_kwargs,
                 )
                 choice = response.choices[0]
+                logger.info(
+                    "LLM request completed "
+                    "(mode=non_stream, model=%s, finish_reason=%s, total_ms=%.1f)",
+                    selected_model,
+                    getattr(choice, "finish_reason", None),
+                    (time.perf_counter() - request_started) * 1000,
+                )
                 if getattr(choice, "finish_reason", None) == "length":
                     if attempt_index + 1 < len(thinking_attempts):
                         logger.warning(
@@ -275,6 +299,9 @@ class LlmClient:
                 thinking_attempts.append(False)
 
             for attempt_index, attempt_enable_thinking in enumerate(thinking_attempts):
+                await self._validate_destination(selected_config)
+                request_started = time.perf_counter()
+                first_token_ms: float | None = None
                 request_kwargs = self._build_completion_request_kwargs(
                     enable_thinking=attempt_enable_thinking,
                     thinking_budget=thinking_budget,
@@ -307,8 +334,19 @@ class LlmClient:
                         reasoning_chars += len(reasoning_delta)
                     content_delta = choice.delta.content
                     if content_delta:
+                        if first_token_ms is None:
+                            first_token_ms = (time.perf_counter() - request_started) * 1000
                         content_chars += len(content_delta)
                         yield content_delta
+
+                logger.info(
+                    "LLM request completed "
+                    "(mode=stream, model=%s, finish_reason=%s, first_token_ms=%.1f, total_ms=%.1f)",
+                    selected_model,
+                    finish_reason,
+                    first_token_ms or 0.0,
+                    (time.perf_counter() - request_started) * 1000,
+                )
 
                 if finish_reason != "length":
                     return

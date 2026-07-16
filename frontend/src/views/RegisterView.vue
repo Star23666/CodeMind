@@ -51,7 +51,6 @@
 
 <script setup>
 import { reactive, ref } from "vue";
-import { ElMessage } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { loginUser, registerUser } from "../api/auth";
 import AppHeader from "../components/layout/AppHeader.vue";

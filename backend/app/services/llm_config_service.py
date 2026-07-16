@@ -1,12 +1,8 @@
-import asyncio
 import base64
 import hashlib
-import ipaddress
 import logging
-import socket
 import threading
 import time
-from urllib.parse import urlsplit
 
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import text
@@ -30,15 +26,13 @@ from app.services.llm_client import (
     llm_client,
     system_llm_runtime_config,
 )
+from app.services.llm_destination_validator import (
+    LlmDestinationError,
+    validate_llm_destination,
+)
 
 
 logger = logging.getLogger(__name__)
-
-# Clash and similar local proxies commonly synthesize DNS records from the
-# RFC 2544 benchmarking range, then route requests by the original hostname.
-# Only DNS results may use this range; a user-entered literal IP is still denied.
-PROXY_FAKE_IP_NETWORKS = (ipaddress.ip_network("198.18.0.0/15"),)
-
 
 class LlmConfigError(RuntimeError):
     def __init__(self, message: str, *, status_code: int = 400) -> None:
@@ -334,7 +328,10 @@ class LlmConfigService:
         self._test_rate_limiter.acquire(user_id)
         started_at = time.perf_counter()
         try:
-            await self._ensure_public_destination(str(row["base_url"]))
+            await self._ensure_public_destination(
+                str(row["base_url"]),
+                provider=str(row["provider"]),
+            )
             runtime_config = self._runtime_from_row(row)
             answer = await llm_client.generate_answer(
                 "请只回复：连接成功",
@@ -569,39 +566,20 @@ class LlmConfigService:
         except (InvalidToken, UnicodeDecodeError, ValueError) as exc:
             raise LlmConfigError("API Key 解密失败，请重新保存。", status_code=503) from exc
 
-    async def _ensure_public_destination(self, base_url: str) -> None:
-        hostname = urlsplit(base_url).hostname
-        if not hostname:
-            raise LlmConfigError("API Base URL 无效。")
+    async def _ensure_public_destination(
+        self,
+        base_url: str,
+        *,
+        provider: str = "openai_compatible",
+    ) -> None:
         try:
-            literal_ip = ipaddress.ip_address(hostname)
-        except ValueError:
-            literal_ip = None
-        if literal_ip is not None:
-            if not literal_ip.is_global:
-                raise LlmConfigError("模型测试地址不能指向本机或内网地址。")
-            return
-
-        try:
-            addresses = await asyncio.to_thread(
-                socket.getaddrinfo,
-                hostname,
-                None,
-                type=socket.SOCK_STREAM,
+            await validate_llm_destination(
+                base_url=base_url,
+                provider=provider,
+                source="personal",
             )
-        except socket.gaierror as exc:
-            raise LlmConfigError("无法解析模型服务域名，请检查 API Base URL。") from exc
-        resolved_ips = {item[4][0] for item in addresses}
-        if not resolved_ips or any(
-            not self._is_safe_resolved_address(address) for address in resolved_ips
-        ):
-            raise LlmConfigError("模型测试地址不能解析到本机或内网地址。")
-
-    def _is_safe_resolved_address(self, address: str) -> bool:
-        parsed_address = ipaddress.ip_address(address)
-        return parsed_address.is_global or any(
-            parsed_address in network for network in PROXY_FAKE_IP_NETWORKS
-        )
+        except LlmDestinationError as exc:
+            raise LlmConfigError(str(exc)) from exc
 
     def _safe_test_error(self, exc: Exception) -> str:
         if isinstance(exc, (LlmConfigError, LlmServiceError)):

@@ -50,7 +50,6 @@
 
 <script setup>
 import { onBeforeUnmount, onMounted, ref } from "vue";
-import { ElMessage } from "element-plus";
 import { ArrowRight, FolderOpened } from "@element-plus/icons-vue";
 import { useRouter } from "vue-router";
 import { getHealth } from "../api/health";
@@ -116,6 +115,11 @@ function scheduleProcessingCheck(documentId, attempt = 0) {
       if (latest.parse_status === "failed") {
         processingTimers.delete(documentId);
         ElMessage.error(latest.error_message || "文档处理失败，请前往文档库查看。");
+        return;
+      }
+      if (latest.parse_status === "cancelled") {
+        processingTimers.delete(documentId);
+        ElMessage.info(`“${latest.file_name}”的处理任务已取消。`);
         return;
       }
       if (latest.parse_status === "completed") {
