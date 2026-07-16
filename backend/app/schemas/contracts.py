@@ -213,10 +213,15 @@ class KnowledgeBaseUpdate(BaseModel):
 
 class KnowledgeBaseRead(BaseModel):
     id: int
-    owner_id: int
+    owner_id: int | None = None
     name: str
     description: str | None = None
     visibility: Visibility = Visibility.PRIVATE
+    can_read: bool = True
+    can_upload: bool = False
+    can_manage: bool = False
+    can_edit: bool = False
+    can_delete: bool = False
 
 
 class DocumentRead(BaseModel):
@@ -229,6 +234,9 @@ class DocumentRead(BaseModel):
     parse_status: ParseStatus = ParseStatus.PENDING
     error_message: str | None = None
     chunk_count: int = 0
+    uploader_username: str | None = None
+    knowledge_base_visibility: Visibility = Visibility.PRIVATE
+    can_manage: bool = False
 
 
 class DocumentChunkRead(BaseModel):

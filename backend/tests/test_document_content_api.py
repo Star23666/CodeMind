@@ -38,6 +38,30 @@ class DocumentContentApiTest(unittest.TestCase):
             connection.execute(
                 text(
                     """
+                    CREATE TABLE users (
+                        id INTEGER PRIMARY KEY,
+                        username TEXT NOT NULL,
+                        role TEXT NOT NULL DEFAULT 'user'
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE knowledge_bases (
+                        id INTEGER PRIMARY KEY,
+                        owner_id INTEGER,
+                        name TEXT NOT NULL,
+                        description TEXT,
+                        visibility TEXT NOT NULL
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
                     CREATE TABLE documents (
                         id INTEGER PRIMARY KEY,
                         knowledge_base_id INTEGER NOT NULL,
@@ -50,6 +74,19 @@ class DocumentContentApiTest(unittest.TestCase):
                         error_message TEXT,
                         chunk_count INTEGER NOT NULL
                     )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO users (id, username) VALUES (1, 'alice'), (2, 'bob')"
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO knowledge_bases (id, owner_id, name, visibility)
+                    VALUES (1, 1, 'Alice private', 'private')
                     """
                 )
             )

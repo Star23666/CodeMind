@@ -6,8 +6,8 @@
       <section class="page-head">
         <div>
           <el-tag effect="plain">文档管理</el-tag>
-          <h1>我的文档库</h1>
-          <p>通过明确的条件筛选私人文档，点击文档可直接查看原文件。</p>
+          <h1>文档库</h1>
+          <p>统一查看私人资料与公共资料，点击文档可核对原文件和文本片段。</p>
         </div>
         <div class="head-actions">
           <el-button :icon="Refresh" :loading="loading" @click="loadData">刷新</el-button>
@@ -40,6 +40,8 @@
           <el-checkbox-group v-model="selectedBaseIds" class="kb-options">
             <el-checkbox v-for="base in knowledgeBases" :key="base.id" :value="base.id">
               {{ base.name }}
+              <el-tag v-if="base.visibility === 'public'" size="small" effect="plain">公共</el-tag>
+              <el-tag v-else size="small" type="info" effect="plain">私人</el-tag>
             </el-checkbox>
           </el-checkbox-group>
           <el-empty v-if="!knowledgeBases.length && !loading" description="暂无知识库" :image-size="54" />
@@ -67,7 +69,11 @@
             <span class="file-icon">{{ fileBadge(document.file_type) }}</span>
             <div class="file-copy">
               <strong>{{ document.file_name }}</strong>
-              <span>{{ knowledgeBaseName(document.knowledge_base_id) }} · {{ typeLabel(document.file_type) }} · {{ formatSize(document.file_size) }}</span>
+              <div class="file-meta">
+                <span>{{ knowledgeBaseName(document.knowledge_base_id) }} · {{ typeLabel(document.file_type) }} · {{ formatSize(document.file_size) }}</span>
+                <el-tag v-if="isPublicDocument(document)" size="small" effect="plain">公共</el-tag>
+              </div>
+              <small v-if="isPublicDocument(document)">上传者：{{ document.uploader_username || `用户 ${document.owner_id}` }}</small>
               <small v-if="document.error_message" class="error-message">{{ document.error_message }}</small>
             </div>
             <div class="file-status">
@@ -77,19 +83,22 @@
             <div class="row-actions" @click.stop>
               <el-button link type="primary" @click="openDocument(document)">查看文档</el-button>
               <el-button link @click="openChunks(document)">查看切片</el-button>
-              <el-button
-                v-if="['pending', 'processing'].includes(document.parse_status)"
-                link
-                type="warning"
-                @click="cancelProcessing(document)"
-              >取消处理</el-button>
-              <el-button
-                link
-                type="primary"
-                :disabled="['pending', 'processing'].includes(document.parse_status)"
-                @click="rebuild(document)"
-              >重建</el-button>
-              <el-button link type="danger" @click="remove(document)">删除</el-button>
+              <template v-if="document.can_manage">
+                <el-button
+                  v-if="['pending', 'processing'].includes(document.parse_status)"
+                  link
+                  type="warning"
+                  @click="cancelProcessing(document)"
+                >取消处理</el-button>
+                <el-button
+                  link
+                  type="primary"
+                  :disabled="['pending', 'processing'].includes(document.parse_status)"
+                  @click="rebuild(document)"
+                >重建</el-button>
+                <el-button link type="danger" @click="remove(document)">删除</el-button>
+              </template>
+              <span v-else class="management-note">仅上传者或管理员可管理</span>
             </div>
           </article>
 
@@ -176,6 +185,10 @@ function knowledgeBaseName(id) {
   return knowledgeBases.value.find((base) => base.id === id)?.name || "未知知识库";
 }
 
+function isPublicDocument(document) {
+  return document.knowledge_base_visibility === "public";
+}
+
 function openDocument(document) {
   router.push({ name: "document-viewer", params: { documentId: document.id } });
 }
@@ -247,7 +260,8 @@ function formatSize(size) {
 .primary-filters label { display: grid; min-width: 0; flex: 1; gap: 8px; color: var(--cm-heading); font-size: 13px; font-weight: 800; }
 .kb-filter { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--cm-border); }
 .filter-title > span { color: var(--cm-heading); font-size: 13px; font-weight: 800; }
-.kb-options { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.kb-options { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.kb-options :deep(.el-checkbox__label) { display: inline-flex; align-items: center; gap: 6px; }
 .card-head p { margin: 0 0 5px; color: var(--cm-primary); font-size: 13px; font-weight: 800; }
 .card-head h2 { margin: 0; color: var(--cm-heading); }
 .card-head > span { color: var(--cm-muted); font-size: 13px; }
@@ -258,6 +272,8 @@ function formatSize(size) {
 .file-copy { display: grid; min-width: 0; flex: 1; gap: 5px; }
 .file-copy strong { overflow: hidden; color: var(--cm-heading); text-overflow: ellipsis; white-space: nowrap; }
 .file-copy span, .file-copy small, .file-status span { color: var(--cm-muted); font-size: 13px; }
+.file-meta { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.management-note { color: var(--cm-muted); font-size: 12px; }
 .file-copy .error-message { color: var(--cm-danger); }
 .file-status { min-width: 100px; flex-direction: column; gap: 6px; }
 .row-actions { flex-wrap: wrap; justify-content: flex-end; }

@@ -169,7 +169,12 @@ POST /api/knowledge-bases
 {
   "name": "操作系统复习资料",
   "description": "课程讲义、实验说明和复习笔记",
-  "visibility": "private"
+  "visibility": "private",
+  "can_read": true,
+  "can_upload": true,
+  "can_manage": true,
+  "can_edit": true,
+  "can_delete": true
 }
 ```
 
@@ -196,14 +201,46 @@ GET /api/knowledge-bases
 ```json
 [
   {
+    "id": 42,
+    "owner_id": null,
+    "name": "公共知识库",
+    "description": "所有登录用户共同维护和检索的公共计算机知识资料。",
+    "visibility": "public",
+    "can_read": true,
+    "can_upload": true,
+    "can_manage": false,
+    "can_edit": false,
+    "can_delete": false
+  },
+  {
     "id": 1,
     "owner_id": 1,
     "name": "操作系统复习资料",
     "description": "课程讲义、实验说明和复习笔记",
-    "visibility": "private"
+    "visibility": "private",
+    "can_read": true,
+    "can_upload": true,
+    "can_manage": true,
+    "can_edit": true,
+    "can_delete": true
   }
 ]
 ```
+
+列表始终返回当前用户的私人知识库和全站唯一公共知识库，公共库 ID 由数据库动态生成。客户端必须使用
+返回值，不能硬编码 `1`。普通用户可读写公共资料但不能编辑或删除公共库；管理员的公共库
+`can_manage/can_edit` 为 `true`，`can_delete` 仍为 `false`。
+
+### 4.3 更新和删除知识库
+
+```text
+PATCH  /api/knowledge-bases/{knowledge_base_id}
+DELETE /api/knowledge-bases/{knowledge_base_id}
+```
+
+- 私人库只允许所有者更新和删除。
+- 公共库只允许管理员更新名称和描述。
+- 公共库对普通用户更新返回 `403`，对任何角色删除都返回 `403`。
 
 ## 5. 文档接口
 
@@ -232,12 +269,18 @@ POST /api/documents/upload
   "file_size": 204800,
   "parse_status": "pending",
   "error_message": null,
-  "chunk_count": 0
+  "chunk_count": 0,
+  "uploader_username": "alice",
+  "knowledge_base_visibility": "public",
+  "can_manage": true
 }
 ```
 
 当后台解析、Embedding 或向量入库失败时，`parse_status` 为 `failed`，
 `error_message` 返回可直接展示给用户的失败原因；其他状态下该字段为 `null`。
+
+所有登录用户都可以向公共库上传。公共文档对全部登录用户可见，`uploader_username` 标识上传者；
+只有上传者和管理员获得 `can_manage=true`，并可调用取消、重建和删除接口。私人文档仍只对所有者可见。
 
 已有 MySQL 数据库需要在升级代码后执行一次：
 
@@ -479,6 +522,7 @@ GET /api/mind-maps/jobs/{job_id}
 ```
 
 - `document_id=null` 表示使用知识库内全部已完成解析的文档。
+- 私人库只使用当前用户文档；公共库使用同一公共库内所有上传者的文档。
 - `max_depth` 范围为 2 至 4。
 - `max_nodes` 范围为 8 至 60。
 
@@ -551,7 +595,8 @@ POST /api/mind-maps/ask
 }
 ```
 
-后端只允许使用当前用户、当前知识库且已完成解析的片段，最多 8 个。响应包含回答和实际使用的来源列表。
+后端最多接受 8 个已完成解析片段。私人库要求片段属于当前用户和当前知识库；公共库允许同一公共库
+中不同上传者的片段。响应包含回答和实际使用的来源列表。
 
 ### 8.4 节点扩展
 
@@ -583,7 +628,7 @@ DELETE /api/mind-maps/histories/{history_id}
 
 - 列表响应不携带完整 `result`，详情响应包含完整地图。
 - 创建和更新时可传 `view_state`，用于保存节点坐标及折叠状态。
-- `document_id` 必须属于同一用户和同一知识库。
+- 私人 `document_id` 必须属于当前用户和同一知识库；公共文档允许所有登录用户使用。
 - 自动生成成功后后端会保存一个历史版本。
 - 节点掌握状态当前保存在浏览器 `localStorage`，不属于历史接口字段。
 
@@ -666,7 +711,7 @@ GET /api/admin/feedbacks?rating=5&user_id=1&knowledge_base_id=1
 | API 字段               | MySQL 字段或 Chroma metadata                                         | 说明                                     |
 | ---------------------- | -------------------------------------------------------------------- | ---------------------------------------- |
 | `knowledge_base_id`    | `knowledge_bases.id`、`documents.knowledge_base_id`、Chroma metadata | 限定检索和问答范围                       |
-| `owner_id` / `user_id` | `users.id`、Chroma metadata `owner_id`                               | 用于权限隔离                             |
+| `owner_id` / `user_id` | `users.id`、Chroma metadata `owner_id`                               | 私人库用于隔离；公共库用于标识上传者     |
 | `parse_status`         | `documents.parse_status`                                             | 文档处理状态                             |
 | `chunk_id`             | `document_chunks.id`、Chroma metadata `chunk_id`                     | 引用跳转和 MySQL 反查                    |
 | `vector_id`            | `document_chunks.vector_id`、Chroma id                               | 向量记录唯一编号                         |
@@ -677,8 +722,8 @@ GET /api/admin/feedbacks?rating=5&user_id=1&knowledge_base_id=1
 | `history_id`           | `mind_map_histories.id`                                              | 地图历史版本编号                         |
 | `node_type`            | `mind_map_histories.result_json`                                     | 地图节点类型，不单独占数据库列           |
 
-后端实现位于 `backend/app/api/routes.py`、`backend/app/services/` 和 `backend/app/schemas/contracts.py`。当前已接入可撤销 JWT、MySQL、Chroma、Embedding、在线 LLM、问答历史、反馈持久化、可靠文档任务和知识地图。知识地图结构化调用使用流式 LLM 响应和一次瞬时错误重试，真实 Docker 多批次任务已完成验证；固定测试集与不同 Embedding 模型的最终阈值评估仍需持续进行。
+后端实现位于 `backend/app/api/routes.py`、`backend/app/services/` 和 `backend/app/schemas/contracts.py`。当前已接入可撤销 JWT、唯一全局公共知识库、私人隔离、最小管理员权限、MySQL、Chroma、Embedding、在线 LLM、问答历史、反馈持久化、可靠文档任务和知识地图。真实 Docker 已验证跨用户公共检索、来源查看、权限管理和同步删除；固定测试集与不同 Embedding 模型的最终阈值评估仍需持续进行。
 
 ---
 
-文档状态：已按 Issue #13 可靠性修复同步，更新时间为 2026-07-15。
+文档状态：已按 Issue #15 全局公共知识库同步，更新时间为 2026-07-16。

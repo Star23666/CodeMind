@@ -289,6 +289,7 @@ class RagGenerationTest(unittest.TestCase):
         request = ChatRequest(knowledge_base_id=1, question="进程和线程有什么区别？")
 
         with (
+            patch.object(service, "_scope_owner_id", return_value=1),
             patch(
                 "app.services.retrieval_service.get_vector_store",
                 side_effect=RuntimeError("chromadb is not installed"),

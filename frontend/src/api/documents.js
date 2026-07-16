@@ -18,7 +18,7 @@ export function getDocumentContent(documentId) {
   });
 }
 
-export function uploadDocument({ knowledgeBaseId = 1, file, onUploadProgress }) {
+export function uploadDocument({ knowledgeBaseId, file, onUploadProgress }) {
   const formData = new FormData();
   formData.append("knowledge_base_id", knowledgeBaseId);
   formData.append("file", file);
