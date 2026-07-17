@@ -17,6 +17,8 @@ CodeMind 使用 MySQL 保存结构化业务数据，使用 Chroma 保存文档�
 | `feedbacks` | 用户对本人问答记录的评分和文字反馈 |
 | `mind_map_histories` | 地图结果 JSON、节点数和画布状态 |
 | `mind_map_jobs` | 地图后台任务、阶段、进度、结果和错误 |
+| `quiz_sessions` | AI 出题短期会话、生成配置、进度和过期时间 |
+| `quiz_questions` | 会话内题目、答案、解析和来源快照；随会话级联删除 |
 
 新数据库由 `schema.sql` 初始化。Docker 中该脚本只会在 `mysql_data` 数据卷第一次创建时运行。
 
@@ -30,6 +32,7 @@ CodeMind 使用 MySQL 保存结构化业务数据，使用 Chroma 保存文档�
 | `migrations/20260715_create_user_llm_configs.sql` | 创建用户模型预设和当前模型偏好表 |
 | `migrations/20260715_issue13_reliability.sql` | 增加 JWT 注销版本并扩展文档取消状态 |
 | `migrations/20260716_create_global_public_knowledge_base.sql` | 创建唯一全局公共库及作用域约束 |
+| `migrations/20260717_create_quiz_tables.sql` | 创建 AI 出题临时会话和题目表 |
 
 生产数据库执行迁移前必须备份。迁移脚本按说明执行一次，不要通过删除 Docker 数据卷来替代迁移。
 
@@ -46,6 +49,8 @@ Windows PowerShell 示例：
 Get-Content -Raw database\migrations\<migration>.sql |
   docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
 ```
+
+`quiz_sessions` 不承担历史记录职责。提交、主动放弃或过期清理都会删除会话，并通过外键级联删除 `quiz_questions`；不要基于这两个表实现长期成绩统计。
 
 ## Chroma 关联
 

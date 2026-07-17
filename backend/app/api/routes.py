@@ -41,6 +41,12 @@ from app.schemas.contracts import (
     UserCreate,
     UserRead,
 )
+from app.schemas.quiz import (
+    QuizCreateRequest,
+    QuizSessionRead,
+    QuizSubmissionResult,
+    QuizSubmitRequest,
+)
 from app.services.auth_service import (
     AuthenticationError,
     DisabledUserError,
@@ -70,6 +76,8 @@ from app.services.mind_map_service import MindMapGenerationError, mind_map_servi
 from app.services.mind_map_job_service import mind_map_job_service
 from app.services.mind_map_history_service import mind_map_history_service
 from app.services.qa_history_service import qa_history_service
+from app.services.quiz_job_service import quiz_job_service
+from app.services.quiz_service import QuizServiceError, quiz_service
 from app.services.rag_service import rag_service
 from app.services.retrieval_service import RetrievalServiceError, retrieval_service
 
@@ -639,6 +647,78 @@ async def delete_mind_map_history(
         return ActionResponse(status="accepted", message="思维导图历史记录已删除。")
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="思维导图历史记录不存在。") from exc
+
+
+@router.post(
+    "/quizzes/sessions",
+    response_model=QuizSessionRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_quiz_session(
+    payload: QuizCreateRequest,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> QuizSessionRead:
+    try:
+        session = quiz_service.create_session(
+            db,
+            owner_id=current_user.id,
+            request=payload,
+        )
+    except QuizServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    quiz_job_service.enqueue(session.session_id)
+    return session
+
+
+@router.get("/quizzes/sessions/{session_id}", response_model=QuizSessionRead)
+async def get_quiz_session(
+    session_id: str,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> QuizSessionRead:
+    try:
+        return quiz_service.get_session(
+            db,
+            session_id=session_id,
+            owner_id=current_user.id,
+        )
+    except QuizServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.post(
+    "/quizzes/sessions/{session_id}/submit",
+    response_model=QuizSubmissionResult,
+)
+async def submit_quiz_session(
+    session_id: str,
+    payload: QuizSubmitRequest,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> QuizSubmissionResult:
+    try:
+        return quiz_service.submit(
+            db,
+            session_id=session_id,
+            owner_id=current_user.id,
+            request=payload,
+        )
+    except QuizServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.delete("/quizzes/sessions/{session_id}", response_model=ActionResponse)
+async def abandon_quiz_session(
+    session_id: str,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ActionResponse:
+    try:
+        quiz_service.abandon(db, session_id=session_id, owner_id=current_user.id)
+    except QuizServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return ActionResponse(status="accepted", message="临时练习已清理。")
 
 
 @router.post("/search", response_model=SearchResponse)

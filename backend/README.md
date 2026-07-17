@@ -1,6 +1,6 @@
 # CodeMind Backend
 
-FastAPI 后端负责认证、知识库与文档管理、Embedding 入库、Chroma 检索、RAG 问答、问答历史和知识地图服务。
+FastAPI 后端负责认证、知识库与文档管理、Embedding 入库、Chroma 检索、RAG 问答、问答历史、知识地图和 AI 定制练习服务。
 
 ## 模块结构
 
@@ -19,6 +19,8 @@ FastAPI 后端负责认证、知识库与文档管理、Embedding 入库、Chrom
 | `app/services/mind_map_service.py` | 知识地图结构生成、节点追问和分支扩展 |
 | `app/services/mind_map_job_service.py` | 异步任务状态、进度和结果持久化 |
 | `app/services/mind_map_history_service.py` | 地图历史版本和画布状态持久化 |
+| `app/services/quiz_service.py` | 多知识库抽样、结构化出题、来源校验、评分和临时会话清理 |
+| `app/services/quiz_job_service.py` | 出题后台任务、进度、启动恢复和过期清理 |
 | `scripts/promote_admin.py` | 将已注册用户安全提升为管理员 |
 | `tests/` | 后端自动化测试 |
 
@@ -48,6 +50,12 @@ MIND_MAP_TIMEOUT_SECONDS=600
 MIND_MAP_TOTAL_TIMEOUT_SECONDS=900
 MIND_MAP_ENABLE_THINKING=false
 
+QUIZ_TIMEOUT_SECONDS=300
+QUIZ_MAX_TOKENS=12000
+QUIZ_ENABLE_THINKING=false
+QUIZ_SESSION_TTL_MINUTES=60
+QUIZ_CONTEXT_MAX_TOKENS=8000
+
 EMBEDDING_API_KEY=replace_with_embedding_key
 EMBEDDING_BASE_URL=https://provider.example.com/v1
 EMBEDDING_MODEL=replace_with_embedding_model
@@ -58,7 +66,7 @@ DOCUMENT_WORKER_CONCURRENCY=2
 JWT_SECRET_KEY=replace_with_a_long_random_secret
 ```
 
-Embedding 未配置时，文档入库和检索会明确失败；普通 RAG 问答在 LLM 未配置时保留本地演示回答。知识地图依赖结构化 LLM 输出，因此必须配置在线 LLM。
+Embedding 未配置时，文档入库和检索会明确失败；普通 RAG 问答在 LLM 未配置时保留本地演示回答。知识地图和 AI 出题依赖结构化 LLM 输出，因此必须配置在线 LLM。
 
 ## 原生开发
 
@@ -106,8 +114,7 @@ RAG 问答提供两个接口：`POST /api/chat` 返回完整 JSON；`POST /api/c
 硅基流动和 OpenAI 预设只能使用各自官方域名，其他兼容域名需要服务端通过
 `LLM_OPENAI_COMPATIBLE_ALLOWED_HOSTS` 显式放行。测试连接、普通问答、SSE 和知识地图的
 每次实际请求前都会重新检查 DNS 解析结果，拒绝本机、私网、链路本地和保留地址。
-启用个人预设后，问答和知识地图不会在调用失败时自动回退到系统模型。Embedding 继续使用服务器统一配置。
-AI 出题由 Issue #18 实现，接入时必须复用 `llm_config_service.resolve_runtime`。
+启用个人预设后，问答、知识地图和 AI 出题不会在调用失败时自动回退到系统模型。AI 出题的首次生成和结构重试显式复用同一个 `llm_config_service.resolve_runtime` 结果；未启用个人预设时才使用系统模型。Embedding 继续使用服务器统一配置。
 
 知识库分为两种作用域：私人库按 `knowledge_base_id + owner_id` 隔离；唯一的全局公共库按
 `knowledge_base_id` 聚合所有上传者的文档。所有登录用户可读取、上传和检索公共资料，上传者可管理
@@ -139,6 +146,18 @@ AI 出题由 Issue #18 实现，接入时必须复用 `llm_config_service.resolv
 - 自动生成结果会保存历史版本；前端也可创建、更新和删除版本。
 - 新增节点学习字段位于历史 JSON 中，旧数据可使用默认值读取，不需要数据库迁移。
 
+## AI 出题说明
+
+- `POST /api/quizzes/sessions` 创建后台任务，支持同时选择 1～5 个有读取权的私人或公共知识库。
+- 后端先在每个知识库内按文档轮询、再在知识库之间轮询抽取已完成片段，并受片段数、字符数和保守 Token 上限约束；任务真正执行前会再次校验权限。
+- 题目由 Pydantic 校验数量、六类题型、选项、答案和真实来源编号；未限定主题时还会校验整套题的文档覆盖度，避免长文档垄断题目。
+- 每题带内部认知层级；进阶题至少 40% 达到应用或分析，挑战题至少 70% 达到应用或分析且至少 40% 为分析。无效结构只有限重试，整批验证通过后才入库。
+- `GET /api/quizzes/sessions/{id}` 只返回题干、选项和来源数量，不返回答案、解析或来源正文。
+- `POST /api/quizzes/sessions/{id}/submit` 自动评分单选、多选、判断和填空，主观题返回参考答案供自评；结果返回后立即删除会话和题目。
+- `DELETE /api/quizzes/sessions/{id}` 清理放弃的练习，过期会话由后台任务定期清理。所有会话接口只允许创建者访问。
+- 已有数据库必须先执行 `database/migrations/20260717_create_quiz_tables.sql`。
+- 在线模型生成耗时与语义质量、真实依赖测试自动化等后续事项见 [已知问题与后续计划](../docs/已知问题与后续计划.md)。
+
 ## 运行测试
 
 ```bash
@@ -146,7 +165,7 @@ cd backend
 python -m pytest -q
 ```
 
-当前基线为 `110 passed`。测试使用 SQLite 和替身服务覆盖主要业务，其中包括全局公共库唯一性、跨用户公共文档访问和管理、私人库隔离、管理员初始化、删除清理、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、问答和知识地图个人模型路由、知识地图流式总超时和并发槽位释放、文档重启恢复、重复入队、取消、索引补偿和陈旧向量过滤，反馈持久化与越权，JWT 注销撤销，以及 MySQL/Chroma 就绪探针；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、公共库跨用户检索、权限按钮和数据同步清理。
+当前基线为 `129 passed`。测试使用 SQLite 和替身服务覆盖主要业务，其中包括全局公共库唯一性、跨用户公共文档访问和管理、私人库隔离、管理员初始化、删除清理、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、问答和知识地图个人模型路由、知识地图流式总超时和并发槽位释放、文档重启恢复、重复入队、取消、索引补偿和陈旧向量过滤，反馈持久化与越权，JWT 注销撤销，MySQL/Chroma 就绪探针，以及 AI 出题的多库权限、文档轮询、覆盖度、难度结构、输入预算、来源编号白名单、答案隔离、评分、BYOK 与临时清理；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、公共库跨用户检索、AI 六类题型、来源反查、权限按钮和数据同步清理。
 
 ## Docker 运行
 

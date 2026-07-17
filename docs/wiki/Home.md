@@ -196,6 +196,16 @@ flowchart LR
 
 最近合并的 PR #11 增加了 `node_type`、`key_points` 和 `learning_tip`。这些字段保存在地图历史 JSON 中并提供默认值，旧历史不需要数据库迁移即可读取。
 
+### 6.9 AI 定制练习
+
+- 同时选择 1 至 5 个有读取权的私人或公共知识库，设置题量、难度、主题和题型。
+- 支持单选、多选、判断、填空、简答和情景应用六类题型，以及指定或随机混合模式。
+- 后端以短期后台会话按文档和知识库双层轮询抽取片段并限制输入预算，结构化结果的难度比例、文档覆盖和来源整体校验通过后才保存。
+- 获取题目时隐藏答案、解析和来源正文；提交后自动评分客观题和填空题，主观题提供参考答案。
+- 每道题保留可验证来源；结果页支持主观题自评、筛选和折叠，原文在新标签页打开，当前标签页刷新后仍可恢复本次结果。
+- 提交、主动放弃或过期后删除临时数据，不建立长期练习历史。
+- 复用用户个人模型配置；个人模型失败不回退，未启用个人配置时使用系统模型。
+
 ## 7. 核心业务流程
 
 ### 7.1 文档入库流程
@@ -286,6 +296,36 @@ sequenceDiagram
     end
 ```
 
+### 7.4 AI 出题流程
+
+```mermaid
+sequenceDiagram
+    actor User as 用户
+    participant Web as Vue 前端
+    participant API as FastAPI
+    participant Job as 出题任务服务
+    participant LLM as 在线 LLM
+    participant DB as MySQL
+
+    User->>Web: 混选知识库并设置题量、难度、题型和主题
+    Web->>API: POST /api/quizzes/sessions
+    API->>API: 校验全部知识库读取权限和内容量
+    API->>DB: 创建短期 queued 会话
+    API-->>Web: 返回 session_id 与进度
+    Job->>API: 执行前再次校验权限并均衡抽取片段
+    Job->>LLM: 使用同一用户运行时请求结构化题目
+    LLM-->>Job: 返回题目、答案、解析和来源编号
+    Job->>Job: Pydantic 校验整批结构与真实来源
+    Job->>DB: 验证通过后保存临时题目
+    Web->>API: GET /api/quizzes/sessions/{session_id}
+    API-->>Web: 返回不含答案的题目
+    User->>Web: 完成作答并提交
+    Web->>API: POST /api/quizzes/sessions/{session_id}/submit
+    API->>API: 评分并组装答案、解析和来源
+    API->>DB: 删除会话并级联删除题目
+    API-->>Web: 返回本次结果
+```
+
 ## 8. 数据库设计
 
 ### 8.1 数据关系
@@ -308,6 +348,8 @@ erDiagram
     USERS ||--o{ MIND_MAP_JOBS : starts
     KNOWLEDGE_BASES ||--o{ MIND_MAP_HISTORIES : scopes
     KNOWLEDGE_BASES ||--o{ MIND_MAP_JOBS : scopes
+    USERS ||--o{ QUIZ_SESSIONS : starts
+    QUIZ_SESSIONS ||--o{ QUIZ_QUESTIONS : contains
 ```
 
 ### 8.2 主要数据表
@@ -323,6 +365,8 @@ erDiagram
 | `feedbacks` | 用户评分和文字反馈 |
 | `mind_map_histories` | 地图结果 JSON、标题、节点数和画布状态 |
 | `mind_map_jobs` | 生成任务状态、阶段、进度、结果和失败原因 |
+| `quiz_sessions` | 出题配置、任务进度、用户归属和过期时间 |
+| `quiz_questions` | 临时题目、答案、解析和来源快照，随会话删除 |
 
 ### 8.3 Chroma metadata
 
@@ -373,6 +417,10 @@ erDiagram
 | 知识地图 | `POST /api/mind-maps/ask` | 节点追问 | 已实现 |
 | 知识地图 | `POST /api/mind-maps/expand` | 节点扩展 | 已实现 |
 | 知识地图 | `/api/mind-maps/histories` | 地图历史增删改查 | 已实现 |
+| AI 出题 | `POST /api/quizzes/sessions` | 创建多知识库后台出题会话 | 已实现 |
+| AI 出题 | `GET /api/quizzes/sessions/{id}` | 查询进度或获取无答案题目 | 已实现 |
+| AI 出题 | `POST /api/quizzes/sessions/{id}/submit` | 评分、返回解析来源并清理 | 已实现 |
+| AI 出题 | `DELETE /api/quizzes/sessions/{id}` | 放弃并清理临时练习 | 已实现 |
 | 反馈 | `POST /api/qa-records/{id}/feedback` | 校验归属并持久化反馈 | 已实现 |
 | 管理 | `GET /api/admin/feedbacks` | 按评分、用户、知识库筛选 | 已实现 |
 
@@ -494,7 +542,7 @@ docker compose down
 - 知识地图生成、来源校验、并发限制和失败取消。
 - 知识地图任务、历史事务和文档归属校验。
 
-当前后端自动化测试基线为 110 项，包括公共/私人跨用户权限、管理员初始化和清理、个人模型连接错误分类、敏感日志和问答、知识地图模型路由回归。
+当前后端自动化测试基线为 129 项，包括公共/私人跨用户权限、管理员初始化和清理、个人模型连接错误分类、敏感日志和问答、知识地图模型路由，以及 AI 出题权限、文档轮询、覆盖度、难度结构、评分、来源编号白名单和临时清理回归。
 
 ### 12.2 核心验收流程
 
@@ -571,13 +619,16 @@ docker compose down
 - 文档任务防重、取消、重启恢复和失败时旧索引保护。
 - 反馈持久化、管理员筛选、JWT 注销撤销和 MySQL/Chroma 就绪检查。
 - 前端路由懒加载和重依赖独立分包。
+- 多知识库 AI 出题、六类题型、评分、来源、BYOK 路由和临时清理。
 
 ### 14.2 待完成或待优化
 
-- 使用固定测试集重新评估相似度阈值。
-- 完成管理员反馈可视化页面。
-- 增加真实 MySQL、Chroma 和在线模型端到端测试及质量评估记录。
-- 完成项目报告、PPT、演示视频和部署文档。
+- 持续记录 AI 出题的在线模型耗时、错误率和语义质量；当前 4 份资料、39 个片段生成 10 道进阶题约需 77 秒。
+- 将真实 MySQL、Chroma 和在线模型端到端回归整理为可选 smoke 测试，减少供应商或数据库兼容问题漏检。
+- 第一版练习结果只保存在当前标签页，主观题采用用户自评；长期历史和 AI 辅助点评需要另行设计。
+- 完成管理员反馈可视化页面、固定 RAG 测试集与阈值评估，以及项目报告、PPT、演示视频和部署文档。
+
+完整优先级、证据和处理建议见 [已知问题与后续计划](../已知问题与后续计划.md)。
 
 ## 15. 小组分工
 
@@ -600,6 +651,7 @@ docker compose down
 - [需求分析](https://github.com/Attacker687/CodeMind/blob/main/docs/%E9%9C%80%E6%B1%82%E5%88%86%E6%9E%90.md)
 - [API 接口设计](https://github.com/Attacker687/CodeMind/blob/main/docs/API%E6%8E%A5%E5%8F%A3%E8%AE%BE%E8%AE%A1.md)
 - [生成侧接口约定](https://github.com/Attacker687/CodeMind/blob/main/docs/%E7%94%9F%E6%88%90%E4%BE%A7%E6%8E%A5%E5%8F%A3%E7%BA%A6%E5%AE%9A.md)
+- [已知问题与后续计划](https://github.com/Attacker687/CodeMind/blob/main/docs/%E5%B7%B2%E7%9F%A5%E9%97%AE%E9%A2%98%E4%B8%8E%E5%90%8E%E7%BB%AD%E8%AE%A1%E5%88%92.md)
 - [文档导航与实现状态](https://github.com/Attacker687/CodeMind/blob/main/docs/README.md)
 
 ## 17. 文档维护约定
@@ -612,4 +664,4 @@ docker compose down
 
 ---
 
-最后更新：2026 年 7 月 16 日；实现基线：Issue #15 全局公共知识库。
+最后更新：2026 年 7 月 17 日；实现基线：Issue #18 多知识库 AI 出题。
