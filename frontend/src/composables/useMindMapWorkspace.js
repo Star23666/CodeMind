@@ -63,7 +63,7 @@ export function useMindMapWorkspace() {
   const searchStatus = ref({ count: 0, index: -1 });
   const histories = ref([]);
   const activeHistoryId = ref(null);
-  const selectedHistoryId = ref(null);
+  const openingHistoryId = ref(null);
   const historyViewState = ref({});
   const saving = ref(false);
   const expandingNode = ref(false);
@@ -261,7 +261,6 @@ export function useMindMapWorkspace() {
       if (knowledgeBaseId.value) {
         await Promise.all([loadDocuments(), loadHistories()]);
         await resumeActiveJob();
-        await openLatestHistoryWhenIdle(activeBase?.id || requestedBase?.id || null);
       } else {
         await loadHistories();
       }
@@ -300,20 +299,24 @@ export function useMindMapWorkspace() {
     });
     await Promise.all([loadDocuments(), loadHistories()]);
     await resumeActiveJob();
-    await openLatestHistoryWhenIdle(knowledgeBaseId.value);
   }
 
-  function resetWorkspace() {
+  function clearMapView() {
     mapData.value = null;
     selectedNode.value = null;
     activeHistoryId.value = null;
-    selectedHistoryId.value = null;
     historyViewState.value = {};
     masteredNodeIds.value = new Set();
     isDirty.value = false;
     searchTerm.value = "";
     searchStatus.value = { count: 0, index: -1 };
+    nodeQuestion.value = "";
+    nodeAnswer.value = null;
     clearRelatedState();
+  }
+
+  function resetWorkspace() {
+    clearMapView();
     stopTracking();
     generating.value = false;
     generationJob.value = null;
@@ -331,22 +334,14 @@ export function useMindMapWorkspace() {
     }
   }
 
-  async function openLatestHistoryWhenIdle(preferredKnowledgeBaseId = null) {
-    if (generating.value || mapData.value || !histories.value.length) return;
-    const latestHistory = preferredKnowledgeBaseId
-      ? histories.value.find((item) => item.knowledge_base_id === preferredKnowledgeBaseId)
-      : histories.value[0];
-    if (latestHistory) await openHistory(latestHistory.id, { skipGuard: true });
-  }
-
   async function openHistory(historyId, options = {}) {
-    if (!historyId) return;
+    if (!historyId || openingHistoryId.value) return false;
     const previousId = activeHistoryId.value;
-    if (!options.skipGuard && historyId !== previousId && !(await confirmDiscardChanges("打开其他历史版本"))) {
-      selectedHistoryId.value = previousId;
-      return;
-    }
+    openingHistoryId.value = historyId;
     try {
+      if (!options.skipGuard && historyId !== previousId && !(await confirmDiscardChanges("打开其他历史版本"))) {
+        return false;
+      }
       const history = await getMindMapHistory(historyId);
       if (!history.result?.root) throw new Error("历史版本缺少有效地图数据");
       if (history.knowledge_base_id !== knowledgeBaseId.value) {
@@ -360,7 +355,6 @@ export function useMindMapWorkspace() {
       }
       mapData.value = history.result;
       activeHistoryId.value = history.id;
-      selectedHistoryId.value = history.id;
       historyViewState.value = history.view_state || {};
       documentId.value = history.document_id || null;
       loadMastery();
@@ -371,10 +365,25 @@ export function useMindMapWorkspace() {
       ) || mapData.value.root;
       selectNode(preferredNode, { scroll: false });
       isDirty.value = false;
+      return true;
     } catch (error) {
-      selectedHistoryId.value = previousId;
       ElMessage.error(`打开历史版本失败：${error.message}`);
+      return false;
+    } finally {
+      openingHistoryId.value = null;
     }
+  }
+
+  async function showHistoryList() {
+    if (!mapData.value) return true;
+    if (!(await confirmDiscardChanges("返回地图列表"))) return false;
+    clearMapView();
+    if (!generating.value) {
+      generationJob.value = null;
+      generationConnectionIssue.value = "";
+      loadError.value = "";
+    }
+    return true;
   }
 
   async function saveCurrent() {
@@ -403,7 +412,6 @@ export function useMindMapWorkspace() {
           view_state: viewState,
         });
         activeHistoryId.value = created.id;
-        selectedHistoryId.value = created.id;
         mapData.value = { ...mapData.value, history_id: created.id };
         ElMessage.success("已保存为历史版本");
       }
@@ -418,7 +426,7 @@ export function useMindMapWorkspace() {
   }
 
   async function removeHistory() {
-    if (!activeHistoryId.value) return;
+    if (!activeHistoryId.value || generating.value) return;
     try {
       await ElMessageBox.confirm(
         isDirty.value
@@ -434,11 +442,10 @@ export function useMindMapWorkspace() {
       await deleteMindMapHistory(activeHistoryId.value);
       isDirty.value = false;
       await loadHistories();
-      if (histories.value.length) {
-        await openHistory(histories.value[0].id, { skipGuard: true });
-      } else {
-        resetWorkspace();
-      }
+      clearMapView();
+      generationJob.value = null;
+      generationConnectionIssue.value = "";
+      loadError.value = "";
       ElMessage.success("历史版本已删除");
     } catch (error) {
       ElMessage.error(`删除失败：${error.message}`);
@@ -631,6 +638,7 @@ export function useMindMapWorkspace() {
   async function expandSelectedNode() {
     if (!selectedNode.value?.sources?.length) return;
     const targetNode = selectedNode.value;
+    const targetRootId = mapData.value?.root?.id;
     expandingNode.value = true;
     try {
       const expanded = await expandMindMapNode({
@@ -640,20 +648,24 @@ export function useMindMapWorkspace() {
         child_count: 4,
         source_chunk_ids: targetNode.sources.map((source) => source.chunk_id).slice(0, 8),
       });
+      if (!mapData.value?.root || mapData.value.root.id !== targetRootId) return;
       const children = relabelBranch(expanded.children || [], targetNode.id, targetNode.depth);
       const nextRoot = replaceNode(mapData.value.root, targetNode.id, (node) => ({ ...node, children }));
+      const selectedNodeId = selectedNode.value?.id;
       mapData.value = {
         ...mapData.value,
         root: nextRoot,
         node_count: countNodes(nextRoot),
       };
-      selectedNode.value = findNodeById(nextRoot, targetNode.id) || nextRoot;
+      selectedNode.value = findNodeById(nextRoot, selectedNodeId)
+        || findNodeById(nextRoot, targetNode.id)
+        || nextRoot;
       historyViewState.value = {
         ...historyViewState.value,
-        selected_node_id: targetNode.id,
+        selected_node_id: selectedNode.value.id,
       };
       isDirty.value = true;
-      ElMessage.success("分支已展开并保留当前焦点，请保存修改");
+      ElMessage.success("分支已展开，请保存修改");
     } catch (error) {
       ElMessage.error(error.message);
     } finally {
@@ -866,7 +878,6 @@ export function useMindMapWorkspace() {
     mapData.value = generationJob.value.result;
     mapConstructionRevision.value += 1;
     activeHistoryId.value = mapData.value.history_id;
-    selectedHistoryId.value = mapData.value.history_id;
     historyViewState.value = {};
     loadMastery();
     clearRelatedState();
@@ -964,10 +975,6 @@ export function useMindMapWorkspace() {
     return value ? new Date(value).toLocaleString("zh-CN") : "";
   }
 
-  function historyOptionLabel(history) {
-    return `${history.title} · ${historyKnowledgeBaseName(history)} · ${formatTime(history.updated_at)}`;
-  }
-
   function historyKnowledgeBaseName(history) {
     return knowledgeBases.value.find(
       (item) => item.id === history.knowledge_base_id,
@@ -1007,7 +1014,6 @@ export function useMindMapWorkspace() {
     histories,
     historyKnowledgeBaseName,
     historyViewState,
-    historyOptionLabel,
     isDirty,
     isSelectedMastered,
     knowledgeBaseId,
@@ -1027,6 +1033,7 @@ export function useMindMapWorkspace() {
     nodeAnswer,
     nodeQuestion,
     openHistory,
+    openingHistoryId,
     questionChunkIds,
     relatedError,
     relatedLoading,
@@ -1040,12 +1047,12 @@ export function useMindMapWorkspace() {
     searchTerm,
     selectNode,
     setNodeMastery,
-    selectedHistoryId,
     selectedLearningTip,
     selectedNode,
     selectedNodeTypeLabel,
     selectedPath,
     selectedScopeName,
+    showHistoryList,
     stageClass,
     stageDetail,
     stageLabel,

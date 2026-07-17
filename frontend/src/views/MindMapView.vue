@@ -11,6 +11,41 @@
         </div>
       </header>
 
+      <section
+        v-if="!mapData && histories.length && !generating && !generationJob"
+        class="history-library"
+        aria-label="全部已生成知识地图"
+      >
+        <header>
+          <div>
+            <span>全部知识地图</span>
+            <h2>选择一张地图继续学习</h2>
+            <p>这里汇总所有知识库的地图，不受当前知识库选择限制。</p>
+          </div>
+          <strong>{{ histories.length }} 张</strong>
+        </header>
+        <div class="history-shelf">
+          <button
+            v-for="item in histories"
+            :key="item.id"
+            type="button"
+            :class="{ opening: openingHistoryId === item.id }"
+            :disabled="Boolean(openingHistoryId)"
+            :aria-label="`打开${historyKnowledgeBaseName(item)}中的${item.title}`"
+            @click="openHistory(item.id)"
+          >
+            <span class="history-route" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span class="history-meta">
+              <b>{{ historyKnowledgeBaseName(item) }}</b>
+              <time>{{ formatTime(item.updated_at) }}</time>
+            </span>
+            <strong>{{ item.title }}</strong>
+            <small>{{ item.node_count }} 个知识节点</small>
+            <em>{{ openingHistoryId === item.id ? "正在打开…" : "打开地图 →" }}</em>
+          </button>
+        </div>
+      </section>
+
       <section v-if="!mapData || setupOpen" class="control-deck" aria-label="知识地图生成设置">
         <div class="control-deck-heading">
           <div>
@@ -57,23 +92,6 @@
           <label class="depth-control">
             <span>结构深度</span>
             <el-segmented v-model="maxDepth" :options="depthOptions" :disabled="generating" />
-          </label>
-
-          <label v-if="histories.length" class="history-control">
-            <span>历史版本</span>
-            <el-select
-              v-model="selectedHistoryId"
-              placeholder="打开已保存地图"
-              :disabled="generating"
-              @change="openHistory"
-            >
-              <el-option
-                v-for="item in histories"
-                :key="item.id"
-                :value="item.id"
-                :label="historyOptionLabel(item)"
-              />
-            </el-select>
           </label>
 
           <el-button
@@ -148,22 +166,16 @@
           </div>
 
           <div class="document-actions" aria-label="地图文件操作">
-            <el-dropdown v-if="histories.length" @command="openHistory">
-              <button type="button" class="plain-action history-action" :disabled="generating">
-                全部地图 {{ histories.length }}⌄
-              </button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item
-                    v-for="item in histories"
-                    :key="item.id"
-                    :command="item.id"
-                    :disabled="item.id === activeHistoryId"
-                  >{{ historyOptionLabel(item) }}</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-            <button type="button" class="plain-action" :class="{ active: inspectorOpen }" @click="inspectorOpen = !inspectorOpen">详情</button>
+            <button type="button" class="plain-action history-action" @click="returnToHistoryList">
+              地图列表 {{ histories.length }}
+            </button>
+            <button
+              type="button"
+              class="plain-action"
+              :class="{ active: inspectorOpen }"
+              :aria-pressed="inspectorOpen"
+              @click="inspectorOpen = !inspectorOpen"
+            >详情</button>
             <el-button size="small" type="primary" :loading="saving" :disabled="!canSave" @click="saveCurrent">
               {{ saveButtonLabel }}
             </el-button>
@@ -184,7 +196,7 @@
                 <el-dropdown-menu>
                   <el-dropdown-item command="setup">重新构造设置</el-dropdown-item>
                   <el-dropdown-item command="zen">{{ zenMode ? "退出专注模式" : "进入专注模式" }}</el-dropdown-item>
-                  <el-dropdown-item command="delete" divided :disabled="!activeHistoryId">删除当前版本</el-dropdown-item>
+                  <el-dropdown-item command="delete" divided :disabled="!activeHistoryId || generating || saving">删除当前版本</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
@@ -217,10 +229,11 @@
             v-if="nextLearningNode || selectedNode?.depth > 0"
             type="button"
             class="continue-learning"
+            :aria-label="nextLearningNode ? `继续学习${nextLearningNode.title}` : '确认当前知识点掌握状态'"
             @click="continueLearning"
           >
-            <span>{{ nextLearningNode ? "继续学习" : "完成本轮" }}</span>
-            <strong>{{ nextLearningNode?.title || selectedNode?.title }}</strong><i>→</i>
+            <span>继续学习</span>
+            <strong>{{ nextLearningNode?.title || "确认当前掌握状态" }}</strong><i>→</i>
           </button>
         </section>
 
@@ -271,7 +284,7 @@
 
           <div class="canvas-stage">
             <nav v-if="focusPath.length" class="focus-trail" aria-label="当前聚焦分支">
-              <button type="button" @click="exitBranchFocus">全部地图</button>
+              <button type="button" @click="exitBranchFocus">完整地图</button>
               <template v-for="node in focusPath" :key="node.id">
                 <i>›</i>
                 <button type="button" @click="setFocusFromBreadcrumb(node)">{{ node.title }}</button>
@@ -281,13 +294,29 @@
 
             <div v-if="selectedNode" class="selection-bar" aria-label="选中节点快捷操作">
               <div><span>{{ selectedNodeTypeLabel }}</span><strong>{{ selectedNode.title }}</strong></div>
-              <button type="button" :disabled="!selectedNode.children?.length" @click="toggleBranchFocus(selectedNode)">
+              <button
+                type="button"
+                :disabled="!selectedNode.children?.length"
+                :aria-pressed="selectedIsFocusRoot"
+                @click="toggleBranchFocus(selectedNode)"
+              >
                 {{ selectedIsFocusRoot ? "退出聚焦" : "聚焦分支" }} <kbd>F</kbd>
               </button>
-              <button type="button" :disabled="!selectedNode.children?.length" @click="toggleSelectedBranch">
+              <button
+                type="button"
+                :disabled="!selectedNode.children?.length"
+                :aria-expanded="selectedNode.children?.length ? !selectedBranchCollapsed : undefined"
+                @click="toggleSelectedBranch"
+              >
                 {{ selectedBranchCollapsed ? "展开分支" : "收起分支" }}
               </button>
-              <button v-if="selectedNode.depth > 0" type="button" :class="{ mastered: isSelectedMastered }" @click="toggleSelectedMastery">
+              <button
+                v-if="selectedNode.depth > 0"
+                type="button"
+                :class="{ mastered: isSelectedMastered }"
+                :aria-pressed="isSelectedMastered"
+                @click="toggleSelectedMastery"
+              >
                 {{ isSelectedMastered ? "已掌握 ✓" : "标记掌握" }}
               </button>
               <button type="button" @click="openInspector">查看原文</button>
@@ -342,30 +371,7 @@
         </section>
       </template>
 
-      <section v-else-if="histories.length && !generating && !generationJob" class="history-library" aria-label="全部已生成知识地图">
-        <header>
-          <div>
-            <span>全部知识地图</span>
-            <h2>从已生成记录继续学习</h2>
-            <p>这里汇总所有知识库的地图，不受上方当前知识库选择限制。</p>
-          </div>
-          <strong>{{ histories.length }} 张</strong>
-        </header>
-        <div class="history-shelf">
-          <button v-for="item in histories" :key="item.id" type="button" @click="openHistory(item.id)">
-            <span class="history-route" aria-hidden="true"><i></i><i></i><i></i></span>
-            <span class="history-meta">
-              <b>{{ historyKnowledgeBaseName(item) }}</b>
-              <time>{{ formatTime(item.updated_at) }}</time>
-            </span>
-            <strong>{{ item.title }}</strong>
-            <small>{{ item.node_count }} 个知识节点</small>
-            <em>打开地图 →</em>
-          </button>
-        </div>
-      </section>
-
-      <section v-else class="empty-atlas" :class="{ constructing: generating }">
+      <section v-else-if="!histories.length || generating || generationJob" class="empty-atlas" :class="{ constructing: generating }">
         <div class="empty-map-mark" aria-hidden="true">
           <span class="map-node root-node"></span>
           <span class="map-node node-a"></span>
@@ -445,7 +451,6 @@ const {
   healthOnline,
   histories,
   historyKnowledgeBaseName,
-  historyOptionLabel,
   historyViewState,
   isDirty,
   isSelectedMastered,
@@ -466,6 +471,7 @@ const {
   nodeAnswer,
   nodeQuestion,
   openHistory,
+  openingHistoryId,
   questionChunkIds,
   relatedError,
   relatedLoading,
@@ -479,12 +485,12 @@ const {
   searchTerm,
   selectNode,
   setNodeMastery,
-  selectedHistoryId,
   selectedLearningTip,
   selectedNode,
   selectedNodeTypeLabel,
   selectedPath,
   selectedScopeName,
+  showHistoryList,
   stageClass,
   stageDetail,
   stageLabel,
@@ -600,10 +606,9 @@ function isInsideFocusedBranch(nodeId) {
   return Boolean(findNode(branch, nodeId));
 }
 
-function selectOutlineNode(node) {
+async function selectOutlineNode(node) {
   if (!node) return;
-  if (!isInsideFocusedBranch(node.id)) exitBranchFocus();
-  selectNode(node, { scroll: false });
+  await openLearningNode(node);
 }
 
 async function openLearningNode(node) {
@@ -628,8 +633,8 @@ async function continueLearning() {
         `“${current.title}”是否已经掌握？`,
         "继续学习",
         {
-          confirmButtonText: "已掌握，下一节",
-          cancelButtonText: "还需复习，下一节",
+          confirmButtonText: "已掌握",
+          cancelButtonText: "还需复习",
           distinguishCancelAndClose: true,
           closeOnClickModal: false,
           type: "info",
@@ -669,6 +674,13 @@ function handleBranchStateChange(state) {
 
 async function toggleSelectedBranch() {
   await canvasRef.value?.toggleSelectedBranch?.();
+}
+
+async function returnToHistoryList() {
+  if (!(await showHistoryList())) return;
+  zenMode.value = false;
+  focusRootId.value = "";
+  setupOpen.value = false;
 }
 
 async function openInspector() {
@@ -749,6 +761,10 @@ watch(() => mapData.value?.root?.id, () => {
   setupOpen.value = false;
   outlineFilter.value = "all";
   selectedBranchCollapsed.value = false;
+  if (!mapData.value) {
+    focusRootId.value = "";
+    zenMode.value = false;
+  }
 });
 
 onMounted(() => window.addEventListener("keydown", handleGlobalKeydown));
@@ -1236,14 +1252,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleGlobalKeydown)
   transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
-.history-shelf > button:hover,
-.history-shelf > button:focus-visible {
+.history-shelf > button:not(:disabled):hover,
+.history-shelf > button:not(:disabled):focus-visible {
   border-color: color-mix(in srgb, var(--atlas-cobalt) 48%, var(--cm-border));
   box-shadow: 0 12px 28px rgba(47, 94, 229, 0.11);
   transform: translateY(-2px);
 }
 
 .history-shelf > button:focus-visible { outline: 3px solid color-mix(in srgb, var(--atlas-cobalt) 22%, transparent); }
+.history-shelf > button:disabled { cursor: wait; opacity: 0.62; }
+.history-shelf > button.opening { border-color: color-mix(in srgb, var(--atlas-cobalt) 48%, var(--cm-border)); opacity: 1; }
 .history-meta { display: flex; min-width: 0; justify-content: space-between; gap: 10px; }
 .history-meta b { overflow: hidden; color: var(--atlas-cobalt); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .history-meta time { color: var(--cm-muted); font-size: 9px; white-space: nowrap; }
@@ -1952,7 +1970,7 @@ kbd {
   .constructing .map-node { animation: none; }
   .construction-progress > i,
   .history-shelf > button { transition: none; }
-  .history-shelf > button:hover,
-  .history-shelf > button:focus-visible { transform: none; }
+  .history-shelf > button:not(:disabled):hover,
+  .history-shelf > button:not(:disabled):focus-visible { transform: none; }
 }
 </style>

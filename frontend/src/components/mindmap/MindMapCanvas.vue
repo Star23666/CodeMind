@@ -35,8 +35,12 @@
             <el-icon><Aim /></el-icon>
           </button>
         </el-tooltip>
-        <el-tooltip content="适应全部节点" placement="top">
-          <button type="button" aria-label="让全部节点适应画布" @click="fitView">全图</button>
+        <el-tooltip :content="focusRootId ? '适应当前分支' : '适应全部节点'" placement="top">
+          <button
+            type="button"
+            :aria-label="focusRootId ? '让当前分支适应画布' : '让全部节点适应画布'"
+            @click="fitView"
+          >{{ focusRootId ? "当前分支" : "全图" }}</button>
         </el-tooltip>
         <el-tooltip content="重新自动排列" placement="top">
           <button type="button" aria-label="重新自动排列知识地图" @click="reflow">
@@ -52,6 +56,7 @@
           <button
             type="button"
             :aria-label="layoutLocked ? '解锁节点拖拽' : '锁定节点位置'"
+            :aria-pressed="layoutLocked"
             :class="{ active: layoutLocked }"
             @click="layoutLocked = !layoutLocked"
           >
@@ -85,14 +90,28 @@
       <i class="tool-divider" aria-hidden="true"></i>
 
       <div class="tool-group view-mode-tools" aria-label="呈现方式">
-        <button type="button" @click="$emit('density-change', density === 'compact' ? 'comfortable' : 'compact')">
+        <button
+          type="button"
+          :aria-label="density === 'compact' ? '切换为舒展布局' : '切换为紧凑布局'"
+          @click="$emit('density-change', density === 'compact' ? 'comfortable' : 'compact')"
+        >
           {{ density === "compact" ? "舒展" : "紧凑" }}
         </button>
-        <button type="button" @click="$emit('display-mode-change', displayMode === 'detail' ? 'title' : 'detail')">
+        <button
+          type="button"
+          :aria-label="displayMode === 'detail' ? '节点仅显示标题' : '节点显示标题和摘要'"
+          @click="$emit('display-mode-change', displayMode === 'detail' ? 'title' : 'detail')"
+        >
           {{ displayMode === "detail" ? "仅标题" : "看摘要" }}
         </button>
         <el-tooltip content="专注模式（Z）" placement="top">
-          <button type="button" aria-label="切换专注模式" :class="{ active: immersive }" @click="$emit('toggle-zen')">
+          <button
+            type="button"
+            aria-label="切换专注模式"
+            :aria-pressed="immersive"
+            :class="{ active: immersive }"
+            @click="$emit('toggle-zen')"
+          >
             <el-icon><FullScreen /></el-icon>
           </button>
         </el-tooltip>
@@ -153,6 +172,7 @@ const selectedNodeId = ref("");
 const zoomLevel = ref(100);
 const undoStack = ref([]);
 const redoStack = ref([]);
+const branchStateRevision = ref(0);
 const isRevealing = ref(false);
 const isPreparingReveal = ref(false);
 const revealDepth = ref(1);
@@ -187,6 +207,8 @@ const nodeCount = computed(() => {
   return props.root ? count(props.root) : 0;
 });
 const visibleNodeCount = computed(() => {
+  branchStateRevision.value;
+  if (nodeLookup.size) return visibleNodeIds().size;
   const count = (node) => 1 + (node.children || []).reduce((sum, child) => sum + count(child), 0);
   return activeRoot.value ? count(activeRoot.value) : 0;
 });
@@ -789,6 +811,7 @@ async function applyVisualStates() {
 }
 
 function emitBranchState(nodeId = selectedNodeId.value) {
+  branchStateRevision.value += 1;
   emit("branch-state-change", {
     nodeId,
     collapsed: collapsedNodeIds.has(nodeId),
@@ -1020,18 +1043,15 @@ async function centerRoot() {
 
 async function reflow() {
   if (!graph) return;
-  collapsedNodeIds.clear();
-  await applyScopeVisibility();
-  const focusedIds = props.focusRootId && nodeLookup.has(props.focusRootId)
-    ? descendantIds(props.focusRootId)
-    : null;
-  graph.setLayout(layoutOptions(focusedIds ? (node) => focusedIds.has(node.id) : undefined));
+  const visibleIds = await applyScopeVisibility();
+  graph.setLayout(layoutOptions((node) => visibleIds.has(node.id)));
   await graph.layout();
   await fitCurrentView();
   undoStack.value = [];
   redoStack.value = [];
   rememberLayout(false);
   updateZoomLevel();
+  emitBranchState();
   notifyViewChange();
 }
 
