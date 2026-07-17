@@ -4,10 +4,10 @@
 
     <main class="page">
       <section class="hero">
-        <el-tag effect="plain">你的私人知识库 AI</el-tag>
+        <el-tag effect="plain">个人与公共知识库 AI</el-tag>
         <h1>让每一份资料，都成为随时可问的知识</h1>
         <p>
-          上传文档，沉淀属于你的知识空间。CodeMind 从资料中寻找依据，
+          上传个人资料，或与大家共同完善公共知识库。CodeMind 从资料中寻找依据，
           为你生成清晰、可信、可追溯的回答。
         </p>
       </section>
@@ -15,7 +15,10 @@
       <section v-if="userStore.isLoggedIn" class="knowledge-picker">
         <div>
           <p>当前知识库</p>
-          <h2>{{ currentKnowledgeBase?.name || "尚未创建知识库" }}</h2>
+          <div class="current-title">
+            <h2>{{ currentKnowledgeBase?.name || "尚未创建知识库" }}</h2>
+            <el-tag v-if="currentKnowledgeBase?.visibility === 'public'" size="small" effect="plain">公共</el-tag>
+          </div>
         </div>
         <el-select
           v-model="knowledgeBaseId"
@@ -23,12 +26,7 @@
           :disabled="!knowledgeBases.length"
           class="knowledge-select"
         >
-          <el-option
-            v-for="base in knowledgeBases"
-            :key="base.id"
-            :label="base.name"
-            :value="base.id"
-          />
+          <KnowledgeBaseOptions :bases="knowledgeBases" />
         </el-select>
         <el-button
           v-if="knowledgeBases.length"
@@ -58,6 +56,7 @@ import { useRouter } from "vue-router";
 import { getHealth } from "../api/health";
 import { listKnowledgeBases } from "../api/knowledgeBases";
 import ChatPanel from "../components/chat/ChatPanel.vue";
+import KnowledgeBaseOptions from "../components/knowledge/KnowledgeBaseOptions.vue";
 import AppHeader from "../components/layout/AppHeader.vue";
 import { useUserStore } from "../stores/user";
 
@@ -158,6 +157,13 @@ function openMindMap() {
   font-size: 20px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.current-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
 }
 
 .knowledge-select {

@@ -6,8 +6,8 @@
       <section class="page-head">
         <div>
           <el-tag effect="plain">个人中心</el-tag>
-          <h1>我的知识库</h1>
-          <p>创建和维护你的私人知识库，也可以随时修改名称与描述。</p>
+          <h1>知识库管理</h1>
+          <p>维护你的私人知识库，并查看全站公共知识库的协作权限。</p>
         </div>
         <el-button type="primary" plain @click="goDocuments">去文档上传</el-button>
       </section>
@@ -18,17 +18,20 @@
           <div>
             <p>当前用户</p>
             <h2>{{ userStore.displayName }}</h2>
-            <span>{{ userStore.user?.email || "暂未填写邮箱" }}</span>
+            <div class="profile-meta">
+              <span>{{ userStore.user?.email || "暂未填写邮箱" }}</span>
+              <el-tag v-if="userStore.user?.role === 'admin'" size="small" type="warning" effect="plain">管理员</el-tag>
+            </div>
           </div>
         </article>
 
         <article class="panel stat-panel">
           <div>
-            <span>知识库</span>
-            <strong>{{ knowledgeBases.length }}</strong>
+            <span>私人知识库</span>
+            <strong>{{ privateKnowledgeBases.length }}</strong>
           </div>
           <div>
-            <span>文档</span>
+            <span>可见文档</span>
             <strong>{{ documents.length }}</strong>
           </div>
         </article>
@@ -43,6 +46,32 @@
         </span>
         <span class="entry-action">进入设置 →</span>
       </button>
+
+      <section v-if="publicKnowledgeBase" class="panel public-panel">
+        <div class="panel-head public-panel-head">
+          <div>
+            <p>全站公共知识库</p>
+            <div class="public-title">
+              <h2>{{ publicKnowledgeBase.name }}</h2>
+              <el-tag effect="plain">公共</el-tag>
+            </div>
+          </div>
+          <div class="public-actions">
+            <el-button type="primary" plain @click="openPublicUpload">上传公共资料</el-button>
+            <el-button
+              v-if="publicKnowledgeBase.can_edit"
+              type="primary"
+              @click="openEditDialog(publicKnowledgeBase)"
+            >编辑公共信息</el-button>
+          </div>
+        </div>
+        <p class="public-description">{{ publicKnowledgeBase.description || "暂无公共知识库说明。" }}</p>
+        <div class="public-facts">
+          <span>所有登录用户均可查看、上传和检索公共资料。</span>
+          <span v-if="publicKnowledgeBase.can_edit">你可以编辑公共知识库信息，并管理所有公共文档。</span>
+          <span v-else>你只能重建或删除自己上传的公共文档。</span>
+        </div>
+      </section>
 
       <section class="manager-grid">
         <article class="panel create-panel">
@@ -67,22 +96,23 @@
         <article class="panel list-panel">
           <div class="panel-head">
             <div>
-              <p>已有知识库</p>
-              <h2>只展示当前用户的数据</h2>
+              <p>我的私人知识库</p>
+              <h2>仅自己可见和管理</h2>
             </div>
             <el-button text @click="loadData">刷新</el-button>
           </div>
 
           <div class="kb-list">
-            <div v-for="base in knowledgeBases" :key="base.id" class="kb-item">
+            <div v-for="base in privateKnowledgeBases" :key="base.id" class="kb-item">
               <div>
                 <strong>{{ base.name }}</strong>
                 <span>{{ base.description || "暂无描述" }}</span>
               </div>
               <div class="kb-actions">
                 <el-tag effect="plain">私人</el-tag>
-                <el-button link type="primary" @click="openEditDialog(base)">编辑</el-button>
+                <el-button v-if="base.can_edit" link type="primary" @click="openEditDialog(base)">编辑</el-button>
                 <el-button
+                  v-if="base.can_delete"
                   link
                   type="danger"
                   :loading="deletingKnowledgeBaseId === base.id"
@@ -92,13 +122,17 @@
                 </el-button>
               </div>
             </div>
-            <el-empty v-if="!knowledgeBases.length" description="暂无知识库。" />
+            <el-empty v-if="!privateKnowledgeBases.length" description="暂无私人知识库。" />
           </div>
         </article>
       </section>
     </main>
 
-    <el-dialog v-model="editDialogVisible" title="编辑知识库" width="min(520px, 92vw)">
+    <el-dialog
+      v-model="editDialogVisible"
+      :title="editingPublic ? '编辑公共知识库' : '编辑私人知识库'"
+      width="min(520px, 92vw)"
+    >
       <el-form label-position="top" @submit.prevent>
         <el-form-item label="名称" required>
           <el-input v-model="editForm.name" maxlength="100" show-word-limit />
@@ -151,11 +185,19 @@ const kbForm = reactive({
 });
 const editForm = reactive({
   id: null,
+  visibility: "private",
   name: "",
   description: "",
 });
 
 const initials = computed(() => userStore.displayName.slice(0, 1).toUpperCase());
+const publicKnowledgeBase = computed(() =>
+  knowledgeBases.value.find((base) => base.visibility === "public") || null,
+);
+const privateKnowledgeBases = computed(() =>
+  knowledgeBases.value.filter((base) => base.visibility !== "public"),
+);
+const editingPublic = computed(() => editForm.visibility === "public");
 
 onMounted(() => {
   checkHealth();
@@ -232,6 +274,7 @@ async function removeKnowledgeBase(base) {
 
 function openEditDialog(base) {
   editForm.id = base.id;
+  editForm.visibility = base.visibility;
   editForm.name = base.name;
   editForm.description = base.description || "";
   editDialogVisible.value = true;
@@ -265,6 +308,13 @@ async function saveKnowledgeBase() {
 
 function goDocuments() {
   router.push({ name: "documents" });
+}
+
+function openPublicUpload() {
+  router.push({
+    name: "documents",
+    query: { knowledge_base_id: publicKnowledgeBase.value.id },
+  });
 }
 
 function goModelSettings() {
@@ -439,6 +489,14 @@ function goModelSettings() {
   color: var(--cm-muted);
 }
 
+.profile-meta,
+.public-title,
+.public-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .stat-panel {
   justify-content: space-between;
   gap: 12px;
@@ -464,6 +522,32 @@ function goModelSettings() {
 .kb-list {
   display: grid;
   gap: 16px;
+}
+
+.public-panel {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.public-title h2 {
+  margin: 0;
+}
+
+.public-description {
+  margin: 0;
+  color: var(--cm-heading);
+  line-height: 1.7;
+}
+
+.public-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding-top: 12px;
+  border-top: 1px solid var(--cm-border);
+  color: var(--cm-muted);
+  font-size: 13px;
 }
 
 .panel-head {
@@ -526,13 +610,19 @@ function goModelSettings() {
   .profile-panel,
   .stat-panel,
   .panel-head,
-  .model-settings-entry {
+    .model-settings-entry,
+    .public-panel-head {
     align-items: stretch;
     flex-direction: column;
   }
 
   .entry-action {
     align-self: flex-start;
+  }
+
+  .public-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 </style>

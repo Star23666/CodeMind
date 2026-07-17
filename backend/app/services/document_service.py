@@ -12,7 +12,10 @@ from app.db.session import SessionLocal
 from app.schemas.contracts import DocumentChunkRead, DocumentRead
 from app.services.document_parser import DocumentParseError, document_parser
 from app.services.embedding_client import EmbeddingServiceError, embedding_client
-from app.services.knowledge_base_service import knowledge_base_service
+from app.services.knowledge_base_service import (
+    KnowledgeBasePermissionError,
+    knowledge_base_service,
+)
 from app.services.text_splitter import text_splitter
 from app.services.vector_store import get_vector_store
 
@@ -32,6 +35,10 @@ class DocumentProcessingCancelled(RuntimeError):
     pass
 
 
+class DocumentPermissionError(ValueError):
+    pass
+
+
 class DocumentService:
     allowed_file_types = {"pdf", "docx", "md", "markdown", "txt"}
 
@@ -43,7 +50,7 @@ class DocumentService:
         knowledge_base_id: int,
         file: UploadFile,
     ) -> DocumentRead:
-        knowledge_base_service.get_owned(db, knowledge_base_id, owner_id)
+        knowledge_base_service.get_uploadable(db, knowledge_base_id, owner_id)
 
         original_name = Path(file.filename or "").name
         file_type = self._detect_file_type(original_name)
@@ -88,39 +95,64 @@ class DocumentService:
         knowledge_base_id: int | None = None,
         parse_status: str | None = None,
     ) -> list[DocumentRead]:
-        conditions = ["owner_id = :owner_id"]
+        if knowledge_base_id is not None:
+            knowledge_base_service.get_readable(db, knowledge_base_id, owner_id)
+
+        conditions = ["(kb.visibility = 'public' OR d.owner_id = :owner_id)"]
         params: dict[str, object] = {"owner_id": owner_id}
 
         if knowledge_base_id is not None:
-            conditions.append("knowledge_base_id = :knowledge_base_id")
+            conditions.append("d.knowledge_base_id = :knowledge_base_id")
             params["knowledge_base_id"] = knowledge_base_id
 
         if parse_status is not None:
-            conditions.append("parse_status = :parse_status")
+            conditions.append("d.parse_status = :parse_status")
             params["parse_status"] = parse_status
 
         rows = db.execute(
             text(
                 f"""
-                SELECT id, knowledge_base_id, owner_id, file_name, file_type,
-                       file_size, parse_status, error_message, chunk_count
-                FROM documents
+                SELECT d.id, d.knowledge_base_id, d.owner_id, d.file_name,
+                       d.file_type, d.file_size, d.parse_status, d.error_message,
+                       d.chunk_count, u.username AS uploader_username,
+                       kb.visibility AS knowledge_base_visibility
+                FROM documents d
+                JOIN knowledge_bases kb ON kb.id = d.knowledge_base_id
+                JOIN users u ON u.id = d.owner_id
                 WHERE {" AND ".join(conditions)}
-                ORDER BY created_at DESC, id DESC
+                ORDER BY d.created_at DESC, d.id DESC
                 """
             ),
             params,
         ).mappings()
-        return [self._to_document_read(row) for row in rows]
+        is_admin = self._is_admin(db, owner_id)
+        return [
+            self._to_document_read(
+                row,
+                can_manage=(
+                    int(row["owner_id"]) == owner_id
+                    or (row["knowledge_base_visibility"] == "public" and is_admin)
+                ),
+            )
+            for row in rows
+        ]
 
     def get_owned_document(self, db: Session, document_id: int, owner_id: int) -> DocumentRead:
-        row = self._get_document_row(db, document_id, owner_id)
+        row = self._get_accessible_document_row(db, document_id, owner_id)
         if row is None:
             raise ValueError("Document not found")
-        return self._to_document_read(row)
+        return self._to_document_read(
+            row,
+            can_manage=self._can_manage_document(db, row, owner_id),
+        )
 
     def get_owned_file(self, db: Session, *, document_id: int, owner_id: int) -> dict[str, object]:
-        row = self._get_document_row(db, document_id, owner_id, include_path=True)
+        row = self._get_accessible_document_row(
+            db,
+            document_id,
+            owner_id,
+            include_path=True,
+        )
         if row is None:
             raise ValueError("Document not found")
 
@@ -159,7 +191,10 @@ class DocumentService:
         owner_id: int,
         document_id: int | None = None,
     ) -> DocumentChunkRead:
-        conditions = ["c.id = :chunk_id", "d.owner_id = :owner_id"]
+        conditions = [
+            "c.id = :chunk_id",
+            "(kb.visibility = 'public' OR d.owner_id = :owner_id)",
+        ]
         params: dict[str, object] = {"chunk_id": chunk_id, "owner_id": owner_id}
 
         if document_id is not None:
@@ -173,6 +208,7 @@ class DocumentService:
                        c.chunk_text, c.page_no, c.start_offset, c.end_offset, c.vector_id
                 FROM document_chunks c
                 JOIN documents d ON d.id = c.document_id
+                JOIN knowledge_bases kb ON kb.id = d.knowledge_base_id
                 WHERE {" AND ".join(conditions)}
                 """
             ),
@@ -183,7 +219,8 @@ class DocumentService:
         return self._to_chunk_read(row)
 
     def queue_reindex(self, db: Session, *, document_id: int, owner_id: int) -> None:
-        document = self.get_owned_document(db, document_id, owner_id)
+        row = self._get_manageable_document_row(db, document_id, owner_id)
+        document = self._to_document_read(row, can_manage=True)
         if document.parse_status in {"pending", "processing"}:
             raise DocumentBusyError("Document is already queued or processing")
         result = db.execute(
@@ -192,13 +229,11 @@ class DocumentService:
                 UPDATE documents
                 SET parse_status = 'pending', error_message = NULL
                 WHERE id = :document_id
-                  AND owner_id = :owner_id
                   AND parse_status = :previous_status
                 """
             ),
             {
                 "document_id": document_id,
-                "owner_id": owner_id,
                 "previous_status": document.parse_status.value,
             },
         )
@@ -207,18 +242,17 @@ class DocumentService:
             raise DocumentBusyError("Document state changed while queuing reindex")
 
     def cancel_processing(self, db: Session, *, document_id: int, owner_id: int) -> None:
-        self.get_owned_document(db, document_id, owner_id)
+        self._get_manageable_document_row(db, document_id, owner_id)
         result = db.execute(
             text(
                 """
                 UPDATE documents
                 SET parse_status = 'cancelled', error_message = '文档处理已由用户取消。'
                 WHERE id = :document_id
-                  AND owner_id = :owner_id
                   AND parse_status IN ('pending', 'processing')
                 """
             ),
-            {"document_id": document_id, "owner_id": owner_id},
+            {"document_id": document_id},
         )
         db.commit()
         if result.rowcount != 1:
@@ -250,16 +284,19 @@ class DocumentService:
         return document_ids
 
     def delete_document(self, db: Session, *, document_id: int, owner_id: int) -> None:
-        row = self._get_document_row(db, document_id, owner_id, include_path=True)
-        if row is None:
-            raise ValueError("Document not found")
+        row = self._get_manageable_document_row(
+            db,
+            document_id,
+            owner_id,
+            include_path=True,
+        )
 
         vector_ids = self._list_vector_ids(db, document_id)
         get_vector_store().delete_ids(vector_ids)
 
         db.execute(
-            text("DELETE FROM documents WHERE id = :document_id AND owner_id = :owner_id"),
-            {"document_id": document_id, "owner_id": owner_id},
+            text("DELETE FROM documents WHERE id = :document_id"),
+            {"document_id": document_id},
         )
         db.commit()
         self._unlink_file(Path(row["file_path"]))
@@ -279,7 +316,13 @@ class DocumentService:
         get_vector_store().delete_ids([row["vector_id"] for row in rows])
 
     def delete_knowledge_base(self, db: Session, *, knowledge_base_id: int, owner_id: int) -> None:
-        knowledge_base_service.get_owned(db, knowledge_base_id, owner_id)
+        knowledge_base = knowledge_base_service.get_readable(
+            db,
+            knowledge_base_id,
+            owner_id,
+        )
+        if not knowledge_base.can_delete:
+            raise KnowledgeBasePermissionError("全局公共知识库不能删除。")
         file_rows = db.execute(
             text(
                 """
@@ -510,6 +553,76 @@ class DocumentService:
             params,
         ).mappings().first()
 
+    def _get_accessible_document_row(
+        self,
+        db: Session,
+        document_id: int,
+        owner_id: int,
+        *,
+        include_path: bool = False,
+    ):
+        path_column = ", d.file_path" if include_path else ""
+        return db.execute(
+            text(
+                f"""
+                SELECT d.id, d.knowledge_base_id, d.owner_id, d.file_name,
+                       d.file_type, d.file_size, d.parse_status, d.error_message,
+                       d.chunk_count, u.username AS uploader_username,
+                       kb.visibility AS knowledge_base_visibility{path_column}
+                FROM documents d
+                JOIN knowledge_bases kb ON kb.id = d.knowledge_base_id
+                JOIN users u ON u.id = d.owner_id
+                WHERE d.id = :document_id
+                  AND (kb.visibility = 'public' OR d.owner_id = :owner_id)
+                """
+            ),
+            {"document_id": document_id, "owner_id": owner_id},
+        ).mappings().first()
+
+    def _get_manageable_document_row(
+        self,
+        db: Session,
+        document_id: int,
+        owner_id: int,
+        *,
+        include_path: bool = False,
+    ):
+        row = self._get_document_row(
+            db,
+            document_id,
+            owner_id,
+            include_path=include_path,
+        )
+        if row is not None:
+            return row
+
+        row = self._get_accessible_document_row(
+            db,
+            document_id,
+            owner_id,
+            include_path=include_path,
+        )
+        if row is None:
+            raise ValueError("Document not found")
+        if not self._can_manage_document(db, row, owner_id):
+            raise DocumentPermissionError("只能管理自己上传的公共文档。")
+        return row
+
+    def _can_manage_document(self, db: Session, row, owner_id: int) -> bool:
+        if int(row["owner_id"]) == owner_id:
+            return True
+        return (
+            row["knowledge_base_visibility"] == "public"
+            and self._is_admin(db, owner_id)
+        )
+
+    def _is_admin(self, db: Session, user_id: int) -> bool:
+        role = db.execute(
+            text("SELECT role FROM users WHERE id = :user_id"),
+            {"user_id": user_id},
+        ).scalar_one_or_none()
+        return role == "admin"
+
     def _list_vector_ids(self, db: Session, document_id: int) -> list[str]:
         rows = db.execute(
             text("SELECT vector_id FROM document_chunks WHERE document_id = :document_id"),
@@ -617,7 +730,7 @@ class DocumentService:
         except OSError:
             pass
 
-    def _to_document_read(self, row) -> DocumentRead:
+    def _to_document_read(self, row, *, can_manage: bool = False) -> DocumentRead:
         return DocumentRead(
             id=int(row["id"]),
             knowledge_base_id=int(row["knowledge_base_id"]),
@@ -628,6 +741,12 @@ class DocumentService:
             parse_status=row["parse_status"],
             error_message=row["error_message"],
             chunk_count=int(row["chunk_count"] or 0),
+            uploader_username=row.get("uploader_username"),
+            knowledge_base_visibility=row.get(
+                "knowledge_base_visibility",
+                "private",
+            ),
+            can_manage=can_manage,
         )
 
     def _to_chunk_read(self, row) -> DocumentChunkRead:

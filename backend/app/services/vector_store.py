@@ -59,15 +59,17 @@ class VectorStore:
         *,
         embedding: list[float],
         knowledge_base_id: int,
-        owner_id: int,
+        owner_id: int | None,
         top_k: int,
     ) -> list[VectorSearchHit]:
-        where = {
-            "$and": [
-                {"knowledge_base_id": knowledge_base_id},
-                {"owner_id": owner_id},
-            ]
-        }
+        where = {"knowledge_base_id": knowledge_base_id}
+        if owner_id is not None:
+            where = {
+                "$and": [
+                    {"knowledge_base_id": knowledge_base_id},
+                    {"owner_id": owner_id},
+                ]
+            }
         result = self.collection.query(
             query_embeddings=[embedding],
             n_results=top_k,

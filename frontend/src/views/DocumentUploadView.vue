@@ -15,9 +15,9 @@
 
       <section class="page-head">
         <div>
-          <el-tag effect="plain">我的资料</el-tag>
+          <el-tag effect="plain">资料入库</el-tag>
           <h1>文档上传</h1>
-          <p>选择知识库并上传资料，系统会自动解析、切分并建立向量索引。</p>
+          <p>选择私人或公共知识库并上传资料，系统会自动解析、切分并建立向量索引。</p>
         </div>
       </section>
 
@@ -37,8 +37,8 @@
             <span class="entry-icon"><el-icon><FolderOpened /></el-icon></span>
             <span class="entry-copy">
               <small>文档管理</small>
-              <strong>查看我的文档库</strong>
-              <span>按文件名关键词、文件类型和所属知识库筛选，查看、重建或删除文档。</span>
+              <strong>查看文档库</strong>
+              <span>查看私人和公共资料；公共文档仅上传者或管理员可以重建和删除。</span>
             </span>
             <el-icon class="entry-arrow"><ArrowRight /></el-icon>
           </button>
@@ -51,7 +51,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { ArrowRight, FolderOpened } from "@element-plus/icons-vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { getHealth } from "../api/health";
 import { listKnowledgeBases } from "../api/knowledgeBases";
 import { getDocument } from "../api/documents";
@@ -61,6 +61,7 @@ import AppHeader from "../components/layout/AppHeader.vue";
 import { useUserStore } from "../stores/user";
 
 const router = useRouter();
+const route = useRoute();
 const userStore = useUserStore();
 const healthOnline = ref(false);
 const knowledgeBaseId = ref(null);
@@ -94,7 +95,9 @@ async function checkHealth() {
 async function loadKnowledgeBases() {
   try {
     knowledgeBases.value = await listKnowledgeBases();
-    knowledgeBaseId.value = knowledgeBases.value[0]?.id ?? null;
+    const requestedId = Number(route.query.knowledge_base_id);
+    const requestedBase = knowledgeBases.value.find((base) => base.id === requestedId);
+    knowledgeBaseId.value = requestedBase?.id ?? knowledgeBases.value[0]?.id ?? null;
   } catch (error) {
     knowledgeBases.value = [];
     knowledgeBaseId.value = null;

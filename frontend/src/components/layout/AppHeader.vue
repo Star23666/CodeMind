@@ -8,13 +8,30 @@
       />
     </RouterLink>
 
-    <nav class="nav-links" aria-label="主导航">
-      <RouterLink to="/">AI 问答</RouterLink>
-      <RouterLink to="/documents">文档上传</RouterLink>
-      <RouterLink to="/mind-map">知识地图</RouterLink>
-      <RouterLink to="/library">文档库</RouterLink>
-      <RouterLink to="/history">问答历史</RouterLink>
-      <RouterLink to="/me">我的</RouterLink>
+    <el-button
+      class="mobile-menu-toggle"
+      :icon="mobileMenuOpen ? Close : Menu"
+      circle
+      :aria-label="mobileMenuOpen ? '收起主导航' : '展开主导航'"
+      :aria-expanded="mobileMenuOpen"
+      aria-controls="primary-navigation"
+      :title="mobileMenuOpen ? '收起主导航' : '展开主导航'"
+      @click="mobileMenuOpen = !mobileMenuOpen"
+    />
+
+    <nav
+      id="primary-navigation"
+      class="nav-links"
+      :class="{ 'nav-links--open': mobileMenuOpen }"
+      aria-label="主导航"
+    >
+      <RouterLink to="/" @click="mobileMenuOpen = false">AI 问答</RouterLink>
+      <RouterLink to="/documents" @click="mobileMenuOpen = false">文档上传</RouterLink>
+      <RouterLink to="/mind-map" @click="mobileMenuOpen = false">知识地图</RouterLink>
+      <RouterLink to="/quiz" @click="mobileMenuOpen = false">AI 出题</RouterLink>
+      <RouterLink to="/library" @click="mobileMenuOpen = false">文档库</RouterLink>
+      <RouterLink to="/history" @click="mobileMenuOpen = false">问答历史</RouterLink>
+      <RouterLink to="/me" @click="mobileMenuOpen = false">我的</RouterLink>
     </nav>
 
     <div class="actions">
@@ -39,8 +56,9 @@
 </template>
 
 <script setup>
-import { Moon, Sunny } from "@element-plus/icons-vue";
+import { Close, Menu, Moon, Sunny } from "@element-plus/icons-vue";
 import { ElMessageBox } from "element-plus";
+import { ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { logoutUser } from "../../api/auth";
 import codeMindLogo from "../../assets/codemind-wordmark.png";
@@ -62,6 +80,7 @@ const route = useRoute();
 const router = useRouter();
 const userStore = useUserStore();
 const { isDark, toggleTheme } = useTheme();
+const mobileMenuOpen = ref(false);
 
 function goLogin() {
   router.push({
@@ -191,19 +210,56 @@ async function logout() {
   white-space: nowrap;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 1120px) {
   .app-header {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) auto;
     top: 8px;
   }
 
-  .nav-links,
-  .actions {
+  .nav-links {
+    grid-column: 1 / -1;
     justify-content: flex-start;
+    overflow-x: auto;
   }
 
   .actions {
     flex-wrap: wrap;
+  }
+}
+
+.mobile-menu-toggle {
+  display: none;
+}
+
+@media (max-width: 700px) {
+  .app-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .mobile-menu-toggle {
+    display: inline-flex;
+  }
+
+  .nav-links {
+    display: none;
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    border-radius: 8px;
+    overflow: visible;
+  }
+
+  .nav-links--open {
+    display: grid;
+  }
+
+  .nav-links a {
+    text-align: center;
+  }
+
+  .actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
   }
 }
 
@@ -212,10 +268,5 @@ async function logout() {
     width: 150px;
   }
 
-  .nav-links {
-    width: 100%;
-    overflow-x: auto;
-    justify-content: flex-start;
-  }
 }
 </style>

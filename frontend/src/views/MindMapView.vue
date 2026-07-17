@@ -67,7 +67,7 @@
               :disabled="loadingBases || generating"
               @change="handleKnowledgeBaseChange"
             >
-              <el-option v-for="base in knowledgeBases" :key="base.id" :label="base.name" :value="base.id" />
+              <KnowledgeBaseOptions :bases="knowledgeBases" />
             </el-select>
           </label>
 
@@ -416,6 +416,7 @@
 import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import AppHeader from "../components/layout/AppHeader.vue";
+import KnowledgeBaseOptions from "../components/knowledge/KnowledgeBaseOptions.vue";
 import MindMapCanvas from "../components/mindmap/MindMapCanvas.vue";
 import MindMapInspector from "../components/mindmap/MindMapInspector.vue";
 import { useMindMapWorkspace } from "../composables/useMindMapWorkspace";

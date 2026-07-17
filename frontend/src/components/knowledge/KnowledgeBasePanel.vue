@@ -3,22 +3,20 @@
     <div class="panel-head">
       <div>
         <p>当前知识库</p>
-        <h2>{{ currentName }}</h2>
+        <div class="current-title">
+          <h2>{{ currentBase?.name || "尚未选择知识库" }}</h2>
+          <el-tag v-if="currentBase?.visibility === 'public'" size="small" effect="plain">公共</el-tag>
+        </div>
       </div>
       <el-select v-model="model" class="kb-select" aria-label="选择知识库" placeholder="暂无知识库">
-        <el-option
-          v-for="base in bases"
-          :key="base.id"
-          :label="base.name"
-          :value="base.id"
-        />
+        <KnowledgeBaseOptions :bases="bases" />
       </el-select>
     </div>
 
     <div class="facts">
       <div>
-        <span>接口状态</span>
-        <strong>{{ loaded ? "已读取" : "未读取" }}</strong>
+        <span>资料范围</span>
+        <strong>{{ currentBase?.visibility === "public" ? "公共协作" : "仅自己" }}</strong>
       </div>
       <div>
         <span>知识库数量</span>
@@ -30,6 +28,7 @@
 
 <script setup>
 import { computed } from "vue";
+import KnowledgeBaseOptions from "./KnowledgeBaseOptions.vue";
 
 const model = defineModel({ type: Number, default: null });
 
@@ -44,10 +43,9 @@ const props = defineProps({
   },
 });
 
-const currentName = computed(() => {
-  const matched = props.bases.find((item) => item.id === model.value);
-  return matched?.name || "尚未选择知识库";
-});
+const currentBase = computed(() =>
+  props.bases.find((item) => item.id === model.value),
+);
 </script>
 
 <style scoped>
@@ -79,6 +77,13 @@ h2 {
   margin: 0;
   color: var(--cm-heading);
   font-size: 22px;
+}
+
+.current-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
 }
 
 .kb-select {

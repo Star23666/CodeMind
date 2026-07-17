@@ -9,15 +9,18 @@ from app.api.routes import router as api_router
 from app.core.config import settings
 from app.services.document_job_service import document_job_service
 from app.services.mind_map_job_service import mind_map_job_service
+from app.services.quiz_job_service import quiz_job_service
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await document_job_service.start()
     await mind_map_job_service.start()
+    await quiz_job_service.start()
     try:
         yield
     finally:
+        await quiz_job_service.stop()
         await mind_map_job_service.stop()
         await document_job_service.stop()
 

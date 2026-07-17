@@ -94,7 +94,7 @@ class MindMapJobService:
         owner_id: int,
         request: MindMapGenerateRequest,
     ) -> MindMapJobRead:
-        knowledge_base_service.get_owned(db, request.knowledge_base_id, owner_id)
+        knowledge_base_service.get_readable(db, request.knowledge_base_id, owner_id)
         if request.document_id is not None:
             document = document_service.get_owned_document(db, request.document_id, owner_id)
             if document.knowledge_base_id != request.knowledge_base_id:

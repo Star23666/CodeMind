@@ -1,6 +1,6 @@
 # CodeMind
 
-CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented Generation，检索增强生成）知识库系统。用户可以上传课程资料、实验文档和技术文档，在自己的知识库中进行语义检索，并获得带原文来源的 AI 回答。
+CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented Generation，检索增强生成）知识库系统。用户可以上传课程资料、实验文档和技术文档，在私人知识库或全站公共知识库中进行语义检索，并获得带原文来源的 AI 回答。
 
 ## 功能概览
 
@@ -8,6 +8,8 @@ CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented
 
 - JWT 注册、登录、持久化注销撤销和用户数据隔离
 - 私人知识库创建、编辑和删除
+- 唯一全局公共知识库，支持所有登录用户共同上传、检索、问答和核对来源
+- 公共文档上传者权限与最小管理员管理：用户管理自己的文档，管理员管理全部公共文档
 - PDF、DOCX、Markdown、TXT 文档上传
 - 文档解析、文本切分和处理状态展示
 - 文档任务并发防重、处理中取消、服务重启恢复和失败时旧索引保留
@@ -23,16 +25,20 @@ CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented
 - 节点来源核对、针对性追问、AI 分支扩展和相关资料检索
 - 节点搜索定位、路径导航、本机掌握进度和继续学习入口
 - 画布缩放、布局、撤销重做、分支折叠、全屏及 PNG/SVG/JSON/Markdown 导出
+- 多知识库 AI 定制练习，支持公共/私人库混选、六类题型、后台进度和资料来源
+- 客观题与填空题自动评分，主观题参考答案、解析、连续答对统计和提交后即时清理
 - 文档、向量、原始文件和知识库级联清理
 - Docker Compose 本地及服务器部署
 - MySQL、Chroma 就绪检查与独立存活检查
 - 路由懒加载和 G6、Element Plus、文档预览独立分包
 
-后续计划：
+当前限制与后续计划：
 
-- 完成多知识库 AI 出题（Issue #18），并复用现有个人模型配置解析
-- 基于固定测试集继续评估不同 Embedding 模型的检索阈值
-- 管理员反馈可视化页面和项目成果物整理
+- AI 出题已通过真实 MySQL、Chroma 和在线模型端到端回归；在线模型耗时与题目语义质量仍需持续记录。
+- 第一版不保存练习历史，主观题采用参考答案加用户自评；管理员反馈可视化页面尚未实现。
+- 固定 RAG 测试集、Embedding 阈值评估和最终成果物由对应负责人继续推进。
+
+完整清单和处理建议见 [已知问题与后续计划](docs/已知问题与后续计划.md)。
 
 ## 技术栈
 
@@ -71,6 +77,7 @@ MySQL 保存用户、知识库、文档、片段、问答历史和反馈等结�
 CodeMind/
 ├─ backend/
 │  ├─ app/                 FastAPI 应用与业务服务
+│  ├─ scripts/             管理员初始化等运维脚本
 │  ├─ tests/               后端自动化测试
 │  ├─ Dockerfile
 │  └─ requirements.txt
@@ -154,6 +161,13 @@ MIND_MAP_BATCH_MAX_TOKENS=1600
 MIND_MAP_MERGE_MAX_TOKENS=4096
 MIND_MAP_RETRY_MAX_TOKENS=6400
 
+# AI 出题使用短期后台会话；默认关闭思考以提高结构化输出稳定性
+QUIZ_TIMEOUT_SECONDS=300
+QUIZ_MAX_TOKENS=12000
+QUIZ_ENABLE_THINKING=false
+QUIZ_SESSION_TTL_MINUTES=60
+QUIZ_CONTEXT_MAX_TOKENS=8000
+
 EMBEDDING_API_KEY=replace_with_embedding_api_key
 EMBEDDING_BASE_URL=https://provider.example.com/v1
 EMBEDDING_MODEL=replace_with_embedding_model
@@ -208,6 +222,52 @@ docker compose logs -f mysql
 
 `database/schema.sql` 只会在 MySQL 数据卷第一次初始化时执行。拉取包含数据库结构变更的新代码后，不能只重建镜像，还需要执行对应迁移。
 
+### 2026-07-17：AI 出题临时会话
+
+该迁移创建 `quiz_sessions` 和 `quiz_questions`。题目生成、作答期间临时保存，提交后立即级联删除；放弃或过期会话由接口和后台清理任务删除，不形成练习历史。
+
+Linux、macOS 或 WSL：
+
+```bash
+docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' \
+  < database/migrations/20260717_create_quiz_tables.sql
+```
+
+Windows PowerShell：
+
+```powershell
+Get-Content -Raw database\migrations\20260717_create_quiz_tables.sql |
+  docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
+```
+
+### 2026-07-16：全局公共知识库
+
+该迁移将 `knowledge_bases.owner_id` 调整为可空，为公共知识库增加数据库唯一约束和作用域检查约束，并创建唯一的全局公共知识库。公共库的 ID 由数据库生成，业务代码不会假设它是 `1`。
+
+Linux、macOS 或 WSL：
+
+```bash
+docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' \
+  < database/migrations/20260716_create_global_public_knowledge_base.sql
+```
+
+Windows PowerShell：
+
+```powershell
+Get-Content -Raw database\migrations\20260716_create_global_public_knowledge_base.sql |
+  docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
+```
+
+迁移后，先通过普通注册页面创建一个用户，再在服务器上安全提升为管理员：
+
+```bash
+docker compose exec backend python scripts/promote_admin.py --username <用户名>
+# 或
+docker compose exec backend python scripts/promote_admin.py --email <邮箱>
+```
+
+脚本只提升已存在用户，不包含默认管理员账号或硬编码密码。普通注册接口始终创建 `user` 角色。
+
 ### 2026-07-15：用户大模型配置
 
 该迁移创建个人模型预设和当前模型偏好表。部署前必须先在 `backend/.env` 配置
@@ -218,8 +278,7 @@ docker compose logs -f mysql
 API Key 认证失败、连接超时、模型不存在或 API Base URL 不正确。删除或停用个人预设后恢复系统模型。
 Embedding 始终使用服务器统一配置，不读取个人 LLM 预设。
 
-AI 出题功能由 [Issue #18](https://github.com/Attacker687/CodeMind/issues/18) 单独实现；该功能接入时必须
-复用现有用户模型解析服务，不能增加另一套明文密钥或自动回退逻辑。
+AI 出题复用同一用户模型解析服务：启用个人模型时所有结构化生成重试都使用该配置，失败不会转用系统额度；未启用个人模型时使用系统模型。Embedding 仍只使用服务器统一配置。
 
 Linux、macOS 或 WSL：
 
@@ -314,8 +373,8 @@ Get-Content -Raw database\migrations\20260711_preserve_qa_source_snapshots.sql |
 ## 使用流程
 
 1. 注册账号并登录。
-2. 在“我的”页面创建知识库。
-3. 在“文档上传”页面选择知识库并上传资料。
+2. 在“我的”页面创建私人知识库，或直接使用全站唯一的公共知识库。
+3. 在“文档上传”页面选择私人或公共知识库并上传资料。
 4. 等待文档状态变为 `completed`。
 5. 返回“AI 问答”页面选择知识库并提问。
 6. 查看回答中的来源片段和相关度。
@@ -323,6 +382,9 @@ Get-Content -Raw database\migrations\20260711_preserve_qa_source_snapshots.sql |
 8. 在“问答历史”中回看回答；原文被删除后仍保留来源快照。
 9. 进入“知识地图”异步生成学习结构，并查看节点类型、记忆点、学习建议和原文覆盖率。
 10. 搜索或定位节点，标记本机掌握状态，对节点追问、扩展分支或导出地图。
+11. 进入“AI 出题”，混选 1～5 个有权读取的私人/公共知识库，设置 5～20 题、难度、题型和主题后开始即时练习。
+12. 提交后查看明确标注的客观题得分，完成主观题自评，并按“需复习/待自评”筛选折叠结果；原文在新标签页打开，当前标签页刷新后仍能恢复本次结果。
+13. 公共文档只能由上传者或管理员重建、取消和删除；公共知识库本身不能删除。
 
 如果检索不到资料，请先确认文档处理状态、Embedding 配置和相似度阈值。阈值与 Embedding 模型及切分粒度有关，更换模型后必须重新评估。
 
@@ -344,8 +406,8 @@ Authorization: Bearer <access_token>
 | `GET`          | `/api/auth/me`              | 当前用户         |
 | `GET`          | `/api/health/live`          | 进程存活检查     |
 | `GET`          | `/api/health/ready`         | MySQL、Chroma 就绪检查 |
-| `GET/POST`     | `/api/knowledge-bases`      | 查询或创建知识库 |
-| `PATCH/DELETE` | `/api/knowledge-bases/{id}` | 修改或删除知识库 |
+| `GET/POST`     | `/api/knowledge-bases`      | 查询“公共 + 我的私人”知识库，或创建私人库 |
+| `PATCH/DELETE` | `/api/knowledge-bases/{id}` | 修改或删除知识库；公共库仅管理员可编辑且不能删除 |
 | `POST`         | `/api/documents/upload`     | 上传文档         |
 | `GET`          | `/api/documents`            | 查询文档列表     |
 | `GET`          | `/api/documents/{id}`        | 查询文档详情     |
@@ -367,6 +429,10 @@ Authorization: Bearer <access_token>
 | `POST`         | `/api/mind-maps/expand`     | 扩展导图节点     |
 | `GET/POST`     | `/api/mind-maps/histories`  | 查询或保存导图历史 |
 | `GET/PUT/DELETE` | `/api/mind-maps/histories/{id}` | 查看、更新或删除导图历史 |
+| `POST`         | `/api/quizzes/sessions`      | 创建 AI 出题后台会话 |
+| `GET`          | `/api/quizzes/sessions/{id}` | 查询进度或获取不含答案的题目 |
+| `POST`         | `/api/quizzes/sessions/{id}/submit` | 提交答案、评分并清理会话 |
+| `DELETE`       | `/api/quizzes/sessions/{id}` | 放弃并清理临时练习 |
 
 完整请求和响应模型以 Swagger 为准。
 
@@ -380,9 +446,9 @@ python -m pip install pytest==8.3.5
 python -m pytest -q
 ```
 
-当前后端测试共 100 项，覆盖认证和 JWT 撤销、权限、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、文档处理与重启恢复、取消和重复任务防护、索引事务补偿与陈旧向量过滤、反馈持久化、健康检查、删除清理、检索降级、Prompt、LLM 异常、RAG 编排、SSE 流式生成、问答历史，以及知识地图生成、个人模型路由、JSON Mode、流式硬总时限、并发槽位释放、任务恢复、事务一致性、并发控制、历史和接口权限。
+当前后端测试共 129 项，覆盖认证和 JWT 撤销、公共/私人知识库跨用户权限、管理员初始化、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、文档处理与重启恢复、取消和重复任务防护、索引事务补偿与陈旧向量过滤、反馈持久化、健康检查、删除清理、检索降级、Prompt、LLM 异常、RAG 编排、SSE 流式生成、问答历史、知识地图，以及 AI 出题的多库权限、文档轮询、覆盖度、难度结构、输入预算、来源编号白名单、答案隔离、BYOK 路由、六类题型评分和临时清理。
 
-Docker 端到端测试已验证前端 Nginx 代理下的注册、登录、知识库创建、文档上传与解析、SSE 问答、来源返回、知识地图生成、任务重启恢复和历史详情落库。当前实测小范围知识地图约 36 秒完成，生成 15 个节点，节点数、历史记录和来源引用均通过一致性校验。
+Docker 端到端测试已验证前端 Nginx 代理下的注册、登录、公共与私人知识库隔离、跨用户公共文档检索和问答、来源片段与原文查看、上传者/管理员重建和删除、MySQL/文件/Chroma 同步清理、知识地图生成、任务重启恢复和历史详情落库。AI 出题另以真实 MySQL、在线 Embedding 和 `Qwen/Qwen3.6-35B-A3B` 验证四份大资料的均衡覆盖、进阶认知层级、六种题型、评分、自评筛选、结果恢复、来源反查、提交即删和过期清理。当前实测 10 题覆盖项目报告、操作系统、MySQL 和计算机网络四份文档，约 77 秒完成生成。当前实测小范围知识地图约 36 秒完成，生成 15 个节点，节点数、历史记录和来源引用均通过一致性校验。
 
 前端生产构建检查：
 
@@ -484,6 +550,7 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 - [需求分析](docs/需求分析.md)
 - [API 接口设计](docs/API接口设计.md)
 - [生成侧接口约定](docs/生成侧接口约定.md)
+- [已知问题与后续计划](docs/已知问题与后续计划.md)
 - [GitHub Wiki 首页草稿](docs/wiki/Home.md)
 - [数据库结构](database/schema.sql)
 - [数据库与迁移说明](database/README.md)
@@ -501,4 +568,4 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 ---
 
-文档状态：已按 Issue #13 可靠性修复同步，更新时间为 2026-07-15。
+文档状态：已按 Issue #18 多知识库 AI 出题同步，更新时间为 2026-07-17。

@@ -41,6 +41,12 @@ from app.schemas.contracts import (
     UserCreate,
     UserRead,
 )
+from app.schemas.quiz import (
+    QuizCreateRequest,
+    QuizSessionRead,
+    QuizSubmissionResult,
+    QuizSubmitRequest,
+)
 from app.services.auth_service import (
     AuthenticationError,
     DisabledUserError,
@@ -51,11 +57,15 @@ from app.services.document_job_service import document_job_service
 from app.services.document_service import (
     DocumentBusyError,
     DocumentNotProcessingError,
+    DocumentPermissionError,
     document_service,
 )
 from app.services.feedback_service import FeedbackConflictError, feedback_service
 from app.services.health_service import health_service
-from app.services.knowledge_base_service import knowledge_base_service
+from app.services.knowledge_base_service import (
+    KnowledgeBasePermissionError,
+    knowledge_base_service,
+)
 from app.services.llm_client import LlmServiceError
 from app.services.llm_config_service import (
     LlmConfigError,
@@ -66,6 +76,8 @@ from app.services.mind_map_service import MindMapGenerationError, mind_map_servi
 from app.services.mind_map_job_service import mind_map_job_service
 from app.services.mind_map_history_service import mind_map_history_service
 from app.services.qa_history_service import qa_history_service
+from app.services.quiz_job_service import quiz_job_service
+from app.services.quiz_service import QuizServiceError, quiz_service
 from app.services.rag_service import rag_service
 from app.services.retrieval_service import RetrievalServiceError, retrieval_service
 
@@ -258,7 +270,7 @@ async def list_knowledge_bases(
     current_user: UserRead = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[KnowledgeBaseRead]:
-    return knowledge_base_service.list_for_owner(db, current_user.id)
+    return knowledge_base_service.list_accessible(db, current_user.id)
 
 
 @router.post(
@@ -287,6 +299,8 @@ async def update_knowledge_base(
 ) -> KnowledgeBaseRead:
     try:
         return knowledge_base_service.update(db, knowledge_base_id, current_user.id, payload)
+    except KnowledgeBasePermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在。") from exc
     except IntegrityError as exc:
@@ -306,6 +320,8 @@ async def delete_knowledge_base(
             knowledge_base_id=knowledge_base_id,
             owner_id=current_user.id,
         )
+    except KnowledgeBasePermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在。") from exc
 
@@ -319,12 +335,18 @@ async def list_documents(
     current_user: UserRead = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[DocumentRead]:
-    return document_service.list_documents(
-        db,
-        owner_id=current_user.id,
-        knowledge_base_id=knowledge_base_id,
-        parse_status=parse_status,
-    )
+    try:
+        return document_service.list_documents(
+            db,
+            owner_id=current_user.id,
+            knowledge_base_id=knowledge_base_id,
+            parse_status=parse_status,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="知识库不存在。",
+        ) from exc
 
 
 @router.post(
@@ -345,6 +367,8 @@ async def upload_document(
             knowledge_base_id=knowledge_base_id,
             file=file,
         )
+    except KnowledgeBasePermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在。") from exc
 
@@ -402,6 +426,8 @@ async def delete_document(
 ) -> ActionResponse:
     try:
         document_service.delete_document(db, document_id=document_id, owner_id=current_user.id)
+    except DocumentPermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在。") from exc
 
@@ -421,6 +447,8 @@ async def reindex_document(
             status_code=status.HTTP_409_CONFLICT,
             detail="文档已经在等待处理或正在处理中。",
         ) from exc
+    except DocumentPermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在。") from exc
 
@@ -441,6 +469,8 @@ async def cancel_document_processing(
             status_code=status.HTTP_409_CONFLICT,
             detail="文档当前不在等待处理或处理中。",
         ) from exc
+    except DocumentPermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在。") from exc
     return ActionResponse(status="cancelled", message=f"Document {document_id} processing was cancelled.")
@@ -569,7 +599,7 @@ async def create_mind_map_history(
     current_user: UserRead = Depends(get_current_user), db: Session = Depends(get_db),
 ):
     try:
-        knowledge_base_service.get_owned(db, payload.knowledge_base_id, current_user.id)
+        knowledge_base_service.get_readable(db, payload.knowledge_base_id, current_user.id)
         if payload.document_id is not None:
             document = document_service.get_owned_document(db, payload.document_id, current_user.id)
             if document.knowledge_base_id != payload.knowledge_base_id:
@@ -619,6 +649,78 @@ async def delete_mind_map_history(
         raise HTTPException(status_code=404, detail="思维导图历史记录不存在。") from exc
 
 
+@router.post(
+    "/quizzes/sessions",
+    response_model=QuizSessionRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_quiz_session(
+    payload: QuizCreateRequest,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> QuizSessionRead:
+    try:
+        session = quiz_service.create_session(
+            db,
+            owner_id=current_user.id,
+            request=payload,
+        )
+    except QuizServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    quiz_job_service.enqueue(session.session_id)
+    return session
+
+
+@router.get("/quizzes/sessions/{session_id}", response_model=QuizSessionRead)
+async def get_quiz_session(
+    session_id: str,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> QuizSessionRead:
+    try:
+        return quiz_service.get_session(
+            db,
+            session_id=session_id,
+            owner_id=current_user.id,
+        )
+    except QuizServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.post(
+    "/quizzes/sessions/{session_id}/submit",
+    response_model=QuizSubmissionResult,
+)
+async def submit_quiz_session(
+    session_id: str,
+    payload: QuizSubmitRequest,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> QuizSubmissionResult:
+    try:
+        return quiz_service.submit(
+            db,
+            session_id=session_id,
+            owner_id=current_user.id,
+            request=payload,
+        )
+    except QuizServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.delete("/quizzes/sessions/{session_id}", response_model=ActionResponse)
+async def abandon_quiz_session(
+    session_id: str,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ActionResponse:
+    try:
+        quiz_service.abandon(db, session_id=session_id, owner_id=current_user.id)
+    except QuizServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return ActionResponse(status="accepted", message="临时练习已清理。")
+
+
 @router.post("/search", response_model=SearchResponse)
 async def search_documents(
     payload: SearchRequest,
@@ -626,7 +728,7 @@ async def search_documents(
     db: Session = Depends(get_db),
 ) -> SearchResponse:
     try:
-        knowledge_base_service.get_owned(db, payload.knowledge_base_id, current_user.id)
+        knowledge_base_service.get_readable(db, payload.knowledge_base_id, current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在。") from exc
 
@@ -651,7 +753,7 @@ async def chat(
     db: Session = Depends(get_db),
 ) -> ChatResponse:
     try:
-        knowledge_base_service.get_owned(
+        knowledge_base_service.get_readable(
             db,
             request.knowledge_base_id,
             current_user.id,
@@ -684,7 +786,7 @@ async def chat_stream(
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
     try:
-        knowledge_base_service.get_owned(
+        knowledge_base_service.get_readable(
             db,
             request.knowledge_base_id,
             current_user.id,

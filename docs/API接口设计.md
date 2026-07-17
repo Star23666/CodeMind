@@ -62,6 +62,10 @@
 | 知识地图 | GET    | `/api/mind-maps/histories/{history_id}`          | 查询地图历史详情       |
 | 知识地图 | PUT    | `/api/mind-maps/histories/{history_id}`          | 更新地图和画布状态     |
 | 知识地图 | DELETE | `/api/mind-maps/histories/{history_id}`          | 删除地图历史           |
+| AI 出题  | POST   | `/api/quizzes/sessions`                         | 创建临时出题会话       |
+| AI 出题  | GET    | `/api/quizzes/sessions/{session_id}`            | 查询进度或获取题目     |
+| AI 出题  | POST   | `/api/quizzes/sessions/{session_id}/submit`     | 提交、评分并清理会话   |
+| AI 出题  | DELETE | `/api/quizzes/sessions/{session_id}`            | 放弃并清理临时会话     |
 | 历史     | GET    | `/api/qa-records`                                | 查询问答历史           |
 | 历史     | GET    | `/api/qa-records/{qa_record_id}`                 | 查询问答详情           |
 | 反馈     | POST   | `/api/qa-records/{qa_record_id}/feedback`        | 提交回答反馈           |
@@ -153,7 +157,7 @@ POST /api/auth/logout
 
 当前用户启用个人配置后，RAG 问答、SSE 和知识地图都传递同一个用户运行时配置；个人模型调用失败时
 不会自动使用系统模型。停用或删除个人配置后使用 `.env` 中的系统模型。Embedding 不属于 BYOK 范围。
-AI 出题尚由 Issue #18 跟踪，实现时必须复用相同的用户运行时配置解析。
+AI 出题同样复用用户运行时配置解析。个人配置启用时，首次出题和结构重试均使用同一配置且失败不回退；没有个人配置时使用系统模型。
 
 ## 4. 知识库接口
 
@@ -169,7 +173,12 @@ POST /api/knowledge-bases
 {
   "name": "操作系统复习资料",
   "description": "课程讲义、实验说明和复习笔记",
-  "visibility": "private"
+  "visibility": "private",
+  "can_read": true,
+  "can_upload": true,
+  "can_manage": true,
+  "can_edit": true,
+  "can_delete": true
 }
 ```
 
@@ -196,14 +205,46 @@ GET /api/knowledge-bases
 ```json
 [
   {
+    "id": 42,
+    "owner_id": null,
+    "name": "公共知识库",
+    "description": "所有登录用户共同维护和检索的公共计算机知识资料。",
+    "visibility": "public",
+    "can_read": true,
+    "can_upload": true,
+    "can_manage": false,
+    "can_edit": false,
+    "can_delete": false
+  },
+  {
     "id": 1,
     "owner_id": 1,
     "name": "操作系统复习资料",
     "description": "课程讲义、实验说明和复习笔记",
-    "visibility": "private"
+    "visibility": "private",
+    "can_read": true,
+    "can_upload": true,
+    "can_manage": true,
+    "can_edit": true,
+    "can_delete": true
   }
 ]
 ```
+
+列表始终返回当前用户的私人知识库和全站唯一公共知识库，公共库 ID 由数据库动态生成。客户端必须使用
+返回值，不能硬编码 `1`。普通用户可读写公共资料但不能编辑或删除公共库；管理员的公共库
+`can_manage/can_edit` 为 `true`，`can_delete` 仍为 `false`。
+
+### 4.3 更新和删除知识库
+
+```text
+PATCH  /api/knowledge-bases/{knowledge_base_id}
+DELETE /api/knowledge-bases/{knowledge_base_id}
+```
+
+- 私人库只允许所有者更新和删除。
+- 公共库只允许管理员更新名称和描述。
+- 公共库对普通用户更新返回 `403`，对任何角色删除都返回 `403`。
 
 ## 5. 文档接口
 
@@ -232,12 +273,18 @@ POST /api/documents/upload
   "file_size": 204800,
   "parse_status": "pending",
   "error_message": null,
-  "chunk_count": 0
+  "chunk_count": 0,
+  "uploader_username": "alice",
+  "knowledge_base_visibility": "public",
+  "can_manage": true
 }
 ```
 
 当后台解析、Embedding 或向量入库失败时，`parse_status` 为 `failed`，
 `error_message` 返回可直接展示给用户的失败原因；其他状态下该字段为 `null`。
+
+所有登录用户都可以向公共库上传。公共文档对全部登录用户可见，`uploader_username` 标识上传者；
+只有上传者和管理员获得 `can_manage=true`，并可调用取消、重建和删除接口。私人文档仍只对所有者可见。
 
 已有 MySQL 数据库需要在升级代码后执行一次：
 
@@ -479,6 +526,7 @@ GET /api/mind-maps/jobs/{job_id}
 ```
 
 - `document_id=null` 表示使用知识库内全部已完成解析的文档。
+- 私人库只使用当前用户文档；公共库使用同一公共库内所有上传者的文档。
 - `max_depth` 范围为 2 至 4。
 - `max_nodes` 范围为 8 至 60。
 
@@ -551,7 +599,8 @@ POST /api/mind-maps/ask
 }
 ```
 
-后端只允许使用当前用户、当前知识库且已完成解析的片段，最多 8 个。响应包含回答和实际使用的来源列表。
+后端最多接受 8 个已完成解析片段。私人库要求片段属于当前用户和当前知识库；公共库允许同一公共库
+中不同上传者的片段。响应包含回答和实际使用的来源列表。
 
 ### 8.4 节点扩展
 
@@ -583,13 +632,96 @@ DELETE /api/mind-maps/histories/{history_id}
 
 - 列表响应不携带完整 `result`，详情响应包含完整地图。
 - 创建和更新时可传 `view_state`，用于保存节点坐标及折叠状态。
-- `document_id` 必须属于同一用户和同一知识库。
+- 私人 `document_id` 必须属于当前用户和同一知识库；公共文档允许所有登录用户使用。
 - 自动生成成功后后端会保存一个历史版本。
 - 节点掌握状态当前保存在浏览器 `localStorage`，不属于历史接口字段。
 
-## 9. 历史与反馈接口
+## 9. AI 出题接口
 
-### 9.1 查询问答历史
+AI 出题使用短期后台会话，不保存历史试卷或答题记录。所有接口都要求 JWT，并把不存在和不属于当前用户的会话统一返回为 `404`。
+
+### 9.1 创建出题会话
+
+```text
+POST /api/quizzes/sessions
+```
+
+```json
+{
+  "knowledge_base_ids": [3, 9],
+  "question_count": 5,
+  "difficulty": "intermediate",
+  "question_types": ["single_choice", "multiple_choice", "true_false"],
+  "random_mix": true,
+  "topic": "进程与线程",
+  "show_explanations_and_sources": true
+}
+```
+
+- `knowledge_base_ids` 必须包含 1 至 5 个不重复且当前用户可读的私人/公共知识库。
+- `question_count` 范围为 5 至 20；难度为 `basic`、`intermediate` 或 `challenge`。
+- 题型可选 `single_choice`、`multiple_choice`、`true_false`、`fill_blank`、`short_answer` 和 `scenario`。
+- 随机混合模式下 `question_types=[]` 表示使用全部六类题型；显式传入时至少选择两种。指定模式至少选择一种，且生成结果覆盖所选题型。
+- 任一知识库没有已解析资料或总内容不足时返回 `409` 和明确提示；越权知识库返回 `404`。
+
+成功返回 `202 Accepted` 和 `QuizSessionRead`，初始状态为 `queued`。状态为 `queued`、`processing`、`ready` 或 `failed`，进度范围为 0 至 100。
+
+### 9.2 查询进度和题目
+
+```text
+GET /api/quizzes/sessions/{session_id}
+```
+
+任务未完成时 `questions` 为空；完成后题目示例：
+
+```json
+{
+  "id": 81,
+  "order_no": 1,
+  "question_type": "single_choice",
+  "prompt": "根据资料，处理器调度的基本单位是什么？",
+  "options": [
+    {"id": "A", "text": "线程"},
+    {"id": "B", "text": "文件"}
+  ],
+  "source_count": 1
+}
+```
+
+该响应模型没有正确答案、标准答案、参考答案、解析和来源正文，不能通过未提交接口提前取得答案。
+
+### 9.3 提交并评分
+
+```text
+POST /api/quizzes/sessions/{session_id}/submit
+```
+
+```json
+{
+  "answers": [
+    {"question_id": 81, "answer": "A"},
+    {"question_id": 82, "answer": ["A", "C"]},
+    {"question_id": 83, "answer": true},
+    {"question_id": 84, "answer": "进程控制块"}
+  ]
+}
+```
+
+单选、多选、判断和填空题返回 `is_correct=true/false`；填空题匹配标准答案，或要求答案包含全部关键词。简答和情景题返回 `is_correct=null` 与 `reference_answer`，不强制精确自动评分。启用显示选项时，每题同时返回解析、来源快照和 `/documents/{document_id}/chunks/{chunk_id}` 跳转地址。
+
+响应返回后，服务端立即删除本会话及全部题目。因此再次查询或提交同一 `session_id` 返回 `404`。
+
+### 9.4 放弃会话
+
+```text
+DELETE /api/quizzes/sessions/{session_id}
+```
+
+用于取消生成或离开未完成练习。未主动放弃的会话到达 `expires_at` 后由后台清理任务删除。
+
+## 10. 历史与反馈接口
+
+### 10.1 查询问答历史
 
 ```text
 GET /api/qa-records?knowledge_base_id=1
@@ -613,7 +745,7 @@ GET /api/qa-records?knowledge_base_id=1
 ]
 ```
 
-### 9.2 查询问答详情
+### 10.2 查询问答详情
 
 ```text
 GET /api/qa-records/{qa_record_id}
@@ -623,7 +755,7 @@ GET /api/qa-records/{qa_record_id}
 
 历史来源中的 `document_id` 和 `chunk_id` 可以为空。删除原文后仍返回文件名、片段序号、页码、分数和文本快照，但 `jump_url` 为 `null`。
 
-### 9.3 提交反馈
+### 10.3 提交反馈
 
 ```text
 POST /api/qa-records/{qa_record_id}/feedback
@@ -653,7 +785,7 @@ POST /api/qa-records/{qa_record_id}/feedback
 }
 ```
 
-### 9.4 管理员查询反馈
+### 10.4 管理员查询反馈
 
 ```text
 GET /api/admin/feedbacks?rating=5&user_id=1&knowledge_base_id=1
@@ -661,12 +793,12 @@ GET /api/admin/feedbacks?rating=5&user_id=1&knowledge_base_id=1
 
 仅 `admin` 角色可以访问，普通用户返回 `403`。`rating`、`user_id` 和 `knowledge_base_id` 均为可选筛选条件，响应为真实持久化的 `FeedbackRead[]`，按创建时间和编号倒序排列。
 
-## 10. 字段一致性要求
+## 11. 字段一致性要求
 
 | API 字段               | MySQL 字段或 Chroma metadata                                         | 说明                                     |
 | ---------------------- | -------------------------------------------------------------------- | ---------------------------------------- |
 | `knowledge_base_id`    | `knowledge_bases.id`、`documents.knowledge_base_id`、Chroma metadata | 限定检索和问答范围                       |
-| `owner_id` / `user_id` | `users.id`、Chroma metadata `owner_id`                               | 用于权限隔离                             |
+| `owner_id` / `user_id` | `users.id`、Chroma metadata `owner_id`                               | 私人库用于隔离；公共库用于标识上传者     |
 | `parse_status`         | `documents.parse_status`                                             | 文档处理状态                             |
 | `chunk_id`             | `document_chunks.id`、Chroma metadata `chunk_id`                     | 引用跳转和 MySQL 反查                    |
 | `vector_id`            | `document_chunks.vector_id`、Chroma id                               | 向量记录唯一编号                         |
@@ -676,9 +808,11 @@ GET /api/admin/feedbacks?rating=5&user_id=1&knowledge_base_id=1
 | `job_id`               | `mind_map_jobs.id`                                                   | 地图后台任务编号                         |
 | `history_id`           | `mind_map_histories.id`                                              | 地图历史版本编号                         |
 | `node_type`            | `mind_map_histories.result_json`                                     | 地图节点类型，不单独占数据库列           |
+| `session_id`           | `quiz_sessions.id`                                                   | AI 出题临时会话编号                      |
+| `question_id`          | `quiz_questions.id`                                                  | 临时题目编号，随会话级联删除             |
 
-后端实现位于 `backend/app/api/routes.py`、`backend/app/services/` 和 `backend/app/schemas/contracts.py`。当前已接入可撤销 JWT、MySQL、Chroma、Embedding、在线 LLM、问答历史、反馈持久化、可靠文档任务和知识地图。知识地图结构化调用使用流式 LLM 响应和一次瞬时错误重试，真实 Docker 多批次任务已完成验证；固定测试集与不同 Embedding 模型的最终阈值评估仍需持续进行。
+后端实现位于 `backend/app/api/routes.py`、`backend/app/services/` 和 `backend/app/schemas/`。当前已接入可撤销 JWT、唯一全局公共知识库、私人隔离、最小管理员权限、MySQL、Chroma、Embedding、在线 LLM、问答历史、反馈持久化、可靠文档任务、知识地图和 AI 出题。真实 Docker 已验证跨用户公共检索、来源查看、权限管理、同步删除和多知识库临时练习；固定测试集、模型质量与耗时记录仍需持续完善。
 
 ---
 
-文档状态：已按 Issue #13 可靠性修复同步，更新时间为 2026-07-15。
+文档状态：已按 Issue #18 多知识库 AI 出题同步，更新时间为 2026-07-17。当前限制见 [已知问题与后续计划](已知问题与后续计划.md)。

@@ -20,7 +20,8 @@ CodeMind 通过 RAG（Retrieval-Augmented Generation，检索增强生成）将�
 ## 2. 项目目标
 
 - 支持多用户注册、登录和数据隔离。
-- 支持创建、维护和删除个人知识库。
+- 支持创建、维护和删除私人知识库，并共同使用全站唯一公共知识库。
+- 公共资料支持跨用户上传、检索、问答和来源查看，并显示上传者。
 - 支持 PDF、DOCX、Markdown 和 TXT 文档上传。
 - 支持文档解析、文本切分、Embedding 和向量入库。
 - 支持按知识库进行语义检索和文档片段查看。
@@ -46,8 +47,8 @@ CodeMind 通过 RAG（Retrieval-Augmented Generation，检索增强生成）将�
 
 | 角色 | 主要能力 |
 | --- | --- |
-| 普通用户 | 注册登录、管理知识库、上传资料、配置个人模型、语义检索、RAG 提问、查看来源和历史、生成知识地图 |
-| 管理员 | 通过受保护 API 查看和筛选系统反馈；可视化管理页面仍待完成 |
+| 普通用户 | 注册登录、管理私人知识库、共同使用公共库、上传资料、配置个人模型、语义检索、RAG 提问、查看来源和历史、生成知识地图 |
+| 管理员 | 编辑公共库信息、管理全部公共文档，并通过受保护 API 查看系统反馈；完整管理后台仍待完成 |
 | 外部模型服务 | 提供文本向量和回答生成能力 |
 
 ## 5. 系统架构
@@ -105,14 +106,16 @@ flowchart LR
 - 登录成功后返回 JWT Access Token。
 - 退出登录会递增持久化 Token 版本，使当前 JWT 立即失效。
 - 前端通过 `Authorization: Bearer <token>` 访问受保护接口。
-- 后端根据 Token 中的用户身份校验知识库、文档和历史记录归属。
-- 用户只能访问自己的私人数据。
+- 后端根据 Token 中的用户身份校验知识库、文档和历史记录作用域。
+- 用户只能访问自己的私人数据；所有登录用户可访问同一个公共知识库。
+- 普通注册不能指定管理员角色，管理员由服务器脚本从已有用户中提升。
 
 ### 6.2 知识库管理
 
-- 创建、查询、修改和删除知识库。
-- 保存知识库名称、描述、可见范围和所属用户。
-- 当前仅开放私人知识库。
+- 创建、查询、修改和删除私人知识库。
+- 保存知识库名称、描述、可见范围和可空所属用户。
+- 系统初始化唯一公共知识库，公共库 ID 动态生成且本身不能删除。
+- 所有登录用户可上传和读取公共资料；上传者管理自己的公共文档，管理员管理全部公共文档并编辑公共库信息。
 - 同一用户不能创建重名知识库。
 - 删除知识库时，同时清理关联文档、片段、向量和原始文件。
 
@@ -132,7 +135,7 @@ flowchart LR
 ### 6.4 语义检索
 
 - 将用户问题转换为向量。
-- 按 `owner_id` 和 `knowledge_base_id` 限定检索范围。
+- 私人库按 `owner_id + knowledge_base_id` 限定检索范围；公共库按动态取得的 `knowledge_base_id` 聚合所有上传者资料。
 - 使用 Chroma 进行余弦相似度召回。
 - 支持 `top_k`、相似度阈值、问题重写和 rerank 参数。
 - 返回文档、片段、页码、相关度、原文和跳转地址。
@@ -192,6 +195,16 @@ flowchart LR
 - 支持导出 PNG、SVG、JSON 和包含记忆点、学习建议的 Markdown 大纲。
 
 最近合并的 PR #11 增加了 `node_type`、`key_points` 和 `learning_tip`。这些字段保存在地图历史 JSON 中并提供默认值，旧历史不需要数据库迁移即可读取。
+
+### 6.9 AI 定制练习
+
+- 同时选择 1 至 5 个有读取权的私人或公共知识库，设置题量、难度、主题和题型。
+- 支持单选、多选、判断、填空、简答和情景应用六类题型，以及指定或随机混合模式。
+- 后端以短期后台会话按文档和知识库双层轮询抽取片段并限制输入预算，结构化结果的难度比例、文档覆盖和来源整体校验通过后才保存。
+- 获取题目时隐藏答案、解析和来源正文；提交后自动评分客观题和填空题，主观题提供参考答案。
+- 每道题保留可验证来源；结果页支持主观题自评、筛选和折叠，原文在新标签页打开，当前标签页刷新后仍可恢复本次结果。
+- 提交、主动放弃或过期后删除临时数据，不建立长期练习历史。
+- 复用用户个人模型配置；个人模型失败不回退，未启用个人配置时使用系统模型。
 
 ## 7. 核心业务流程
 
@@ -283,6 +296,36 @@ sequenceDiagram
     end
 ```
 
+### 7.4 AI 出题流程
+
+```mermaid
+sequenceDiagram
+    actor User as 用户
+    participant Web as Vue 前端
+    participant API as FastAPI
+    participant Job as 出题任务服务
+    participant LLM as 在线 LLM
+    participant DB as MySQL
+
+    User->>Web: 混选知识库并设置题量、难度、题型和主题
+    Web->>API: POST /api/quizzes/sessions
+    API->>API: 校验全部知识库读取权限和内容量
+    API->>DB: 创建短期 queued 会话
+    API-->>Web: 返回 session_id 与进度
+    Job->>API: 执行前再次校验权限并均衡抽取片段
+    Job->>LLM: 使用同一用户运行时请求结构化题目
+    LLM-->>Job: 返回题目、答案、解析和来源编号
+    Job->>Job: Pydantic 校验整批结构与真实来源
+    Job->>DB: 验证通过后保存临时题目
+    Web->>API: GET /api/quizzes/sessions/{session_id}
+    API-->>Web: 返回不含答案的题目
+    User->>Web: 完成作答并提交
+    Web->>API: POST /api/quizzes/sessions/{session_id}/submit
+    API->>API: 评分并组装答案、解析和来源
+    API->>DB: 删除会话并级联删除题目
+    API-->>Web: 返回本次结果
+```
+
 ## 8. 数据库设计
 
 ### 8.1 数据关系
@@ -305,6 +348,8 @@ erDiagram
     USERS ||--o{ MIND_MAP_JOBS : starts
     KNOWLEDGE_BASES ||--o{ MIND_MAP_HISTORIES : scopes
     KNOWLEDGE_BASES ||--o{ MIND_MAP_JOBS : scopes
+    USERS ||--o{ QUIZ_SESSIONS : starts
+    QUIZ_SESSIONS ||--o{ QUIZ_QUESTIONS : contains
 ```
 
 ### 8.2 主要数据表
@@ -320,6 +365,8 @@ erDiagram
 | `feedbacks` | 用户评分和文字反馈 |
 | `mind_map_histories` | 地图结果 JSON、标题、节点数和画布状态 |
 | `mind_map_jobs` | 生成任务状态、阶段、进度、结果和失败原因 |
+| `quiz_sessions` | 出题配置、任务进度、用户归属和过期时间 |
+| `quiz_questions` | 临时题目、答案、解析和来源快照，随会话删除 |
 
 ### 8.3 Chroma metadata
 
@@ -350,10 +397,10 @@ erDiagram
 | 认证 | `POST /api/auth/logout` | 注销并撤销现有 Token | 已实现 |
 | 认证 | `GET /api/auth/me` | 获取当前用户 | 已实现 |
 | 个人模型 | `/api/me/llm-configs` | 配置增删改查、测试、启用和系统模型切换 | 已实现 |
-| 知识库 | `GET /api/knowledge-bases` | 查询个人知识库 | 已实现 |
-| 知识库 | `POST /api/knowledge-bases` | 创建知识库 | 已实现 |
-| 知识库 | `PATCH /api/knowledge-bases/{id}` | 修改知识库 | 已实现 |
-| 知识库 | `DELETE /api/knowledge-bases/{id}` | 删除知识库及关联数据 | 已实现 |
+| 知识库 | `GET /api/knowledge-bases` | 查询公共库和本人私人库 | 已实现 |
+| 知识库 | `POST /api/knowledge-bases` | 创建私人知识库 | 已实现 |
+| 知识库 | `PATCH /api/knowledge-bases/{id}` | 修改私人库或由管理员编辑公共库 | 已实现 |
+| 知识库 | `DELETE /api/knowledge-bases/{id}` | 删除私人库；公共库禁止删除 | 已实现 |
 | 文档 | `POST /api/documents/upload` | 上传并处理文档 | 已实现 |
 | 文档 | `GET /api/documents` | 查询文档列表 | 已实现 |
 | 文档 | `GET /api/documents/{id}` | 查询文档详情 | 已实现 |
@@ -370,6 +417,10 @@ erDiagram
 | 知识地图 | `POST /api/mind-maps/ask` | 节点追问 | 已实现 |
 | 知识地图 | `POST /api/mind-maps/expand` | 节点扩展 | 已实现 |
 | 知识地图 | `/api/mind-maps/histories` | 地图历史增删改查 | 已实现 |
+| AI 出题 | `POST /api/quizzes/sessions` | 创建多知识库后台出题会话 | 已实现 |
+| AI 出题 | `GET /api/quizzes/sessions/{id}` | 查询进度或获取无答案题目 | 已实现 |
+| AI 出题 | `POST /api/quizzes/sessions/{id}/submit` | 评分、返回解析来源并清理 | 已实现 |
+| AI 出题 | `DELETE /api/quizzes/sessions/{id}` | 放弃并清理临时练习 | 已实现 |
 | 反馈 | `POST /api/qa-records/{id}/feedback` | 校验归属并持久化反馈 | 已实现 |
 | 管理 | `GET /api/admin/feedbacks` | 按评分、用户、知识库筛选 | 已实现 |
 
@@ -380,7 +431,7 @@ erDiagram
 - 用户密码只保存哈希值。
 - 使用 JWT 校验登录身份。
 - 注销通过数据库 Token 版本立即撤销既有 JWT。
-- 知识库、文档、片段和历史查询都校验用户归属。
+- 私人知识库、文档、片段和历史查询校验用户归属；公共资源校验登录身份和管理权限。
 - 上传文件限制扩展名、文件大小并处理危险文件名字符。
 - API Key、JWT Secret 和数据库密码通过环境变量配置。
 - 个人模型 API Key 只在后端加密保存，接口仅返回掩码；模型地址执行 HTTPS、白名单和 SSRF 校验。
@@ -491,13 +542,13 @@ docker compose down
 - 知识地图生成、来源校验、并发限制和失败取消。
 - 知识地图任务、历史事务和文档归属校验。
 
-当前后端自动化测试基线为 100 项，包括个人模型连接错误分类、敏感日志和问答、知识地图模型路由回归。
+当前后端自动化测试基线为 129 项，包括公共/私人跨用户权限、管理员初始化和清理、个人模型连接错误分类、敏感日志和问答、知识地图模型路由，以及 AI 出题权限、文档轮询、覆盖度、难度结构、评分、来源编号白名单和临时清理回归。
 
 ### 12.2 核心验收流程
 
 1. 注册并登录用户。
-2. 创建私人知识库。
-3. 上传测试文档。
+2. 确认公共知识库和本人私人知识库同时可见。
+3. 分别向私人库和公共库上传测试文档。
 4. 等待文档状态变为 `completed`。
 5. 查询文档片段并验证片段数量。
 6. 使用资料中的问题进行语义检索。
@@ -506,10 +557,11 @@ docker compose down
 9. 查看问答历史及来源快照。
 10. 生成知识地图并观察任务进度、节点来源、关键记忆点和学习建议。
 11. 测试节点搜索、追问、扩展、历史保存和导出。
-12. 删除文档或知识库，检查 MySQL、Chroma、文件和历史快照行为。
-13. 提交反馈并验证重复提交、其他用户越权和管理员筛选行为。
-14. 注销后验证旧 JWT 失效，并验证 MySQL 或 Chroma 故障时 readiness 返回 `503`。
-15. 使用另一个用户验证资源不能被越权访问。
+12. 使用第二个用户验证公共资料可见、私人资料不可见，且不能管理其他用户的公共文档。
+13. 使用管理员编辑公共库、重建和删除其他用户公共文档。
+14. 删除文档或私人知识库，检查 MySQL、Chroma、文件和历史快照行为。
+15. 提交反馈并验证重复提交、其他用户越权和管理员筛选行为。
+16. 注销后验证旧 JWT 失效，并验证 MySQL 或 Chroma 故障时 readiness 返回 `503`。
 
 ### 12.3 回答质量评估
 
@@ -554,7 +606,7 @@ docker compose down
 
 - 前后端基础工程和 Docker Compose 部署。
 - JWT 注册、登录和资源权限校验。
-- 知识库及文档管理。
+- 私人知识库、唯一全局公共知识库及权限化文档管理。
 - PDF、DOCX、Markdown、TXT 解析和切分。
 - Embedding 与 Chroma 入库。
 - 问题重写、相似度过滤和 rerank 流程。
@@ -567,13 +619,16 @@ docker compose down
 - 文档任务防重、取消、重启恢复和失败时旧索引保护。
 - 反馈持久化、管理员筛选、JWT 注销撤销和 MySQL/Chroma 就绪检查。
 - 前端路由懒加载和重依赖独立分包。
+- 多知识库 AI 出题、六类题型、评分、来源、BYOK 路由和临时清理。
 
 ### 14.2 待完成或待优化
 
-- 使用固定测试集重新评估相似度阈值。
-- 完成管理员反馈可视化页面。
-- 增加真实 MySQL、Chroma 和在线模型端到端测试及质量评估记录。
-- 完成项目报告、PPT、演示视频和部署文档。
+- 持续记录 AI 出题的在线模型耗时、错误率和语义质量；当前 4 份资料、39 个片段生成 10 道进阶题约需 77 秒。
+- 将真实 MySQL、Chroma 和在线模型端到端回归整理为可选 smoke 测试，减少供应商或数据库兼容问题漏检。
+- 第一版练习结果只保存在当前标签页，主观题采用用户自评；长期历史和 AI 辅助点评需要另行设计。
+- 完成管理员反馈可视化页面、固定 RAG 测试集与阈值评估，以及项目报告、PPT、演示视频和部署文档。
+
+完整优先级、证据和处理建议见 [已知问题与后续计划](../已知问题与后续计划.md)。
 
 ## 15. 小组分工
 
@@ -596,6 +651,7 @@ docker compose down
 - [需求分析](https://github.com/Attacker687/CodeMind/blob/main/docs/%E9%9C%80%E6%B1%82%E5%88%86%E6%9E%90.md)
 - [API 接口设计](https://github.com/Attacker687/CodeMind/blob/main/docs/API%E6%8E%A5%E5%8F%A3%E8%AE%BE%E8%AE%A1.md)
 - [生成侧接口约定](https://github.com/Attacker687/CodeMind/blob/main/docs/%E7%94%9F%E6%88%90%E4%BE%A7%E6%8E%A5%E5%8F%A3%E7%BA%A6%E5%AE%9A.md)
+- [已知问题与后续计划](https://github.com/Attacker687/CodeMind/blob/main/docs/%E5%B7%B2%E7%9F%A5%E9%97%AE%E9%A2%98%E4%B8%8E%E5%90%8E%E7%BB%AD%E8%AE%A1%E5%88%92.md)
 - [文档导航与实现状态](https://github.com/Attacker687/CodeMind/blob/main/docs/README.md)
 
 ## 17. 文档维护约定
@@ -608,4 +664,4 @@ docker compose down
 
 ---
 
-最后更新：2026 年 7 月 15 日；实现基线：Issue #13 可靠性修复。
+最后更新：2026 年 7 月 17 日；实现基线：Issue #18 多知识库 AI 出题。

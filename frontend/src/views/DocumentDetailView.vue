@@ -25,8 +25,12 @@
             <el-tag :type="statusType(document?.parse_status)" effect="light">
               {{ statusText(document?.parse_status) }}
             </el-tag>
+            <el-tag v-if="document?.knowledge_base_visibility === 'public'" effect="plain">公共资料</el-tag>
             <h1>{{ document?.file_name || "正在读取文档" }}</h1>
             <p>{{ document?.file_type || "-" }} · {{ document?.chunk_count || 0 }} 个片段</p>
+            <p v-if="document?.knowledge_base_visibility === 'public'">
+              上传者：{{ document.uploader_username || `用户 ${document.owner_id}` }}
+            </p>
             <el-button v-if="document" class="source-view-button" type="primary" plain @click="openOriginal">
               查看完整文档
             </el-button>
