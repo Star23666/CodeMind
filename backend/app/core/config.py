@@ -42,6 +42,21 @@ class Settings(BaseSettings):
     mind_map_merge_max_tokens: int = 4096
     mind_map_retry_max_tokens: int = 6400
 
+    # Temporary AI quiz generation. Sessions are deleted after submission and
+    # periodically removed after the TTL when abandoned.
+    quiz_timeout_seconds: float = 300.0
+    quiz_max_tokens: int = 12000
+    quiz_structure_max_retries: int = 1
+    quiz_enable_thinking: bool = False
+    quiz_worker_concurrency: int = 2
+    quiz_session_ttl_minutes: int = 60
+    quiz_cleanup_interval_seconds: int = 60
+    quiz_context_max_chunks: int = 24
+    quiz_context_max_tokens: int = 8000
+    quiz_context_max_chars: int = 30000
+    quiz_context_max_chars_per_chunk: int = 1600
+    quiz_min_context_chars_per_question: int = 40
+
     embedding_api_key: str = ""
     embedding_base_url: str = ""
     embedding_model: str = ""
