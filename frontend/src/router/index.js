@@ -13,6 +13,12 @@ const routes = [
     component: () => import("../views/DocumentUploadView.vue"),
   },
   {
+    path: "/search",
+    name: "semantic-search",
+    component: () => import("../views/SearchView.vue"),
+    meta: { requiresAuth: true },
+  },
+  {
     path: "/documents/:documentId",
     name: "document-detail",
     component: () => import("../views/DocumentDetailView.vue"),
@@ -70,6 +76,18 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: "/admin",
+    name: "admin",
+    component: () => import("../views/AdminView.vue"),
+    meta: { requiresAuth: true, requiresAdmin: true },
+  },
+  {
+    path: "/forbidden",
+    name: "forbidden",
+    component: () => import("../views/ForbiddenView.vue"),
+    meta: { requiresAuth: true },
+  },
+  {
     path: "/login",
     name: "login",
     component: () => import("../views/LoginView.vue"),
@@ -104,6 +122,10 @@ router.beforeEach((to) => {
 
   if (to.meta.guestOnly && userStore.isLoggedIn) {
     return { name: "home" };
+  }
+
+  if (to.meta.requiresAdmin && userStore.user?.role !== "admin") {
+    return { name: "forbidden" };
   }
 
   return true;

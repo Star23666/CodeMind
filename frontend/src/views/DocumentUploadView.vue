@@ -31,7 +31,11 @@
         </aside>
 
         <div class="main-stack">
-          <UploadPanel :knowledge-base-id="knowledgeBaseId" @uploaded="afterUpload" />
+          <UploadPanel
+            :knowledge-base-id="knowledgeBaseId"
+            :knowledge-base="currentKnowledgeBase"
+            @uploaded="afterUpload"
+          />
 
           <button class="library-entry" type="button" @click="openLibrary">
             <span class="entry-icon"><el-icon><FolderOpened /></el-icon></span>
@@ -49,7 +53,7 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { ArrowRight, FolderOpened } from "@element-plus/icons-vue";
 import { useRoute, useRouter } from "vue-router";
 import { getHealth } from "../api/health";
@@ -59,6 +63,7 @@ import UploadPanel from "../components/documents/UploadPanel.vue";
 import KnowledgeBasePanel from "../components/knowledge/KnowledgeBasePanel.vue";
 import AppHeader from "../components/layout/AppHeader.vue";
 import { useUserStore } from "../stores/user";
+import { pickDefaultKnowledgeBase } from "../utils/knowledgeBases";
 
 const router = useRouter();
 const route = useRoute();
@@ -68,6 +73,9 @@ const knowledgeBaseId = ref(null);
 const knowledgeBases = ref([]);
 const knowledgeLoaded = ref(false);
 const processingTimers = new Map();
+const currentKnowledgeBase = computed(() =>
+  knowledgeBases.value.find((base) => base.id === knowledgeBaseId.value) || null,
+);
 
 onMounted(async () => {
   checkHealth();
@@ -95,9 +103,10 @@ async function checkHealth() {
 async function loadKnowledgeBases() {
   try {
     knowledgeBases.value = await listKnowledgeBases();
-    const requestedId = Number(route.query.knowledge_base_id);
-    const requestedBase = knowledgeBases.value.find((base) => base.id === requestedId);
-    knowledgeBaseId.value = requestedBase?.id ?? knowledgeBases.value[0]?.id ?? null;
+    knowledgeBaseId.value = pickDefaultKnowledgeBase(
+      knowledgeBases.value,
+      route.query.knowledge_base_id,
+    )?.id ?? null;
   } catch (error) {
     knowledgeBases.value = [];
     knowledgeBaseId.value = null;

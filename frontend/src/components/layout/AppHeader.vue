@@ -27,11 +27,15 @@
     >
       <RouterLink to="/" @click="mobileMenuOpen = false">AI 问答</RouterLink>
       <RouterLink to="/documents" @click="mobileMenuOpen = false">文档上传</RouterLink>
+      <RouterLink to="/search" @click="mobileMenuOpen = false">语义检索</RouterLink>
       <RouterLink to="/mind-map" @click="mobileMenuOpen = false">知识地图</RouterLink>
       <RouterLink to="/quiz" @click="mobileMenuOpen = false">AI 出题</RouterLink>
       <RouterLink to="/library" @click="mobileMenuOpen = false">文档库</RouterLink>
       <RouterLink to="/history" @click="mobileMenuOpen = false">问答历史</RouterLink>
       <RouterLink to="/me" @click="mobileMenuOpen = false">我的</RouterLink>
+      <RouterLink v-if="userStore.user?.role === 'admin'" to="/admin" @click="mobileMenuOpen = false">
+        管理后台
+      </RouterLink>
     </nav>
 
     <div class="actions">
@@ -124,7 +128,7 @@ async function logout() {
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 20px;
-  width: min(1180px, calc(100% - 32px));
+  width: min(1400px, calc(100% - 32px));
   margin: 0 auto;
   padding: 12px 14px;
   border: 1px solid var(--cm-border);
@@ -210,7 +214,7 @@ async function logout() {
   white-space: nowrap;
 }
 
-@media (max-width: 1120px) {
+@media (max-width: 1360px) {
   .app-header {
     grid-template-columns: minmax(0, 1fr) auto;
     top: 8px;

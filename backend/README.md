@@ -9,10 +9,11 @@ FastAPI 后端负责认证、知识库与文档管理、Embedding 入库、Chrom
 | `app/api/routes.py` | REST API 与 HTTP 错误转换 |
 | `app/core/config.py` | `.env` 配置读取和路径解析 |
 | `app/db/session.py` | SQLAlchemy Engine 与 Session |
-| `app/services/document_service.py` | 上传、后台解析、入库、重建和删除 |
+| `app/services/document_service.py` | 上传、后台解析、入库、重建、私人库间迁移和删除 |
 | `app/services/knowledge_base_service.py` | 公共/私人知识库作用域和读取、上传、管理权限 |
 | `app/services/document_job_service.py` | 文档任务并发调度、启动恢复和实例内防重 |
 | `app/services/feedback_service.py` | 问答反馈持久化、归属校验和管理员筛选 |
+| `app/services/admin_service.py` | 管理员概览、用户启停、公共文档治理和私人数据脱敏 |
 | `app/services/health_service.py` | MySQL 与 Chroma 就绪检查 |
 | `app/services/retrieval_service.py` | 问题重写、Embedding、Chroma 召回、过滤与 rerank |
 | `app/services/rag_service.py` | 检索、Prompt、LLM、SSE 流式输出和历史保存的问答编排 |
@@ -165,7 +166,7 @@ cd backend
 python -m pytest -q
 ```
 
-当前基线为 `129 passed`。测试使用 SQLite 和替身服务覆盖主要业务，其中包括全局公共库唯一性、跨用户公共文档访问和管理、私人库隔离、管理员初始化、删除清理、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、问答和知识地图个人模型路由、知识地图流式总超时和并发槽位释放、文档重启恢复、重复入队、取消、索引补偿和陈旧向量过滤，反馈持久化与越权，JWT 注销撤销，MySQL/Chroma 就绪探针，以及 AI 出题的多库权限、文档轮询、覆盖度、难度结构、输入预算、来源编号白名单、答案隔离、评分、BYOK 与临时清理；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、公共库跨用户检索、AI 六类题型、来源反查、权限按钮和数据同步清理。
+当前基线为 `135 passed`。测试使用 SQLite 和替身服务覆盖主要业务，其中包括全局公共库唯一性、跨用户公共文档访问和管理、私人库隔离、管理员初始化与用户启停、私人数据脱敏、删除清理、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、问答和知识地图个人模型路由、知识地图流式总超时和并发槽位释放、文档重启恢复、重复入队、取消、私人库间迁移与 MySQL/Chroma 补偿、索引补偿和陈旧向量过滤，反馈持久化、越权与管理员筛选，JWT 注销撤销，MySQL/Chroma 就绪探针，以及 AI 出题的多库权限、文档轮询、覆盖度、难度结构、输入预算、来源编号白名单、答案隔离、评分、BYOK 与临时清理；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、Issue #28 角色流程、公共库跨用户检索、AI 六类题型、来源反查、权限按钮和数据同步清理。
 
 ## Docker 运行
 

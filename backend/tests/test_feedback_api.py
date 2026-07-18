@@ -44,12 +44,24 @@ class FeedbackApiTest(unittest.TestCase):
             connection.execute(
                 text(
                     """
+                    CREATE TABLE knowledge_bases (
+                        id INTEGER PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        visibility TEXT NOT NULL
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
                     CREATE TABLE qa_records (
                         id INTEGER PRIMARY KEY,
                         user_id INTEGER NOT NULL,
                         knowledge_base_id INTEGER NOT NULL,
                         question TEXT NOT NULL,
                         answer TEXT NOT NULL,
+                        source_count INTEGER NOT NULL DEFAULT 0,
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                     )
                     """
@@ -77,6 +89,14 @@ class FeedbackApiTest(unittest.TestCase):
                       (1, 'alice', 'unused', 'alice@example.com', 'user', 'active', 0),
                       (2, 'bob', 'unused', 'bob@example.com', 'user', 'active', 0),
                       (3, 'admin', 'unused', 'admin@example.com', 'admin', 'active', 0)
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO knowledge_bases (id, name, visibility)
+                    VALUES (100, '测试知识库', 'public')
                     """
                 )
             )
@@ -120,6 +140,13 @@ class FeedbackApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["qa_record_id"], 10)
 
+        stored = self.client.get(
+            "/api/qa-records/10/feedback",
+            headers=self._headers(1),
+        )
+        self.assertEqual(stored.status_code, 200)
+        self.assertEqual(stored.json()["rating"], 5)
+
         duplicate = self.client.post(
             "/api/qa-records/10/feedback",
             headers=self._headers(1),
@@ -154,6 +181,10 @@ class FeedbackApiTest(unittest.TestCase):
         all_feedback = self.client.get("/api/admin/feedbacks", headers=admin_headers)
         self.assertEqual(all_feedback.status_code, 200)
         self.assertEqual(len(all_feedback.json()), 1)
+        self.assertEqual(all_feedback.json()[0]["username"], "alice")
+        self.assertEqual(all_feedback.json()[0]["knowledge_base_name"], "测试知识库")
+        self.assertEqual(all_feedback.json()[0]["question"], "什么是进程？")
+        self.assertFalse(all_feedback.json()[0]["content_redacted"])
 
         matching = self.client.get(
             "/api/admin/feedbacks?rating=5&user_id=1&knowledge_base_id=100",
