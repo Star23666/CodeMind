@@ -395,6 +395,7 @@ async function renderGraph() {
     container: canvasHost.value,
     data,
     padding: GRAPH_PADDING,
+    background: isDark.value ? "#101a2a" : "#f7f9fc",
     animation: shouldReveal ? { duration: 220, easing: "ease-out" } : false,
     zoomRange: [MIN_ZOOM, MAX_ZOOM],
     layout: layoutOptions(),
@@ -981,8 +982,13 @@ function hasNodeInViewport() {
   });
 }
 
-function exportPng() {
-  return canvasHost.value?.querySelector("canvas")?.toDataURL("image/png") || "";
+async function exportPng(mode = "overall") {
+  await focusModePromise.catch(() => {});
+  if (!graph) return "";
+  return graph.toDataURL({
+    mode: mode === "viewport" ? "viewport" : "overall",
+    type: "image/png",
+  });
 }
 
 function getViewState() {

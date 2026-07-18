@@ -46,11 +46,11 @@
         </div>
       </section>
 
-      <section v-if="!mapData || setupOpen" class="control-deck" aria-label="知识地图生成设置">
+      <section ref="setupRef" v-if="!mapData || setupOpen" class="control-deck" aria-label="知识地图生成设置">
         <div class="control-deck-heading">
           <div>
-            <span>{{ mapData ? "重新构造地图" : "生成范围" }}</span>
-            <p>选择资料与结构深度；新结果完成前，当前地图仍可继续浏览。</p>
+            <span>{{ mapData ? "生成另一张地图" : histories.length ? "新建知识地图" : "生成范围" }}</span>
+            <p>选择知识库、资料范围和结构深度；新地图完成前，当前内容仍可继续浏览。</p>
           </div>
           <div class="control-deck-actions">
             <span v-if="generating" class="working-badge"><i></i>正在构造</span>
@@ -100,7 +100,7 @@
             :loading="generating"
             :disabled="!canGenerate"
             @click="generate"
-          >{{ mapData ? "构造新版本" : "生成知识地图" }}</el-button>
+          >{{ mapData ? "开始生成新地图" : "生成知识地图" }}</el-button>
         </div>
 
         <p v-if="generationBlockReason" class="control-guidance">
@@ -166,6 +166,12 @@
           </div>
 
           <div class="document-actions" aria-label="地图文件操作">
+            <button
+              type="button"
+              class="new-map-action"
+              :disabled="generating"
+              @click="openGenerationSetup"
+            ><i aria-hidden="true">＋</i><span>生成另一张</span></button>
             <button type="button" class="plain-action history-action" @click="returnToHistoryList">
               地图列表 {{ histories.length }}
             </button>
@@ -179,11 +185,12 @@
             <el-button size="small" type="primary" :loading="saving" :disabled="!canSave" @click="saveCurrent">
               {{ saveButtonLabel }}
             </el-button>
-            <el-dropdown @command="exportMap">
-              <el-button size="small">导出⌄</el-button>
+            <el-dropdown :disabled="Boolean(exportingFormat)" @command="exportMap">
+              <el-button size="small" :loading="Boolean(exportingFormat)">导出⌄</el-button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item command="png">PNG 图片</el-dropdown-item>
+                  <el-dropdown-item command="png-overall">PNG 完整地图</el-dropdown-item>
+                  <el-dropdown-item command="png-viewport">PNG 当前视图</el-dropdown-item>
                   <el-dropdown-item command="svg">SVG 大纲</el-dropdown-item>
                   <el-dropdown-item command="json">JSON 可恢复数据</el-dropdown-item>
                   <el-dropdown-item command="md">Markdown 大纲</el-dropdown-item>
@@ -194,7 +201,7 @@
               <button type="button" class="more-action" aria-label="更多地图操作">•••</button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item command="setup">重新构造设置</el-dropdown-item>
+                  <el-dropdown-item command="setup">生成另一张地图</el-dropdown-item>
                   <el-dropdown-item command="zen">{{ zenMode ? "退出专注模式" : "进入专注模式" }}</el-dropdown-item>
                   <el-dropdown-item command="delete" divided :disabled="!activeHistoryId || generating || saving">删除当前版本</el-dropdown-item>
                 </el-dropdown-menu>
@@ -235,6 +242,18 @@
             <span>继续学习</span>
             <strong>{{ nextLearningNode?.title || "确认当前掌握状态" }}</strong><i>→</i>
           </button>
+          <Transition name="learning-feedback">
+            <div
+              v-if="learningFeedback"
+              class="learning-feedback"
+              :class="learningFeedback.tone"
+              role="status"
+              aria-live="polite"
+            >
+              <i aria-hidden="true">{{ learningFeedback.symbol }}</i>
+              <div><strong>{{ learningFeedback.title }}</strong><span>{{ learningFeedback.detail }}</span></div>
+            </div>
+          </Transition>
         </section>
 
         <section
@@ -315,7 +334,7 @@
                 type="button"
                 :class="{ mastered: isSelectedMastered }"
                 :aria-pressed="isSelectedMastered"
-                @click="toggleSelectedMastery"
+                @click="toggleMasteryWithFeedback"
               >
                 {{ isSelectedMastered ? "已掌握 ✓" : "标记掌握" }}
               </button>
@@ -364,7 +383,7 @@
             :related-error="relatedError"
             @close="inspectorOpen = false"
             @focus="openLearningNode"
-            @toggle-mastery="toggleSelectedMastery"
+            @toggle-mastery="toggleMasteryWithFeedback"
             @expand="expandSelectedNode"
             @ask="askNode"
           />
@@ -436,6 +455,7 @@ const {
   expandingNode,
   expandSelectedNode,
   exportMap,
+  exportingFormat,
   focusLearningNode,
   formatTime,
   generate,
@@ -498,10 +518,10 @@ const {
   stagePosition,
   stageSteps,
   stepSearch,
-  toggleSelectedMastery,
 } = useMindMapWorkspace();
 
 const setupOpen = ref(false);
+const setupRef = ref(null);
 const outlineOpen = ref(typeof window === "undefined" || window.innerWidth >= 1320);
 const inspectorOpen = ref(typeof window === "undefined" || window.innerWidth >= 980);
 const zenMode = ref(false);
@@ -510,8 +530,10 @@ const focusRootId = ref("");
 const layoutDensity = ref("comfortable");
 const displayMode = ref("detail");
 const selectedBranchCollapsed = ref(false);
+const learningFeedback = ref(null);
 const searchInputRef = ref(null);
 let inspectorBeforeZen = true;
+let learningFeedbackTimer = null;
 
 const outlineFilterOptions = [
   { label: "全部", value: "all" },
@@ -624,6 +646,37 @@ function toggleBranchFocus(node = selectedNode.value) {
   else enterBranchFocus(node);
 }
 
+function showLearningFeedback(node, mastered) {
+  window.clearTimeout(learningFeedbackTimer);
+  const completed = mastered && masteryProgress.value === 100;
+  learningFeedback.value = mastered
+    ? {
+      tone: "success",
+      symbol: completed ? "★" : "✓",
+      title: completed ? "本轮学习完成" : `已掌握“${node.title}”`,
+      detail: completed
+        ? `${learnableNodes.value.length} 个知识点已全部掌握`
+        : `本机学习进度已更新为 ${masteryProgress.value}%`,
+    }
+    : {
+      tone: "review",
+      symbol: "↻",
+      title: `已将“${node.title}”加入复习`,
+      detail: "继续学习时会再次回到这个知识点",
+    };
+  learningFeedbackTimer = window.setTimeout(() => {
+    learningFeedback.value = null;
+  }, 3200);
+}
+
+function toggleMasteryWithFeedback() {
+  const node = selectedNode.value;
+  if (!node || node.depth === 0) return;
+  const mastered = !isSelectedMastered.value;
+  setNodeMastery(node, mastered);
+  showLearningFeedback(node, mastered);
+}
+
 async function continueLearning() {
   const current = selectedNode.value;
   let mastered = null;
@@ -646,6 +699,7 @@ async function continueLearning() {
       if (action !== "cancel") return;
     }
     setNodeMastery(current, mastered);
+    showLearningFeedback(current, mastered);
   }
 
   await nextTick();
@@ -677,6 +731,17 @@ async function toggleSelectedBranch() {
   await canvasRef.value?.toggleSelectedBranch?.();
 }
 
+async function openGenerationSetup() {
+  if (generating.value) return;
+  if (zenMode.value) toggleZenMode(false);
+  setupOpen.value = true;
+  await nextTick();
+  setupRef.value?.scrollIntoView({
+    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    block: "start",
+  });
+}
+
 async function returnToHistoryList() {
   if (!(await showHistoryList())) return;
   zenMode.value = false;
@@ -704,7 +769,7 @@ function toggleZenMode(force) {
 }
 
 function handleDocumentCommand(command) {
-  if (command === "setup") setupOpen.value = true;
+  if (command === "setup") openGenerationSetup();
   if (command === "zen") toggleZenMode();
   if (command === "delete") removeHistory();
 }
@@ -769,7 +834,10 @@ watch(() => mapData.value?.root?.id, () => {
 });
 
 onMounted(() => window.addEventListener("keydown", handleGlobalKeydown));
-onBeforeUnmount(() => window.removeEventListener("keydown", handleGlobalKeydown));
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handleGlobalKeydown);
+  window.clearTimeout(learningFeedbackTimer);
+});
 </script>
 
 <style scoped>
@@ -1456,6 +1524,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleGlobalKeydown)
 .page-heading h1 { font-size: clamp(34px, 4vw, 50px); }
 
 .control-deck {
+  scroll-margin-top: 76px;
   padding: 15px 17px;
   border-radius: 13px;
   box-shadow: 0 10px 30px rgba(28, 50, 84, 0.07);
@@ -1615,6 +1684,42 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleGlobalKeydown)
 .node-search > button:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .document-actions { justify-content: flex-end; gap: 6px; }
+.new-map-action {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px 0 7px;
+  border: 1px solid #244ac0;
+  border-radius: 9px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--atlas-cobalt), #244ac0);
+  box-shadow: 0 7px 18px rgba(47, 94, 229, 0.24);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: box-shadow 160ms ease, transform 160ms ease;
+}
+.new-map-action i {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.16);
+  font-size: 16px;
+  font-style: normal;
+  line-height: 1;
+}
+.new-map-action:not(:disabled):hover,
+.new-map-action:not(:disabled):focus-visible {
+  box-shadow: 0 9px 24px rgba(47, 94, 229, 0.32);
+  outline: none;
+  transform: translateY(-1px);
+}
+.new-map-action:focus-visible { outline: 3px solid color-mix(in srgb, var(--atlas-cobalt) 24%, transparent); outline-offset: 2px; }
+.new-map-action:disabled { opacity: 0.55; cursor: not-allowed; }
 .history-action { white-space: nowrap; }
 .history-action:disabled { opacity: 0.55; cursor: not-allowed; }
 .more-action,
@@ -1653,7 +1758,7 @@ kbd {
 .learning-progress span { color: var(--cm-muted); font-size: 10px; }
 .learning-progress strong { color: var(--atlas-cobalt); font-family: "DIN Alternate", Consolas, monospace; font-size: 16px; }
 .learning-progress > div { grid-column: 1 / -1; height: 3px; overflow: hidden; border-radius: 99px; background: var(--cm-border); }
-.learning-progress i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--atlas-cobalt), var(--atlas-teal)); }
+.learning-progress i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--atlas-cobalt), var(--atlas-teal)); transition: width 360ms ease; }
 .learning-strip dl { display: grid; grid-template-columns: repeat(3, 1fr); margin: 0; }
 .learning-strip dl > div { display: flex; justify-content: center; gap: 6px; border-right: 1px solid var(--cm-border); }
 .learning-strip dl > div:last-child { border-right: 0; }
@@ -1661,6 +1766,43 @@ kbd {
 .learning-strip dd { margin: 0; color: var(--cm-heading); font-family: "DIN Alternate", Consolas, monospace; font-size: 13px; font-weight: 800; }
 
 .learning-strip .continue-learning { min-height: 38px; padding-block: 7px; }
+.learning-feedback {
+  display: flex;
+  min-height: 42px;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--atlas-teal) 36%, var(--cm-border));
+  border-radius: 10px;
+  color: var(--cm-text);
+  background: color-mix(in srgb, var(--atlas-teal) 8%, var(--cm-surface));
+}
+.learning-feedback.review {
+  border-color: color-mix(in srgb, var(--atlas-amber) 38%, var(--cm-border));
+  background: color-mix(in srgb, var(--atlas-amber) 8%, var(--cm-surface));
+}
+.learning-feedback > i {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--atlas-teal);
+  font-size: 15px;
+  font-style: normal;
+  font-weight: 900;
+}
+.learning-feedback.review > i { background: var(--atlas-amber); }
+.learning-feedback > div { display: grid; min-width: 0; gap: 2px; }
+.learning-feedback strong { overflow: hidden; color: var(--cm-heading); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.learning-feedback span { color: var(--cm-muted); font-size: 10px; }
+.learning-feedback-enter-active,
+.learning-feedback-leave-active { transition: opacity 180ms ease, transform 180ms ease; }
+.learning-feedback-enter-from,
+.learning-feedback-leave-to { opacity: 0; transform: translateY(-5px); }
 
 .atlas-workspace {
   position: relative;
@@ -1866,6 +2008,7 @@ kbd {
 }
 .zen-mode .map-page { width: 100%; height: 100vh; margin: 0; gap: 0; }
 .zen-mode .map-document-bar { min-height: 58px; border-width: 0 0 1px; border-radius: 0; box-shadow: none; }
+.zen-mode .new-map-action { display: none; }
 .zen-mode .document-title > span,
 .zen-mode .document-title > small { display: none; }
 .zen-mode .document-title { grid-template-columns: minmax(0, 1fr); }
@@ -1970,8 +2113,14 @@ kbd {
   .constructing .route,
   .constructing .map-node { animation: none; }
   .construction-progress > i,
-  .history-shelf > button { transition: none; }
+  .history-shelf > button,
+  .learning-progress i,
+  .new-map-action,
+  .learning-feedback-enter-active,
+  .learning-feedback-leave-active { transition: none; }
   .history-shelf > button:not(:disabled):hover,
-  .history-shelf > button:not(:disabled):focus-visible { transform: none; }
+  .history-shelf > button:not(:disabled):focus-visible,
+  .new-map-action:not(:disabled):hover,
+  .new-map-action:not(:disabled):focus-visible { transform: none; }
 }
 </style>

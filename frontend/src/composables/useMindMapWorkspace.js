@@ -66,6 +66,7 @@ export function useMindMapWorkspace() {
   const openingHistoryId = ref(null);
   const historyViewState = ref({});
   const saving = ref(false);
+  const exportingFormat = ref("");
   const expandingNode = ref(false);
   const healthOnline = ref(false);
   const relatedLoading = ref(false);
@@ -552,11 +553,6 @@ export function useMindMapWorkspace() {
     if (key) localStorage.setItem(key, JSON.stringify([...masteredNodeIds.value]));
   }
 
-  function toggleSelectedMastery() {
-    if (!selectedNode.value || selectedNode.value.depth === 0) return;
-    setNodeMastery(selectedNode.value, !masteredNodeIds.value.has(selectedNode.value.id));
-  }
-
   function setNodeMastery(node, mastered) {
     if (!node || node.depth === 0) return;
     const next = new Set(masteredNodeIds.value);
@@ -924,20 +920,28 @@ export function useMindMapWorkspace() {
     }
   }
 
+  function safeExportFileName(value) {
+    const normalized = String(value || "知识地图")
+      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+      .replace(/[. ]+$/g, "")
+      .trim();
+    return normalized || "知识地图";
+  }
+
   function download(content, type, extension) {
     if (!content) {
-      ElMessage.warning("当前内容暂时无法导出");
-      return;
+      throw new Error("当前内容暂时无法导出");
     }
-    const url = typeof content === "string" && content.startsWith("data:")
-      ? content
-      : URL.createObjectURL(new Blob([content], { type }));
+    const isDataUrl = typeof content === "string" && content.startsWith("data:");
+    const url = isDataUrl ? content : URL.createObjectURL(new Blob([content], { type }));
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${mapData.value.root.title}.${extension}`;
+    anchor.download = `${safeExportFileName(mapData.value?.root?.title)}.${extension}`;
+    anchor.style.display = "none";
+    document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    if (!url.startsWith("data:")) URL.revokeObjectURL(url);
+    if (!isDataUrl) window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   function toMarkdown(node, depth = 0) {
@@ -963,12 +967,30 @@ export function useMindMapWorkspace() {
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#f7f9fc"/>${rows.map(({ node, depth }, index) => `<circle cx="${50 + depth * 180}" cy="${45 + index * 44}" r="5" fill="#2f5ee5"/><text x="${66 + depth * 180}" y="${51 + index * 44}" fill="#172033" font-family="Microsoft YaHei,sans-serif" font-size="16">${escaped(node.title)}</text>`).join("")}</svg>`;
   }
 
-  function exportMap(format) {
-    if (!mapData.value) return;
-    if (format === "png") download(canvasRef.value?.exportPng(), "image/png", "png");
-    if (format === "svg") download(toSvg(mapData.value.root), "image/svg+xml", "svg");
-    if (format === "json") download(JSON.stringify(mapData.value, null, 2), "application/json", "json");
-    if (format === "md") download(`# ${mapData.value.root.title}\n\n${toMarkdown(mapData.value.root)}`, "text/markdown", "md");
+  async function exportMap(format) {
+    if (!mapData.value || exportingFormat.value) return;
+    exportingFormat.value = format;
+    try {
+      if (format === "png-overall" || format === "png-viewport") {
+        const mode = format === "png-viewport" ? "viewport" : "overall";
+        const image = await canvasRef.value?.exportPng(mode);
+        download(image, "image/png", "png");
+        ElMessage.success(mode === "overall" ? "完整地图图片已导出" : "当前视图图片已导出");
+      } else if (format === "svg") {
+        download(toSvg(mapData.value.root), "image/svg+xml", "svg");
+        ElMessage.success("SVG 大纲已导出");
+      } else if (format === "json") {
+        download(JSON.stringify(mapData.value, null, 2), "application/json", "json");
+        ElMessage.success("可恢复数据已导出");
+      } else if (format === "md") {
+        download(`# ${mapData.value.root.title}\n\n${toMarkdown(mapData.value.root)}`, "text/markdown", "md");
+        ElMessage.success("Markdown 大纲已导出");
+      }
+    } catch (error) {
+      ElMessage.error(`导出失败：${error.message || "请稍后重试"}`);
+    } finally {
+      exportingFormat.value = "";
+    }
   }
 
   function formatTime(value) {
@@ -996,6 +1018,7 @@ export function useMindMapWorkspace() {
     expandingNode,
     expandSelectedNode,
     exportMap,
+    exportingFormat,
     focusLearningNode,
     formatTime,
     generate,
@@ -1059,6 +1082,5 @@ export function useMindMapWorkspace() {
     stagePosition,
     stageSteps: STAGE_STEPS,
     stepSearch,
-    toggleSelectedMastery,
   };
 }
