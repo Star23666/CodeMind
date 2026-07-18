@@ -46,6 +46,7 @@
 | 文档     | DELETE | `/api/documents/{document_id}`                   | 删除文档和向量索引     |
 | 文档     | POST   | `/api/documents/{document_id}/reindex`           | 重新入库文档           |
 | 文档     | POST   | `/api/documents/{document_id}/cancel`            | 取消文档处理任务       |
+| 文档     | PATCH  | `/api/documents/{document_id}/knowledge-base`    | 在本人私人库间移动文档 |
 | 文档     | GET    | `/api/documents/{document_id}/chunks`            | 查询文档片段           |
 | 文档     | GET    | `/api/documents/{document_id}/chunks/{chunk_id}` | 按文档定位查询单个片段 |
 | 文档     | GET    | `/api/chunks/{chunk_id}`                         | 查询单个片段           |
@@ -69,7 +70,12 @@
 | 历史     | GET    | `/api/qa-records`                                | 查询问答历史           |
 | 历史     | GET    | `/api/qa-records/{qa_record_id}`                 | 查询问答详情           |
 | 反馈     | POST   | `/api/qa-records/{qa_record_id}/feedback`        | 提交回答反馈           |
-| 管理     | GET    | `/api/admin/feedbacks`                           | 管理端查看反馈         |
+| 反馈     | GET    | `/api/qa-records/{qa_record_id}/feedback`        | 查询本人已提交反馈     |
+| 管理     | GET    | `/api/admin/overview`                            | 就绪状态与异常概览     |
+| 管理     | GET    | `/api/admin/users`                               | 筛选用户列表           |
+| 管理     | PATCH  | `/api/admin/users/{user_id}/status`              | 启用或停用用户         |
+| 管理     | GET    | `/api/admin/documents`                           | 脱敏查询文档与任务     |
+| 管理     | GET    | `/api/admin/feedbacks`                           | 筛选反馈和问答详情     |
 
 健康检查不调用在线 LLM 或 Embedding。`/health/live` 只要进程可响应就返回 `200`；`/health/ready` 和兼容路径 `/health` 会分别探测 MySQL 与 Chroma，任一不可用时返回 `503` 和具体 `checks`。Docker 后端健康检查使用 readiness。
 
@@ -367,6 +373,24 @@ GET /api/chunks/{chunk_id}
   "vector_id": "kb1-doc1-chunk3"
 }
 ```
+
+### 5.7 移动私人文档
+
+```text
+PATCH /api/documents/{document_id}/knowledge-base
+```
+
+请求：
+
+```json
+{
+  "knowledge_base_id": 2
+}
+```
+
+仅文档所有者可以移动 `completed` 状态的私人文档，源库和目标库都必须是当前用户的私人知识库；公共资料、跨用户目标和私人/公共范围互转返回 `403` 或 `409`。成功响应为更新后的 `DocumentRead`。
+
+后端在同一事务中更新 `documents`、`document_chunks` 和文档级知识地图归属，再更新 Chroma metadata。Chroma 或数据库提交失败时执行数据库回滚和向量 metadata 补偿；`qa_records` 与 `qa_sources` 历史快照不随文档移动而改变。
 
 ## 6. 检索接口
 
@@ -770,6 +794,14 @@ POST /api/qa-records/{qa_record_id}/feedback
 }
 ```
 
+查询本人对该回答的已提交反馈：
+
+```text
+GET /api/qa-records/{qa_record_id}/feedback
+```
+
+未提交时返回 `200` 和 `null`；已提交时返回同一 `FeedbackRead`。前端在回答结果和历史详情中据此恢复只读状态，评分和文字反馈提交后不可修改。
+
 后端只允许当前用户对本人问答记录提交反馈，并写入 `feedbacks` 表。同一用户对同一问答只能提交一次，重复提交返回 `409`；不存在或不属于当前用户的问答返回 `404`。
 
 响应：
@@ -791,7 +823,20 @@ POST /api/qa-records/{qa_record_id}/feedback
 GET /api/admin/feedbacks?rating=5&user_id=1&knowledge_base_id=1
 ```
 
-仅 `admin` 角色可以访问，普通用户返回 `403`。`rating`、`user_id` 和 `knowledge_base_id` 均为可选筛选条件，响应为真实持久化的 `FeedbackRead[]`，按创建时间和编号倒序排列。
+仅 `admin` 角色可以访问，普通用户返回 `403`。`rating`、`user_id` 和 `knowledge_base_id` 均为可选筛选条件，响应按创建时间和编号倒序排列。公共库反馈包含知识库名称、问题、回答和来源数量；私人库反馈设置 `content_redacted=true`，并将知识库名称、问题和回答置为 `null`，只展示用户主动提交的评分和文字说明。
+
+### 10.5 管理员中心
+
+```text
+GET   /api/admin/overview
+GET   /api/admin/users?query=&role=&status=
+PATCH /api/admin/users/{user_id}/status
+GET   /api/admin/documents?query=&owner_id=&knowledge_base_id=&parse_status=&visibility=
+```
+
+- `overview` 返回用户、文档、反馈统计，MySQL/Chroma 就绪状态，以及最近失败任务的安全摘要；私人文档、私人知识地图和出题任务的具体错误会被隐藏。
+- 用户状态请求体为 `{"status":"active"}` 或 `{"status":"disabled"}`。管理员不能停用自己或最后一个有效管理员；停用管理员时会锁定有效管理员集合，避免并发操作留下零个可用管理员。停用会递增目标用户的 `token_version`，使现有 JWT 失效。
+- 文档查询对公共资料返回文件名、知识库名称和管理权限；私人资料只返回脱敏编号、所有者和状态，具体错误使用固定脱敏文案，且 `can_manage=false`，不能借管理员接口读取或管理私人内容。
 
 ## 11. 字段一致性要求
 
@@ -811,8 +856,8 @@ GET /api/admin/feedbacks?rating=5&user_id=1&knowledge_base_id=1
 | `session_id`           | `quiz_sessions.id`                                                   | AI 出题临时会话编号                      |
 | `question_id`          | `quiz_questions.id`                                                  | 临时题目编号，随会话级联删除             |
 
-后端实现位于 `backend/app/api/routes.py`、`backend/app/services/` 和 `backend/app/schemas/`。当前已接入可撤销 JWT、唯一全局公共知识库、私人隔离、最小管理员权限、MySQL、Chroma、Embedding、在线 LLM、问答历史、反馈持久化、可靠文档任务、知识地图和 AI 出题。真实 Docker 已验证跨用户公共检索、来源查看、权限管理、同步删除和多知识库临时练习；固定测试集、模型质量与耗时记录仍需持续完善。
+后端实现位于 `backend/app/api/routes.py`、`backend/app/services/` 和 `backend/app/schemas/`。当前已接入可撤销 JWT、唯一全局公共知识库、私人隔离、管理员中心、MySQL、Chroma、Embedding、在线 LLM、问答历史、反馈闭环、可靠文档任务、私人文档迁移、知识地图和 AI 出题。真实 Docker 已验证默认私人库、公共上传确认、语义检索、反馈详情、管理员隐私边界，以及文档迁移后的 MySQL/Chroma/历史快照一致性；固定测试集、模型质量与耗时记录仍需持续完善。
 
 ---
 
-文档状态：已按 Issue #18 多知识库 AI 出题同步，更新时间为 2026-07-17。当前限制见 [已知问题与后续计划](已知问题与后续计划.md)。
+文档状态：已按 Issue #28 角色流程补全同步，更新时间为 2026-07-18。当前限制见 [已知问题与后续计划](已知问题与后续计划.md)。

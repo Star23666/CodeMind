@@ -59,6 +59,7 @@ import ChatPanel from "../components/chat/ChatPanel.vue";
 import KnowledgeBaseOptions from "../components/knowledge/KnowledgeBaseOptions.vue";
 import AppHeader from "../components/layout/AppHeader.vue";
 import { useUserStore } from "../stores/user";
+import { pickDefaultKnowledgeBase } from "../utils/knowledgeBases";
 
 const userStore = useUserStore();
 const router = useRouter();
@@ -88,7 +89,7 @@ async function checkHealth() {
 async function loadDefaultKnowledgeBase() {
   try {
     knowledgeBases.value = await listKnowledgeBases();
-    knowledgeBaseId.value = knowledgeBases.value[0]?.id ?? null;
+    knowledgeBaseId.value = pickDefaultKnowledgeBase(knowledgeBases.value)?.id ?? null;
   } catch {
     knowledgeBases.value = [];
     knowledgeBaseId.value = null;

@@ -39,6 +39,14 @@ class DocumentPermissionError(ValueError):
     pass
 
 
+class DocumentMoveError(ValueError):
+    pass
+
+
+class DocumentMoveConsistencyError(RuntimeError):
+    pass
+
+
 class DocumentService:
     allowed_file_types = {"pdf", "docx", "md", "markdown", "txt"}
 
@@ -282,6 +290,138 @@ class DocumentService:
         document_ids = [int(row["id"]) for row in rows]
         db.commit()
         return document_ids
+
+    def move_document(
+        self,
+        db: Session,
+        *,
+        document_id: int,
+        target_knowledge_base_id: int,
+        owner_id: int,
+    ) -> DocumentRead:
+        lock_clause = "" if db.bind is not None and db.bind.dialect.name == "sqlite" else " FOR UPDATE"
+        document = db.execute(
+            text(
+                """
+                SELECT d.id, d.knowledge_base_id, d.owner_id, d.file_name,
+                       d.file_type, d.file_size, d.parse_status, d.error_message,
+                       d.chunk_count, kb.visibility AS knowledge_base_visibility
+                FROM documents d
+                JOIN knowledge_bases kb ON kb.id = d.knowledge_base_id
+                WHERE d.id = :document_id AND d.owner_id = :owner_id
+                """ + lock_clause
+            ),
+            {"document_id": document_id, "owner_id": owner_id},
+        ).mappings().first()
+        if document is None:
+            raise ValueError("Document not found")
+        if document["parse_status"] != "completed":
+            raise DocumentMoveError("仅已完成处理的文档可以调整所属知识库。")
+        if document["knowledge_base_visibility"] != "private":
+            raise DocumentMoveError("公共资料不能直接移动；请删除后重新投稿并确认公开范围。")
+
+        target = knowledge_base_service.get_readable(db, target_knowledge_base_id, owner_id)
+        if target.visibility.value != "private" or target.owner_id != owner_id:
+            raise DocumentMoveError("目标必须是当前用户拥有的私人知识库。")
+        if int(document["knowledge_base_id"]) == target_knowledge_base_id:
+            return self.get_owned_document(db, document_id, owner_id)
+
+        chunks = db.execute(
+            text(
+                """
+                SELECT id, vector_id, chunk_index, page_no, start_offset, end_offset
+                FROM document_chunks
+                WHERE document_id = :document_id
+                ORDER BY chunk_index ASC
+                """
+            ),
+            {"document_id": document_id},
+        ).mappings().all()
+        vector_ids = [str(row["vector_id"]) for row in chunks]
+
+        def metadata_for(row, knowledge_base_id: int) -> dict[str, object]:
+            return {
+                "owner_id": int(document["owner_id"]),
+                "knowledge_base_id": knowledge_base_id,
+                "document_id": int(document_id),
+                "chunk_id": int(row["id"]),
+                "chunk_index": int(row["chunk_index"]),
+                "file_name": document["file_name"],
+                "page_no": int(row["page_no"]) if row["page_no"] is not None else 0,
+                "start_offset": int(row["start_offset"] or 0),
+                "end_offset": int(row["end_offset"] or 0),
+            }
+
+        source_knowledge_base_id = int(document["knowledge_base_id"])
+        old_metadatas = [metadata_for(row, source_knowledge_base_id) for row in chunks]
+        new_metadatas = [metadata_for(row, target_knowledge_base_id) for row in chunks]
+        vector_store = get_vector_store()
+        vector_update_attempted = False
+
+        try:
+            db.execute(
+                text(
+                    """
+                    UPDATE documents
+                    SET knowledge_base_id = :target_knowledge_base_id
+                    WHERE id = :document_id AND owner_id = :owner_id
+                    """
+                ),
+                {
+                    "target_knowledge_base_id": target_knowledge_base_id,
+                    "document_id": document_id,
+                    "owner_id": owner_id,
+                },
+            )
+            db.execute(
+                text(
+                    """
+                    UPDATE document_chunks
+                    SET knowledge_base_id = :target_knowledge_base_id
+                    WHERE document_id = :document_id
+                    """
+                ),
+                {
+                    "target_knowledge_base_id": target_knowledge_base_id,
+                    "document_id": document_id,
+                },
+            )
+            db.execute(
+                text(
+                    """
+                    UPDATE mind_map_histories
+                    SET knowledge_base_id = :target_knowledge_base_id
+                    WHERE document_id = :document_id AND user_id = :owner_id
+                    """
+                ),
+                {
+                    "target_knowledge_base_id": target_knowledge_base_id,
+                    "document_id": document_id,
+                    "owner_id": owner_id,
+                },
+            )
+            vector_update_attempted = True
+            vector_store.update_metadatas(ids=vector_ids, metadatas=new_metadatas)
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            if vector_update_attempted:
+                try:
+                    vector_store.update_metadatas(ids=vector_ids, metadatas=old_metadatas)
+                except Exception:
+                    logger.critical(
+                        "Failed to restore vector metadata after document move failure "
+                        "(document_id=%s, vector_count=%s)",
+                        document_id,
+                        len(vector_ids),
+                        exc_info=True,
+                    )
+                    raise DocumentMoveConsistencyError(
+                        "文档迁移失败，向量 metadata 回滚也失败，请立即检查服务日志。"
+                    ) from exc
+            raise DocumentMoveConsistencyError("文档迁移失败，数据库和向量数据已回滚。") from exc
+
+        return self.get_owned_document(db, document_id, owner_id)
 
     def delete_document(self, db: Session, *, document_id: int, owner_id: int) -> None:
         row = self._get_manageable_document_row(

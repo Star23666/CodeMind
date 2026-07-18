@@ -62,6 +62,7 @@
             </section>
 
             <SourceList :sources="selectedRecord.sources || []" />
+            <FeedbackPanel :qa-record-id="selectedRecord.id" />
           </template>
           <el-empty v-else description="选择左侧记录查看详情" />
         </article>
@@ -77,6 +78,7 @@ import { getHealth } from "../api/health";
 import { listKnowledgeBases } from "../api/knowledgeBases";
 import { getQaRecord, listQaRecords } from "../api/qaHistory";
 import SourceList from "../components/chat/SourceList.vue";
+import FeedbackPanel from "../components/chat/FeedbackPanel.vue";
 import KnowledgeBaseOptions from "../components/knowledge/KnowledgeBaseOptions.vue";
 import AppHeader from "../components/layout/AppHeader.vue";
 

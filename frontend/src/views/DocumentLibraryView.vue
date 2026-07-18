@@ -96,6 +96,12 @@
                   :disabled="['pending', 'processing'].includes(document.parse_status)"
                   @click="rebuild(document)"
                 >重建</el-button>
+                <el-button
+                  v-if="canMove(document)"
+                  link
+                  type="primary"
+                  @click="openMoveDialog(document)"
+                >移动</el-button>
                 <el-button link type="danger" @click="remove(document)">删除</el-button>
               </template>
               <span v-else class="management-note">仅上传者或管理员可管理</span>
@@ -111,6 +117,36 @@
         </div>
       </section>
     </main>
+
+    <el-dialog v-model="moveDialogVisible" title="调整文档所属知识库" width="min(520px, 92vw)">
+      <template v-if="movingDocument">
+        <el-alert
+          title="仅支持私人知识库之间移动"
+          description="移动会同步更新文档片段和向量 metadata；公共资料不能通过此操作改变公开范围。"
+          type="info"
+          show-icon
+          :closable="false"
+        />
+        <div class="move-form">
+          <strong>{{ movingDocument.file_name }}</strong>
+          <span>当前：{{ knowledgeBaseName(movingDocument.knowledge_base_id) }}</span>
+          <el-select v-model="moveTargetId" placeholder="选择目标私人知识库">
+            <el-option
+              v-for="base in moveTargets"
+              :key="base.id"
+              :label="base.name"
+              :value="base.id"
+            />
+          </el-select>
+        </div>
+      </template>
+      <template #footer>
+        <el-button @click="moveDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="moving" :disabled="!moveTargetId" @click="confirmMove">
+          确认移动
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -122,6 +158,7 @@ import {
   cancelDocumentProcessing,
   deleteDocument,
   listDocuments,
+  moveDocument,
   reindexDocument,
 } from "../api/documents";
 import { getHealth } from "../api/health";
@@ -136,6 +173,10 @@ const knowledgeBases = ref([]);
 const keyword = ref("");
 const selectedTypes = ref([]);
 const selectedBaseIds = ref([]);
+const moveDialogVisible = ref(false);
+const movingDocument = ref(null);
+const moveTargetId = ref(null);
+const moving = ref(false);
 
 const fileTypes = computed(() => [...new Set(documents.value.map((item) => item.file_type))].sort());
 const filteredDocuments = computed(() => {
@@ -147,6 +188,9 @@ const filteredDocuments = computed(() => {
     return matchesKeyword && matchesType && matchesBase;
   });
 });
+const moveTargets = computed(() => knowledgeBases.value.filter(
+  (base) => base.visibility !== "public" && base.id !== movingDocument.value?.knowledge_base_id,
+));
 
 onMounted(() => {
   checkHealth();
@@ -234,6 +278,42 @@ async function remove(document) {
   }
 }
 
+function canMove(document) {
+  return document.can_manage
+    && document.knowledge_base_visibility !== "public"
+    && document.parse_status === "completed"
+    && knowledgeBases.value.some(
+      (base) => base.visibility !== "public" && base.id !== document.knowledge_base_id,
+    );
+}
+
+function openMoveDialog(document) {
+  movingDocument.value = document;
+  moveTargetId.value = moveTargets.value[0]?.id ?? null;
+  moveDialogVisible.value = true;
+}
+
+async function confirmMove() {
+  if (!movingDocument.value || !moveTargetId.value) return;
+  const target = knowledgeBases.value.find((base) => base.id === moveTargetId.value);
+  try {
+    await ElMessageBox.confirm(
+      `确定将“${movingDocument.value.file_name}”移动到“${target?.name || "目标知识库"}”吗？`,
+      "确认移动文档",
+      { confirmButtonText: "确认移动", cancelButtonText: "取消", type: "warning" },
+    );
+    moving.value = true;
+    await moveDocument(movingDocument.value.id, moveTargetId.value);
+    moveDialogVisible.value = false;
+    ElMessage.success("文档及向量索引已移动。 ");
+    await loadData();
+  } catch (error) {
+    if (error !== "cancel" && error !== "close") ElMessage.error(error.message || "移动失败。 ");
+  } finally {
+    moving.value = false;
+  }
+}
+
 function goUpload() { router.push({ name: "documents" }); }
 function fileBadge(type) { return (type || "FILE").slice(0, 4).toUpperCase(); }
 function typeLabel(type) { return ({ md: "Markdown", markdown: "Markdown", txt: "TXT", pdf: "PDF", docx: "Word" })[type] || String(type).toUpperCase(); }
@@ -274,6 +354,9 @@ function formatSize(size) {
 .file-copy span, .file-copy small, .file-status span { color: var(--cm-muted); font-size: 13px; }
 .file-meta { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .management-note { color: var(--cm-muted); font-size: 12px; }
+.move-form { display: grid; gap: 12px; margin-top: 18px; }
+.move-form strong { color: var(--cm-heading); }
+.move-form span { color: var(--cm-muted); font-size: 13px; }
 .file-copy .error-message { color: var(--cm-danger); }
 .file-status { min-width: 100px; flex-direction: column; gap: 6px; }
 .row-actions { flex-wrap: wrap; justify-content: flex-end; }

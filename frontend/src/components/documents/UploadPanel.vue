@@ -7,7 +7,17 @@
       </div>
     </div>
 
+    <el-alert
+      v-if="knowledgeBase?.visibility === 'public'"
+      title="当前目标是公共知识库"
+      :description="`上传到“${knowledgeBase.name}”后，所有登录用户都可以检索和查看这份资料。`"
+      type="warning"
+      show-icon
+      :closable="false"
+    />
+
     <el-upload
+      ref="uploadRef"
       drag
       :http-request="handleUpload"
       :show-file-list="true"
@@ -40,12 +50,17 @@ const props = defineProps({
     type: Number,
     default: null,
   },
+  knowledgeBase: {
+    type: Object,
+    default: null,
+  },
 });
 
 const router = useRouter();
 const userStore = useUserStore();
 const emit = defineEmits(["uploaded"]);
 const lastDocument = ref(null);
+const uploadRef = ref(null);
 
 async function handleUpload(options) {
   if (!userStore.isLoggedIn) {
@@ -71,6 +86,23 @@ async function handleUpload(options) {
       // 用户取消后留在当前页面。
     }
     return;
+  }
+
+  if (props.knowledgeBase?.visibility === "public") {
+    try {
+      await ElMessageBox.confirm(
+        `文件“${options.file.name}”将上传到公共知识库“${props.knowledgeBase.name}”，所有登录用户都可以检索和查看。确定继续吗？`,
+        "确认公开上传",
+        {
+          confirmButtonText: "确认公开上传",
+          cancelButtonText: "取消",
+          type: "warning",
+        },
+      );
+    } catch {
+      uploadRef.value?.handleRemove(options.file);
+      return;
+    }
   }
 
   try {

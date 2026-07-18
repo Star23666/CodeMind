@@ -16,12 +16,14 @@
         检索问题：{{ rewrittenQuestion }}
       </p>
       <SourceList :sources="sources" />
+      <FeedbackPanel v-if="qaRecordId && answer && !error" :qa-record-id="qaRecordId" />
     </template>
   </section>
 </template>
 
 <script setup>
 import SourceList from "./SourceList.vue";
+import FeedbackPanel from "./FeedbackPanel.vue";
 
 defineProps({
   answer: {

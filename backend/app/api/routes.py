@@ -9,9 +9,15 @@ from app.api.dependencies import get_current_user, require_admin
 from app.db.session import get_db
 from app.schemas.contracts import (
     ActionResponse,
+    AdminDocumentRead,
+    AdminFeedbackRead,
+    AdminOverviewRead,
+    AdminUserRead,
+    AdminUserStatusUpdate,
     ChatRequest,
     ChatResponse,
     DocumentChunkRead,
+    DocumentMoveRequest,
     DocumentRead,
     FeedbackCreate,
     FeedbackRead,
@@ -53,9 +59,12 @@ from app.services.auth_service import (
     RegistrationConflictError,
     auth_service,
 )
+from app.services.admin_service import AdminOperationError, admin_service
 from app.services.document_job_service import document_job_service
 from app.services.document_service import (
     DocumentBusyError,
+    DocumentMoveConsistencyError,
+    DocumentMoveError,
     DocumentNotProcessingError,
     DocumentPermissionError,
     document_service,
@@ -476,6 +485,28 @@ async def cancel_document_processing(
     return ActionResponse(status="cancelled", message=f"Document {document_id} processing was cancelled.")
 
 
+@router.patch("/documents/{document_id}/knowledge-base", response_model=DocumentRead)
+async def move_document(
+    document_id: int,
+    payload: DocumentMoveRequest,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> DocumentRead:
+    try:
+        return document_service.move_document(
+            db,
+            document_id=document_id,
+            target_knowledge_base_id=payload.target_knowledge_base_id,
+            owner_id=current_user.id,
+        )
+    except DocumentMoveError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except DocumentMoveConsistencyError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档或目标知识库不存在。") from exc
+
+
 @router.get("/documents/{document_id}/chunks", response_model=list[DocumentChunkRead])
 async def list_document_chunks(
     document_id: int,
@@ -883,14 +914,92 @@ async def submit_feedback(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="问答记录不存在。") from exc
 
 
-@router.get("/admin/feedbacks", response_model=list[FeedbackRead])
+@router.get("/qa-records/{qa_record_id}/feedback", response_model=FeedbackRead | None)
+async def get_feedback(
+    qa_record_id: int,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FeedbackRead | None:
+    try:
+        return feedback_service.get_for_record(
+            db,
+            qa_record_id=qa_record_id,
+            user_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="问答记录不存在。") from exc
+
+
+@router.get("/admin/overview", response_model=AdminOverviewRead)
+async def admin_overview(
+    admin_user: UserRead = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> AdminOverviewRead:
+    return admin_service.overview(db)
+
+
+@router.get("/admin/users", response_model=list[AdminUserRead])
+async def list_admin_users(
+    query: str | None = Query(default=None, max_length=120),
+    role: str | None = Query(default=None, pattern="^(user|admin)$"),
+    user_status: str | None = Query(default=None, alias="status", pattern="^(active|disabled)$"),
+    admin_user: UserRead = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> list[AdminUserRead]:
+    return admin_service.list_users(db, query=query, role=role, status=user_status)
+
+
+@router.patch("/admin/users/{user_id}/status", response_model=AdminUserRead)
+async def update_admin_user_status(
+    user_id: int,
+    payload: AdminUserStatusUpdate,
+    admin_user: UserRead = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> AdminUserRead:
+    try:
+        return admin_service.update_user_status(
+            db,
+            target_user_id=user_id,
+            status=payload.status,
+            admin_user_id=admin_user.id,
+        )
+    except AdminOperationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在。") from exc
+
+
+@router.get("/admin/documents", response_model=list[AdminDocumentRead])
+async def list_admin_documents(
+    query: str | None = Query(default=None, max_length=120),
+    owner_id: int | None = Query(default=None, ge=1),
+    knowledge_base_id: int | None = Query(default=None, ge=1),
+    parse_status: str | None = Query(
+        default=None,
+        pattern="^(pending|processing|completed|failed|cancelled)$",
+    ),
+    visibility: str | None = Query(default=None, pattern="^(private|public)$"),
+    admin_user: UserRead = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> list[AdminDocumentRead]:
+    return admin_service.list_documents(
+        db,
+        query=query,
+        owner_id=owner_id,
+        knowledge_base_id=knowledge_base_id,
+        parse_status=parse_status,
+        visibility=visibility,
+    )
+
+
+@router.get("/admin/feedbacks", response_model=list[AdminFeedbackRead])
 async def list_feedbacks(
     rating: int | None = Query(default=None, ge=1, le=5),
     user_id: int | None = Query(default=None, ge=1),
     knowledge_base_id: int | None = Query(default=None, ge=1),
     admin_user: UserRead = Depends(require_admin),
     db: Session = Depends(get_db),
-) -> list[FeedbackRead]:
+) -> list[AdminFeedbackRead]:
     return feedback_service.list_for_admin(
         db,
         rating=rating,

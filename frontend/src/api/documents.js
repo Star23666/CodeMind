@@ -44,6 +44,12 @@ export function cancelDocumentProcessing(documentId) {
   return request.post(`/documents/${documentId}/cancel`);
 }
 
+export function moveDocument(documentId, targetKnowledgeBaseId) {
+  return request.patch(`/documents/${documentId}/knowledge-base`, {
+    target_knowledge_base_id: targetKnowledgeBaseId,
+  });
+}
+
 export function listDocumentChunks(documentId) {
   return request.get(`/documents/${documentId}/chunks`);
 }

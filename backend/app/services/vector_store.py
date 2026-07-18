@@ -54,6 +54,31 @@ class VectorStore:
         if ids:
             self.collection.delete(ids=ids)
 
+    def update_metadatas(
+        self,
+        *,
+        ids: list[str],
+        metadatas: list[dict[str, Any]],
+    ) -> None:
+        if not ids:
+            return
+        if len(ids) != len(metadatas):
+            raise ValueError("向量编号和 metadata 数量不一致。")
+        self.collection.update(ids=ids, metadatas=metadatas)
+        result = self.collection.get(ids=ids, include=["metadatas"])
+        stored = {
+            vector_id: dict(metadata or {})
+            for vector_id, metadata in zip(
+                result.get("ids", []),
+                result.get("metadatas", []) or [],
+                strict=False,
+            )
+        }
+        for vector_id, expected in zip(ids, metadatas, strict=True):
+            actual = stored.get(vector_id)
+            if actual is None or any(actual.get(key) != value for key, value in expected.items()):
+                raise RuntimeError(f"向量 metadata 更新后校验失败：{vector_id}")
+
     def search(
         self,
         *,

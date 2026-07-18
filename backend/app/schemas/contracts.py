@@ -239,6 +239,10 @@ class DocumentRead(BaseModel):
     can_manage: bool = False
 
 
+class DocumentMoveRequest(BaseModel):
+    target_knowledge_base_id: int = Field(..., ge=1)
+
+
 class DocumentChunkRead(BaseModel):
     id: int
     document_id: int
@@ -430,7 +434,15 @@ class QaRecordRead(BaseModel):
 
 class FeedbackCreate(BaseModel):
     rating: int = Field(..., ge=1, le=5)
-    comment: str | None = None
+    comment: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("comment", mode="before")
+    @classmethod
+    def normalize_comment(cls, value: str | None) -> str | None:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        return normalized or None
 
 
 class FeedbackRead(BaseModel):
@@ -440,6 +452,68 @@ class FeedbackRead(BaseModel):
     rating: int
     comment: str | None = None
     created_at: datetime | None = None
+
+
+class AdminFeedbackRead(FeedbackRead):
+    username: str
+    knowledge_base_id: int
+    knowledge_base_name: str | None = None
+    knowledge_base_visibility: Visibility
+    question: str | None = None
+    answer: str | None = None
+    content_redacted: bool = False
+    source_count: int = 0
+    qa_created_at: datetime | None = None
+
+
+class AdminUserRead(BaseModel):
+    id: int
+    username: str
+    email: str
+    role: UserRole
+    status: UserStatus
+    created_at: datetime | None = None
+
+
+class AdminUserStatusUpdate(BaseModel):
+    status: UserStatus
+
+
+class AdminDocumentRead(BaseModel):
+    id: int
+    knowledge_base_id: int
+    knowledge_base_name: str | None = None
+    owner_id: int
+    uploader_username: str
+    file_name: str | None = None
+    file_type: str
+    file_size: int = 0
+    parse_status: ParseStatus
+    error_message: str | None = None
+    chunk_count: int = 0
+    knowledge_base_visibility: Visibility
+    can_manage: bool = False
+    created_at: datetime | None = None
+
+
+class AdminAnomalyRead(BaseModel):
+    resource_type: str
+    resource_id: str
+    status: str
+    message: str
+    user_id: int | None = None
+    knowledge_base_id: int | None = None
+    created_at: datetime | None = None
+
+
+class AdminOverviewRead(BaseModel):
+    users_total: int = 0
+    users_active: int = 0
+    documents_total: int = 0
+    documents_failed: int = 0
+    feedbacks_total: int = 0
+    readiness: dict[str, object] = Field(default_factory=dict)
+    recent_anomalies: list[AdminAnomalyRead] = Field(default_factory=list)
 
 
 class ActionResponse(BaseModel):
