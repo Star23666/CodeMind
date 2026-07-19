@@ -1,11 +1,7 @@
 <template>
   <header class="app-header">
     <RouterLink class="brand" to="/" aria-label="CodeMind 首页">
-      <img
-        :class="['brand-logo', { 'brand-logo--dark': isDark }]"
-        :src="codeMindLogo"
-        alt="CodeMind"
-      />
+      <img class="brand-logo" :src="codeMindLogo" alt="CodeMind" />
     </RouterLink>
 
     <el-button
@@ -26,12 +22,12 @@
       aria-label="主导航"
     >
       <RouterLink to="/" @click="mobileMenuOpen = false">AI 问答</RouterLink>
+      <RouterLink to="/history" @click="mobileMenuOpen = false">提问历史</RouterLink>
       <RouterLink to="/documents" @click="mobileMenuOpen = false">文档上传</RouterLink>
       <RouterLink to="/search" @click="mobileMenuOpen = false">语义检索</RouterLink>
       <RouterLink to="/mind-map" @click="mobileMenuOpen = false">知识地图</RouterLink>
       <RouterLink to="/quiz" @click="mobileMenuOpen = false">AI 出题</RouterLink>
       <RouterLink to="/library" @click="mobileMenuOpen = false">文档库</RouterLink>
-      <RouterLink to="/history" @click="mobileMenuOpen = false">问答历史</RouterLink>
       <RouterLink to="/me" @click="mobileMenuOpen = false">我的</RouterLink>
       <RouterLink v-if="userStore.user?.role === 'admin'" to="/admin" @click="mobileMenuOpen = false">
         管理后台
@@ -39,9 +35,16 @@
     </nav>
 
     <div class="actions">
-      <el-tag v-if="showHealth" :type="healthOnline ? 'success' : 'info'" effect="light" round>
-        {{ healthOnline ? "后端在线" : "后端未连接" }}
-      </el-tag>
+      <span
+        v-if="showHealth"
+        class="health-indicator"
+        :class="healthOnline ? 'health-indicator--online' : 'health-indicator--error'"
+        role="status"
+        :aria-label="healthOnline ? '后端在线' : '后端服务异常'"
+        :title="healthOnline ? '后端在线' : '后端服务异常'"
+      >
+        <span class="health-dot"></span>
+      </span>
 
       <template v-if="userStore.isLoggedIn">
         <RouterLink class="user-link" to="/me">{{ userStore.displayName }}</RouterLink>
@@ -49,24 +52,17 @@
       </template>
       <el-button v-else type="primary" plain @click="goLogin">登录</el-button>
 
-      <el-button
-        :aria-label="isDark ? '切换到浅色主题' : '切换到深色主题'"
-        :icon="isDark ? Sunny : Moon"
-        circle
-        @click="toggleTheme"
-      />
     </div>
   </header>
 </template>
 
 <script setup>
-import { Close, Menu, Moon, Sunny } from "@element-plus/icons-vue";
+import { Close, Menu } from "@element-plus/icons-vue";
 import { ElMessageBox } from "element-plus";
 import { ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { logoutUser } from "../../api/auth";
 import codeMindLogo from "../../assets/codemind-wordmark.png";
-import { useTheme } from "../../composables/useTheme";
 import { useUserStore } from "../../stores/user";
 
 defineProps({
@@ -83,7 +79,6 @@ defineProps({
 const route = useRoute();
 const router = useRouter();
 const userStore = useUserStore();
-const { isDark, toggleTheme } = useTheme();
 const mobileMenuOpen = ref(false);
 
 function goLogin() {
@@ -122,20 +117,22 @@ async function logout() {
 <style scoped>
 .app-header {
   position: sticky;
-  top: 16px;
-  z-index: 20;
+  top: 18px;
+  z-index: 30;
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 20px;
-  width: min(1400px, calc(100% - 32px));
+  gap: clamp(24px, 2.4vw, 42px);
+  width: min(1460px, calc(100% - 40px));
   margin: 0 auto;
-  padding: 12px 14px;
-  border: 1px solid var(--cm-border);
-  border-radius: var(--cm-radius);
-  background: color-mix(in srgb, var(--cm-surface) 88%, transparent);
-  box-shadow: var(--cm-shadow);
-  backdrop-filter: blur(18px);
+  padding: 14px 20px;
+  border: 1px solid rgba(183, 204, 230, 0.5);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow:
+    0 18px 50px rgba(70, 115, 170, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(24px) saturate(135%);
 }
 
 .brand,
@@ -165,69 +162,113 @@ async function logout() {
   transform: translateY(-1px);
 }
 
-.brand-logo--dark {
-  filter: brightness(0) invert(1) drop-shadow(0 0 8px rgba(56, 189, 248, 0.25));
-}
-
-.brand:hover .brand-logo--dark {
-  filter: brightness(0) invert(1) drop-shadow(0 5px 12px rgba(56, 189, 248, 0.34));
-}
-
 .nav-links {
   justify-content: center;
-  gap: 6px;
-  padding: 4px;
-  border: 1px solid var(--cm-border);
-  border-radius: 999px;
-  background: var(--cm-surface-soft);
+  gap: clamp(20px, 1.65vw, 30px);
+  min-width: 0;
 }
 
 .nav-links a {
-  border-radius: 999px;
-  padding: 8px 14px;
-  color: var(--cm-muted);
+  position: relative;
+  flex: 0 0 auto;
+  padding: 10px 1px 9px;
+  color: #526071;
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 650;
+  white-space: nowrap;
   transition:
-    color 0.18s ease,
-    background 0.18s ease;
+    color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.nav-links a::after {
+  position: absolute;
+  right: 0;
+  bottom: 2px;
+  left: 0;
+  height: 1.5px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #1f63d7, #5cb8ff);
+  content: "";
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .nav-links a:hover,
 .nav-links a.router-link-active {
-  color: var(--cm-primary);
-  background: var(--cm-primary-soft);
+  color: #10223e;
+}
+
+.nav-links a:hover {
+  transform: translateY(-1px);
+}
+
+.nav-links a:hover::after,
+.nav-links a.router-link-active::after {
+  transform: scaleX(1);
 }
 
 .actions {
   justify-content: flex-end;
   gap: 10px;
+  color: #526071;
+  white-space: nowrap;
+}
+
+.health-indicator {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+}
+
+.health-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 13%, transparent);
+}
+
+.health-indicator--online {
+  color: #31a36b;
+}
+
+.health-indicator--error {
+  color: #df5b5b;
 }
 
 .user-link {
   max-width: 140px;
   overflow: hidden;
-  color: var(--cm-heading);
+  color: #172844;
   font-size: 14px;
   font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-@media (max-width: 1360px) {
+@media (max-width: 1240px) {
   .app-header {
     grid-template-columns: minmax(0, 1fr) auto;
-    top: 8px;
+    top: 10px;
+    gap: 10px 24px;
   }
 
   .nav-links {
     grid-column: 1 / -1;
     justify-content: flex-start;
+    gap: 28px;
+    padding: 5px 2px 0;
     overflow-x: auto;
+    scrollbar-width: none;
   }
 
-  .actions {
-    flex-wrap: wrap;
+  .nav-links::-webkit-scrollbar {
+    display: none;
   }
 }
 
@@ -238,6 +279,8 @@ async function logout() {
 @media (max-width: 700px) {
   .app-header {
     grid-template-columns: minmax(0, 1fr) auto;
+    width: min(100% - 20px, 1460px);
+    padding: 12px 14px;
   }
 
   .mobile-menu-toggle {
@@ -248,8 +291,12 @@ async function logout() {
     display: none;
     grid-column: 1 / -1;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px 16px;
     width: 100%;
-    border-radius: 8px;
+    padding: 12px;
+    border: 1px solid rgba(183, 204, 230, 0.52);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.92);
     overflow: visible;
   }
 
@@ -264,6 +311,7 @@ async function logout() {
   .actions {
     grid-column: 1 / -1;
     justify-content: flex-start;
+    flex-wrap: wrap;
   }
 }
 

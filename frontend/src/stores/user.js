@@ -1,4 +1,5 @@
 import { reactive } from "vue";
+import { clearChatResultState } from "../utils/chatResultState";
 
 export const TOKEN_KEY = "codemind_token";
 export const USER_KEY = "codemind_user";
@@ -48,6 +49,7 @@ const userStore = reactive({
     }
   },
   clearAuth() {
+    clearChatResultState(this.userId);
     this.token = "";
     this.user = null;
     localStorage.removeItem(TOKEN_KEY);

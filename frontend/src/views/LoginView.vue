@@ -43,6 +43,7 @@ import { useRoute, useRouter } from "vue-router";
 import { getCurrentUser, loginUser } from "../api/auth";
 import AppHeader from "../components/layout/AppHeader.vue";
 import { useUserStore } from "../stores/user";
+import { clearChatResultState } from "../utils/chatResultState";
 
 const route = useRoute();
 const router = useRouter();
@@ -70,6 +71,7 @@ async function submit() {
 
     userStore.setAuth({ token: tokenData.access_token, user: null });
     userStore.updateUser(await getCurrentUser());
+    clearChatResultState(userStore.userId);
     ElMessage.success("登录成功。");
     router.replace(resolveRedirect());
   } catch (error) {

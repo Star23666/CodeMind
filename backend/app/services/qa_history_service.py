@@ -1,4 +1,4 @@
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.schemas.contracts import (
@@ -10,6 +10,8 @@ from app.schemas.contracts import (
 
 
 class QaHistoryService:
+    MAX_RECORDS_PER_USER = 50
+
     async def save_qa_record(
         self,
         *,
@@ -74,6 +76,7 @@ class QaHistoryService:
                     },
                 )
 
+            self._trim_user_history(db, user_id=user_id)
             db.commit()
             return qa_record_id
         except Exception:
@@ -86,6 +89,7 @@ class QaHistoryService:
         *,
         user_id: int,
         knowledge_base_id: int | None = None,
+        limit: int = MAX_RECORDS_PER_USER,
     ) -> list[QaRecordRead]:
         conditions = ["user_id = :user_id"]
         params: dict[str, object] = {"user_id": user_id}
@@ -102,11 +106,67 @@ class QaHistoryService:
                 FROM qa_records
                 WHERE {' AND '.join(conditions)}
                 ORDER BY created_at DESC, id DESC
+                LIMIT :limit
                 """
             ),
-            params,
+            {**params, "limit": limit},
         ).mappings()
         return [self._to_record(row) for row in rows]
+
+    def delete_qa_record(
+        self,
+        db: Session,
+        *,
+        qa_record_id: int,
+        user_id: int,
+    ) -> None:
+        try:
+            result = db.execute(
+                text(
+                    """
+                    DELETE FROM qa_records
+                    WHERE id = :qa_record_id AND user_id = :user_id
+                    """
+                ),
+                {"qa_record_id": qa_record_id, "user_id": user_id},
+            )
+            if result.rowcount == 0:
+                raise ValueError("QA record not found")
+            db.commit()
+        except ValueError:
+            db.rollback()
+            raise
+        except Exception:
+            db.rollback()
+            raise
+
+    def delete_qa_records(
+        self,
+        db: Session,
+        *,
+        qa_record_ids: list[int],
+        user_id: int,
+    ) -> int:
+        try:
+            statement = text(
+                """
+                DELETE FROM qa_records
+                WHERE user_id = :user_id
+                  AND id IN :qa_record_ids
+                """
+            ).bindparams(bindparam("qa_record_ids", expanding=True))
+            result = db.execute(
+                statement,
+                {
+                    "user_id": user_id,
+                    "qa_record_ids": qa_record_ids,
+                },
+            )
+            db.commit()
+            return int(result.rowcount or 0)
+        except Exception:
+            db.rollback()
+            raise
 
     def get_qa_record(
         self,
@@ -183,6 +243,27 @@ class QaHistoryService:
             score=float(row["score"]) if row["score"] is not None else None,
             source_text=row["source_text"],
             jump_url=jump_url,
+        )
+
+    def _trim_user_history(self, db: Session, *, user_id: int) -> None:
+        db.execute(
+            text(
+                """
+                DELETE FROM qa_records
+                WHERE user_id = :user_id
+                  AND id NOT IN (
+                    SELECT id
+                    FROM (
+                      SELECT id
+                      FROM qa_records
+                      WHERE user_id = :user_id
+                      ORDER BY created_at DESC, id DESC
+                      LIMIT 50
+                    ) AS recent_records
+                  )
+                """
+            ),
+            {"user_id": user_id},
         )
 
 

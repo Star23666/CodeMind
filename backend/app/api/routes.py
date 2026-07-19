@@ -40,6 +40,7 @@ from app.schemas.contracts import (
     MindMapQuestionRequest,
     MindMapQuestionResponse,
     MindMapResponse,
+    QaRecordBatchDeleteRequest,
     QaRecordRead,
     SearchRequest,
     SearchResponse,
@@ -863,6 +864,7 @@ async def chat_stream(
 @router.get("/qa-records", response_model=list[QaRecordRead])
 async def list_qa_records(
     knowledge_base_id: int | None = None,
+    limit: int = Query(default=50, ge=1, le=50),
     current_user: UserRead = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[QaRecordRead]:
@@ -870,7 +872,26 @@ async def list_qa_records(
         db,
         user_id=current_user.id,
         knowledge_base_id=knowledge_base_id,
+        limit=limit,
     )
+
+
+@router.delete("/qa-records", response_model=ActionResponse)
+async def delete_qa_records(
+    payload: QaRecordBatchDeleteRequest,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ActionResponse:
+    deleted_count = qa_history_service.delete_qa_records(
+        db,
+        qa_record_ids=payload.qa_record_ids,
+        user_id=current_user.id,
+    )
+    return ActionResponse(
+        status="accepted",
+        message=f"已删除 {deleted_count} 条问答记录。",
+    )
+
 
 @router.get("/qa-records/{qa_record_id}", response_model=QaRecordRead)
 async def get_qa_record(
@@ -889,6 +910,27 @@ async def get_qa_record(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="问答记录不存在。",
         ) from exc
+
+
+@router.delete("/qa-records/{qa_record_id}", response_model=ActionResponse)
+async def delete_qa_record(
+    qa_record_id: int,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ActionResponse:
+    try:
+        qa_history_service.delete_qa_record(
+            db,
+            qa_record_id=qa_record_id,
+            user_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="问答记录不存在。",
+        ) from exc
+    return ActionResponse(status="accepted", message="问答记录已删除。")
+
 
 @router.post(
     "/qa-records/{qa_record_id}/feedback",

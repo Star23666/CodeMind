@@ -1,77 +1,61 @@
 <template>
   <div class="home-view">
+    <HomeParticleBackground />
     <AppHeader :health-online="healthOnline" />
 
-    <main class="page">
-      <section class="hero">
-        <el-tag effect="plain">个人与公共知识库 AI</el-tag>
-        <h1>让每一份资料，都成为随时可问的知识</h1>
-        <p>
-          上传个人资料，或与大家共同完善公共知识库。CodeMind 从资料中寻找依据，
-          为你生成清晰、可信、可追溯的回答。
-        </p>
-      </section>
-
-      <section v-if="userStore.isLoggedIn" class="knowledge-picker">
-        <div>
-          <p>当前知识库</p>
-          <div class="current-title">
-            <h2>{{ currentKnowledgeBase?.name || "尚未创建知识库" }}</h2>
-            <el-tag v-if="currentKnowledgeBase?.visibility === 'public'" size="small" effect="plain">公共</el-tag>
-          </div>
-        </div>
-        <el-select
-          v-model="knowledgeBaseId"
-          placeholder="请选择知识库"
-          :disabled="!knowledgeBases.length"
-          class="knowledge-select"
-        >
-          <KnowledgeBaseOptions :bases="knowledgeBases" />
-        </el-select>
-        <el-button
-          v-if="knowledgeBases.length"
-          type="primary"
-          plain
-          :disabled="!knowledgeBaseId"
-          @click="openMindMap"
-        >
-          打开知识地图
-        </el-button>
-        <el-button v-if="!knowledgeBases.length" type="primary" plain @click="goCreateKnowledgeBase">
-          创建知识库
-        </el-button>
-      </section>
-
+    <main class="home-main">
       <ChatPanel
         :knowledge-base-id="knowledgeBaseId"
-        :knowledge-base-name="currentKnowledgeBase?.name || ''"
-      />
+        :knowledge-bases="knowledgeBases"
+        :initial-question="initialQuestion"
+        @update:knowledge-base-id="updateKnowledgeBase"
+      >
+        <template #intro>
+          <section class="hero-copy">
+            <p class="eyebrow">CodeMind · Knowledge with evidence</p>
+            <h1>让知识可问，<br />让每个答案都有依据</h1>
+          </section>
+        </template>
+      </ChatPanel>
     </main>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from "vue";
-import { useRouter } from "vue-router";
+import { nextTick, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { getHealth } from "../api/health";
 import { listKnowledgeBases } from "../api/knowledgeBases";
 import ChatPanel from "../components/chat/ChatPanel.vue";
-import KnowledgeBaseOptions from "../components/knowledge/KnowledgeBaseOptions.vue";
+import HomeParticleBackground from "../components/home/HomeParticleBackground.vue";
 import AppHeader from "../components/layout/AppHeader.vue";
 import { useUserStore } from "../stores/user";
 import { pickDefaultKnowledgeBase } from "../utils/knowledgeBases";
 
 const userStore = useUserStore();
+const route = useRoute();
 const router = useRouter();
 const healthOnline = ref(false);
 const knowledgeBases = ref([]);
 const knowledgeBaseId = ref(null);
-const currentKnowledgeBase = computed(() =>
-  knowledgeBases.value.find((base) => base.id === knowledgeBaseId.value),
+const initialQuestion = ref("");
+
+watch(
+  () => route.query.question,
+  async (nextQuestion) => {
+    if (typeof nextQuestion !== "string" || !nextQuestion.trim()) return;
+    initialQuestion.value = nextQuestion.slice(0, 500);
+    await nextTick();
+    const nextQuery = { ...route.query };
+    delete nextQuery.question;
+    router.replace({ query: nextQuery });
+  },
+  { immediate: true },
 );
 
 onMounted(() => {
   checkHealth();
+
   if (userStore.isLoggedIn) {
     loadDefaultKnowledgeBase();
   }
@@ -96,117 +80,79 @@ async function loadDefaultKnowledgeBase() {
   }
 }
 
-function goCreateKnowledgeBase() {
-  router.push({ name: "me" });
-}
-
-function openMindMap() {
-  router.push({
-    name: "mind-map",
-    query: { knowledge_base_id: knowledgeBaseId.value },
-  });
+function updateKnowledgeBase(nextId) {
+  knowledgeBaseId.value = nextId;
 }
 </script>
 
 <style scoped>
 .home-view {
-  min-height: 100vh;
-  padding: 16px 0 56px;
+  position: relative;
+  min-height: 100svh;
+  overflow-x: clip;
+  padding: 16px 0 0;
+  color: #18263a;
 }
 
-.page {
+.home-main {
+  position: relative;
+  z-index: 1;
   display: grid;
-  gap: 22px;
-  width: min(920px, calc(100% - 32px));
-  margin: 56px auto 0;
+  width: min(1080px, calc(100% - 40px));
+  min-height: calc(100svh - 106px);
+  margin: 0 auto;
+  padding: 14px 0 24px;
+  place-items: center;
 }
 
-.hero {
+.hero-copy {
   display: grid;
-  gap: 12px;
+  justify-items: center;
+  gap: 13px;
+  width: min(890px, 100%);
   text-align: center;
 }
 
-.knowledge-picker {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 18px 20px;
-  border: 1px solid var(--cm-border);
-  border-radius: var(--cm-radius);
-  background: var(--cm-surface);
-  box-shadow: var(--cm-shadow);
-}
-
-.knowledge-picker > div {
-  min-width: 0;
-  flex: 1;
-}
-
-.knowledge-picker p {
-  width: auto;
-  margin: 0 0 5px;
-  color: var(--cm-primary);
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.knowledge-picker h2 {
+.eyebrow {
   margin: 0;
-  overflow: hidden;
-  color: var(--cm-heading);
-  font-size: 20px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.current-title {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-}
-
-.knowledge-select {
-  width: min(280px, 100%);
-}
-
-.hero :deep(.el-tag) {
-  justify-self: center;
+  color: #2b6fca;
+  font-family: "DIN Alternate", "Avenir Next", Inter, "PingFang SC", sans-serif;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
 }
 
 h1 {
   margin: 0;
-  color: var(--cm-heading);
-  font-size: clamp(32px, 5vw, 54px);
-  line-height: 1.08;
+  color: #11213a;
+  font-family: "Source Han Serif SC", "Songti SC", "STSong", serif;
+  font-size: clamp(43px, 5.8vw, 68px);
+  font-weight: 600;
+  letter-spacing: -0.045em;
+  line-height: 1.12;
+  text-wrap: balance;
 }
 
-p {
-  width: min(680px, 100%);
-  margin: 0 auto;
-  color: var(--cm-muted);
-  font-size: 16px;
-  line-height: 1.8;
-}
-
-@media (max-width: 640px) {
+@media (max-width: 700px) {
   .home-view {
     padding-top: 8px;
   }
 
-  .page {
-    width: min(100% - 20px, 920px);
-    margin-top: 32px;
+  .home-main {
+    width: min(100% - 24px, 1080px);
+    min-height: calc(100svh - 88px);
+    padding: 26px 0 42px;
   }
 
-  .knowledge-picker {
-    align-items: stretch;
-    flex-direction: column;
+  .hero-copy {
+    gap: 14px;
   }
 
-  .knowledge-select {
-    width: 100%;
+  h1 {
+    font-size: clamp(39px, 12vw, 56px);
+    letter-spacing: -0.035em;
   }
+
 }
 </style>
