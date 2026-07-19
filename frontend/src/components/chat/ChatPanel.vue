@@ -206,7 +206,6 @@
           :status="answerStatus"
           :qa-record-id="qaRecordId"
           :sources="sources"
-          :knowledge-base-name="currentKnowledgeBase?.name"
           :loading="loading"
           :error="hasError"
         />

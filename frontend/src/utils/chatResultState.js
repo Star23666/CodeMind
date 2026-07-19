@@ -43,3 +43,21 @@ export function clearChatResultState(userId) {
     // 清理失败时仍允许继续退出或登录。
   }
 }
+
+export function clearChatResultStateForQaRecords(userId, qaRecordIds) {
+  const deletedIds = new Set(
+    qaRecordIds
+      .map((recordId) => Number(recordId))
+      .filter((recordId) => Number.isInteger(recordId) && recordId > 0),
+  );
+  if (!deletedIds.size) return false;
+
+  const state = readChatResultState(userId);
+  const persistedRecordId = Number(state?.qaRecordId);
+  if (!Number.isInteger(persistedRecordId) || !deletedIds.has(persistedRecordId)) {
+    return false;
+  }
+
+  clearChatResultState(userId);
+  return true;
+}

@@ -22,6 +22,7 @@
       aria-label="主导航"
     >
       <RouterLink to="/" @click="mobileMenuOpen = false">AI 问答</RouterLink>
+      <RouterLink to="/history" @click="mobileMenuOpen = false">提问历史</RouterLink>
       <RouterLink to="/documents" @click="mobileMenuOpen = false">文档上传</RouterLink>
       <RouterLink to="/search" @click="mobileMenuOpen = false">语义检索</RouterLink>
       <RouterLink to="/mind-map" @click="mobileMenuOpen = false">知识地图</RouterLink>

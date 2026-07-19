@@ -11,101 +11,163 @@
         </el-button>
       </header>
 
-      <section class="history-panel">
-        <div class="filters">
-          <el-input
-            v-model="keyword"
-            :prefix-icon="Search"
-            clearable
-            placeholder="搜索提问"
-          />
-          <el-select v-model="selectedBaseId" placeholder="全部知识库">
-            <el-option label="全部知识库" :value="null" />
-            <KnowledgeBaseOptions :bases="knowledgeBases" />
-          </el-select>
-          <span>{{ filteredRecords.length }} / 50</span>
-        </div>
+      <section class="history-workspace">
+        <aside class="history-panel">
+          <div class="filters">
+            <el-input
+              v-model="keyword"
+              :prefix-icon="Search"
+              clearable
+              placeholder="搜索提问"
+            />
+            <el-select v-model="selectedBaseId" placeholder="全部知识库">
+              <el-option label="全部知识库" :value="null" />
+              <KnowledgeBaseOptions :bases="knowledgeBases" />
+            </el-select>
+            <span>{{ filteredRecords.length }} / 50</span>
+          </div>
 
-        <div class="selection-bar">
-          <el-checkbox
-            :model-value="allFilteredSelected"
-            :indeterminate="someFilteredSelected"
-            :disabled="!filteredRecords.length"
-            @change="toggleAllFiltered"
-          >
-            全选当前
-          </el-checkbox>
-          <div>
-            <span v-if="selectedIds.length">已选 {{ selectedIds.length }} 条</span>
-            <el-button
-              type="danger"
-              plain
-              :disabled="!selectedIds.length"
-              :loading="batchDeleting"
-              @click="confirmBatchDelete"
-            >
-              批量删除
+          <div class="management-bar">
+            <el-button type="primary" plain round @click="toggleManagement">
+              {{ managementMode ? "完成" : "管理" }}
             </el-button>
           </div>
-        </div>
 
-        <div v-loading="loading" class="record-list">
-          <article v-for="record in filteredRecords" :key="record.id" class="record-item">
+          <div v-if="managementMode" class="selection-bar">
             <el-checkbox
-              :model-value="selectedIds.includes(record.id)"
-              :aria-label="`选择问题：${record.question}`"
-              @click.stop
-              @change="(checked) => toggleRecord(record.id, checked)"
-            />
-            <button class="record-question" type="button" @click="useQuestion(record.question)">
-              <strong>{{ record.question }}</strong>
-              <span>
-                {{ knowledgeBaseName(record.knowledge_base_id) }}
-                <i aria-hidden="true">·</i>
-                {{ formatDate(record.created_at) }}
-              </span>
-            </button>
-            <el-button
-              class="delete-button"
-              :icon="Delete"
-              text
-              circle
-              type="danger"
-              :loading="deletingId === record.id"
-              :aria-label="`删除问题：${record.question}`"
-              title="删除这条历史"
-              @click="confirmDelete(record)"
-            />
-          </article>
+              :model-value="allFilteredSelected"
+              :indeterminate="someFilteredSelected"
+              :disabled="!filteredRecords.length"
+              @change="toggleAllFiltered"
+            >
+              全选当前
+            </el-checkbox>
+            <div>
+              <span v-if="selectedIds.length">已选 {{ selectedIds.length }} 条</span>
+              <el-button
+                type="danger"
+                plain
+                :disabled="!selectedIds.length"
+                :loading="batchDeleting"
+                @click="confirmBatchDelete"
+              >
+                批量删除
+              </el-button>
+            </div>
+          </div>
 
-          <el-empty
-            v-if="!filteredRecords.length && !loading"
-            description="暂无符合条件的提问记录"
-          />
-        </div>
+          <div v-loading="loading" class="record-list">
+            <article
+              v-for="record in filteredRecords"
+              :key="record.id"
+              class="record-item"
+              :class="{
+                active: selectedRecord?.id === record.id,
+                'is-managing': managementMode,
+              }"
+            >
+              <el-checkbox
+                v-if="managementMode"
+                :model-value="selectedIds.includes(record.id)"
+                :aria-label="`选择问题：${record.question}`"
+                @click.stop
+                @change="(checked) => toggleRecord(record.id, checked)"
+              />
+              <button class="record-question" type="button" @click="selectRecord(record)">
+                <strong>{{ record.question }}</strong>
+                <span>
+                  {{ knowledgeBaseName(record.knowledge_base_id) }}
+                  <i aria-hidden="true">·</i>
+                  {{ formatDate(record.created_at) }}
+                  <i aria-hidden="true">·</i>
+                  {{ record.source_count }} 个来源
+                </span>
+              </button>
+              <el-button
+                v-if="managementMode"
+                class="delete-button"
+                :icon="Delete"
+                text
+                circle
+                type="danger"
+                :loading="deletingId === record.id"
+                :aria-label="`删除问题：${record.question}`"
+                title="删除这条历史"
+                @click.stop="confirmDelete(record)"
+              />
+            </article>
+
+            <el-empty
+              v-if="!filteredRecords.length && !loading"
+              description="暂无符合条件的提问记录"
+            />
+          </div>
+        </aside>
+
+        <article v-loading="detailLoading" class="record-detail">
+          <template v-if="selectedRecord">
+            <div class="detail-head">
+              <div>
+                <strong>{{ knowledgeBaseName(selectedRecord.knowledge_base_id) }}</strong>
+                <span>{{ formatDate(selectedRecord.created_at) }}</span>
+              </div>
+              <el-button type="primary" plain round @click="useQuestion(selectedRecord.question)">
+                重新提问
+              </el-button>
+            </div>
+
+            <section class="question-block">
+              <small>你的问题</small>
+              <h2>{{ selectedRecord.question }}</h2>
+              <p v-if="selectedRecord.rewritten_question">
+                检索改写：{{ selectedRecord.rewritten_question }}
+              </p>
+            </section>
+
+            <AnswerCard
+              :answer="selectedRecord.answer"
+              status="历史回答"
+              :qa-record-id="selectedRecord.id"
+              :sources="selectedRecord.sources || []"
+            />
+          </template>
+          <el-empty v-else description="选择左侧记录查看原回答和来源" />
+        </article>
       </section>
     </main>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { Delete, Refresh, Search } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRouter } from "vue-router";
 import { getHealth } from "../api/health";
 import { listKnowledgeBases } from "../api/knowledgeBases";
-import { deleteQaRecord, deleteQaRecords, listQaRecords } from "../api/qaHistory";
+import {
+  deleteQaRecord,
+  deleteQaRecords,
+  getQaRecord,
+  listQaRecords,
+} from "../api/qaHistory";
+import AnswerCard from "../components/chat/AnswerCard.vue";
 import HomeParticleBackground from "../components/home/HomeParticleBackground.vue";
 import KnowledgeBaseOptions from "../components/knowledge/KnowledgeBaseOptions.vue";
 import AppHeader from "../components/layout/AppHeader.vue";
+import { useUserStore } from "../stores/user";
+import { clearChatResultStateForQaRecords } from "../utils/chatResultState";
 
 const router = useRouter();
+const userStore = useUserStore();
 const healthOnline = ref(false);
 const loading = ref(false);
+const detailLoading = ref(false);
 const deletingId = ref(null);
 const batchDeleting = ref(false);
+const managementMode = ref(false);
 const records = ref([]);
+const selectedRecord = ref(null);
 const selectedIds = ref([]);
 const knowledgeBases = ref([]);
 const selectedBaseId = ref(null);
@@ -133,6 +195,12 @@ const someFilteredSelected = computed(
     filteredRecords.value.some((record) => selectedIds.value.includes(record.id)),
 );
 
+watch([selectedBaseId, keyword], () => {
+  if (!filteredRecords.value.some((record) => record.id === selectedRecord.value?.id)) {
+    selectRecord(filteredRecords.value[0] || null);
+  }
+});
+
 onMounted(() => {
   checkHealth();
   loadHistory();
@@ -157,11 +225,47 @@ async function loadHistory() {
     records.value = history;
     const availableIds = new Set(history.map((record) => record.id));
     selectedIds.value = selectedIds.value.filter((id) => availableIds.has(id));
+    const nextRecord =
+      history.find((record) => record.id === selectedRecord.value?.id) ||
+      filteredRecords.value[0] ||
+      null;
+    await selectRecord(nextRecord, { force: true });
   } catch (error) {
     ElMessage.error(error.message);
   } finally {
     loading.value = false;
   }
+}
+
+async function selectRecord(record, { force = false } = {}) {
+  if (!record) {
+    selectedRecord.value = null;
+    return;
+  }
+  if (!force && selectedRecord.value?.id === record.id) return;
+
+  detailLoading.value = true;
+  try {
+    selectedRecord.value = await getQaRecord(record.id);
+  } catch (error) {
+    selectedRecord.value = null;
+    ElMessage.error(error.message);
+  } finally {
+    detailLoading.value = false;
+  }
+}
+
+function toggleManagement() {
+  if (managementMode.value) {
+    finishManagement();
+    return;
+  }
+  managementMode.value = true;
+}
+
+function finishManagement() {
+  managementMode.value = false;
+  selectedIds.value = [];
 }
 
 function useQuestion(question) {
@@ -191,6 +295,12 @@ async function confirmDelete(record) {
     await deleteQaRecord(record.id);
     records.value = records.value.filter((item) => item.id !== record.id);
     selectedIds.value = selectedIds.value.filter((id) => id !== record.id);
+    clearChatResultStateForQaRecords(userStore.userId, [record.id]);
+    if (selectedRecord.value?.id === record.id) {
+      selectedRecord.value = null;
+      await selectRecord(filteredRecords.value[0] || null);
+    }
+    finishManagement();
     ElMessage.success("历史记录已删除");
   } catch (error) {
     ElMessage.error(error.message);
@@ -239,6 +349,12 @@ async function confirmBatchDelete() {
     const deletedIds = new Set(ids);
     records.value = records.value.filter((record) => !deletedIds.has(record.id));
     selectedIds.value = [];
+    clearChatResultStateForQaRecords(userStore.userId, ids);
+    if (selectedRecord.value && deletedIds.has(selectedRecord.value.id)) {
+      selectedRecord.value = null;
+      await selectRecord(filteredRecords.value[0] || null);
+    }
+    finishManagement();
     ElMessage.success(`已删除 ${ids.length} 条历史记录`);
   } catch (error) {
     ElMessage.error(error.message);
@@ -280,7 +396,7 @@ function formatDate(value) {
   z-index: 1;
   display: grid;
   gap: 28px;
-  width: min(980px, calc(100% - 40px));
+  width: min(1240px, calc(100% - 40px));
   margin: 70px auto 0;
 }
 
@@ -289,6 +405,16 @@ function formatDate(value) {
   align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
+}
+
+.management-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 54px;
+  padding: 8px 18px;
+  border-bottom: 1px solid rgba(170, 194, 222, 0.4);
+  background: rgba(247, 251, 255, 0.5);
 }
 
 .page-head h1 {
@@ -300,7 +426,17 @@ function formatDate(value) {
   letter-spacing: -0.04em;
 }
 
-.history-panel {
+.history-workspace {
+  display: grid;
+  grid-template-columns: minmax(340px, 0.72fr) minmax(0, 1.28fr);
+  align-items: start;
+  gap: 20px;
+}
+
+.history-panel,
+.detail-head,
+.question-block,
+.record-detail > :deep(.el-empty) {
   overflow: hidden;
   border: 1px solid rgba(159, 187, 220, 0.52);
   border-radius: 24px;
@@ -313,7 +449,7 @@ function formatDate(value) {
 
 .filters {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(180px, 240px) auto;
+  grid-template-columns: 1fr;
   align-items: center;
   gap: 12px;
   padding: 18px;
@@ -324,6 +460,7 @@ function formatDate(value) {
   color: #8997a9;
   font-family: "DIN Alternate", Consolas, monospace;
   font-size: 11px;
+  text-align: right;
   white-space: nowrap;
 }
 
@@ -352,16 +489,27 @@ function formatDate(value) {
 .record-list {
   display: grid;
   min-height: 280px;
+  max-height: 720px;
+  overflow-y: auto;
 }
 
 .record-item {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: 12px;
   padding: 4px 12px 4px 20px;
   border-bottom: 1px solid rgba(174, 198, 225, 0.34);
   transition: background 0.18s ease;
+}
+
+.record-item.is-managing {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.record-item.active {
+  background: rgba(224, 241, 255, 0.78);
+  box-shadow: inset 3px 0 #4b91df;
 }
 
 .record-item:last-child {
@@ -390,8 +538,9 @@ function formatDate(value) {
   font-size: 15px;
   font-weight: 650;
   line-height: 1.5;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   transition: color 0.18s ease;
 }
 
@@ -415,6 +564,74 @@ function formatDate(value) {
   font-style: normal;
 }
 
+.record-detail {
+  display: grid;
+  min-width: 0;
+  min-height: 560px;
+  align-content: start;
+  gap: 18px;
+}
+
+.detail-head,
+.question-block {
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 18px;
+}
+
+.detail-head > div {
+  display: grid;
+  gap: 4px;
+}
+
+.detail-head strong {
+  color: #2e6fb9;
+  font-size: 13px;
+}
+
+.detail-head span {
+  color: #8492a5;
+  font-size: 11px;
+}
+
+.question-block {
+  padding: 20px 22px;
+}
+
+.question-block small {
+  color: #3979c4;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.question-block h2 {
+  margin: 8px 0 0;
+  color: #203650;
+  font-size: 21px;
+  line-height: 1.5;
+}
+
+.question-block p {
+  margin: 12px 0 0;
+  color: #74849a;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.record-detail > :deep(.el-empty) {
+  display: grid;
+  min-height: 560px;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.7);
+}
+
 .delete-button {
   opacity: 0.54;
   transition: opacity 0.18s ease;
@@ -431,7 +648,7 @@ function formatDate(value) {
   }
 
   .history-page {
-    width: min(100% - 24px, 980px);
+    width: min(100% - 24px, 1240px);
     margin-top: 48px;
   }
 
@@ -443,14 +660,6 @@ function formatDate(value) {
     align-self: center;
   }
 
-  .filters {
-    grid-template-columns: 1fr;
-  }
-
-  .filters > span {
-    text-align: right;
-  }
-
   .selection-bar {
     align-items: stretch;
     flex-direction: column;
@@ -458,6 +667,16 @@ function formatDate(value) {
 
   .selection-bar > div {
     justify-content: space-between;
+  }
+}
+
+@media (max-width: 980px) {
+  .history-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .record-list {
+    max-height: 440px;
   }
 }
 </style>

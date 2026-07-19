@@ -16,7 +16,15 @@
             {{ formatScore(source.score) }}
           </el-tag>
         </div>
+        <MarkdownContent
+          v-if="isMarkdownSource(source)"
+          class="source-text markdown-source"
+          :class="{ collapsed: !isExpanded(source, index) }"
+          :content="source.source_text"
+          @click="toggleExpanded(source, index)"
+        />
         <p
+          v-else
           class="source-text"
           :class="{ collapsed: !isExpanded(source, index) }"
           @click="toggleExpanded(source, index)"
@@ -39,6 +47,7 @@
 
 <script setup>
 import { ref } from "vue";
+import MarkdownContent from "../common/MarkdownContent.vue";
 
 defineProps({
   sources: {
@@ -101,6 +110,10 @@ function formatScore(score) {
     return "相关度未知";
   }
   return `相关度 ${Number(score).toFixed(3)}`;
+}
+
+function isMarkdownSource(source) {
+  return /\.md(?:own)?$/i.test(source.file_name || "");
 }
 </script>
 
@@ -184,7 +197,20 @@ p {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 5;
+  -webkit-line-clamp: 3;
+}
+
+.markdown-source {
+  width: 100%;
+  margin: 10px 0;
+  color: var(--cm-text);
+  line-height: 1.7;
+}
+
+.markdown-source.collapsed {
+  display: block;
+  max-height: 5.1em;
+  overflow: hidden;
 }
 
 .footer .el-button {

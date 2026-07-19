@@ -17,17 +17,7 @@
         fallback="提交问题后，这里会显示回答。"
         :citation-targets="citationTargets"
       />
-      <div v-if="sourceArticles.length" class="source-articles">
-        <span class="source-articles__label">来源文章</span>
-        <span
-          v-for="article in sourceArticles"
-          :key="article.key"
-          class="source-article"
-        >
-          {{ article.fileName }}
-          <small>{{ article.knowledgeBaseName }}</small>
-        </span>
-      </div>
+      <SourceList v-if="sources.length" :sources="sources" />
       <FeedbackPanel v-if="qaRecordId && answer && !error" :qa-record-id="qaRecordId" />
     </template>
   </section>
@@ -37,6 +27,7 @@
 import { computed } from "vue";
 import MarkdownContent from "../common/MarkdownContent.vue";
 import FeedbackPanel from "./FeedbackPanel.vue";
+import SourceList from "./SourceList.vue";
 
 const props = defineProps({
   answer: {
@@ -55,10 +46,6 @@ const props = defineProps({
     type: Array,
     default: () => [],
   },
-  knowledgeBaseName: {
-    type: String,
-    default: "当前知识库",
-  },
   loading: {
     type: Boolean,
     default: false,
@@ -70,21 +57,6 @@ const props = defineProps({
 });
 
 const citationTargets = computed(() => props.sources.map(sourceTarget));
-
-const sourceArticles = computed(() => {
-  const seen = new Set();
-  return props.sources.reduce((articles, source, index) => {
-    const key = source.document_id ?? source.file_name ?? index;
-    if (seen.has(key)) return articles;
-    seen.add(key);
-    articles.push({
-      key,
-      fileName: source.file_name || "未命名文档",
-      knowledgeBaseName: props.knowledgeBaseName,
-    });
-    return articles;
-  }, []);
-});
 
 function sourceTarget(source) {
   if (!source) return null;
@@ -154,40 +126,11 @@ function sourceTarget(source) {
   line-height: 1.95;
 }
 
-.source-articles {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 7px 12px;
-  color: #74849a;
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.source-articles__label {
-  color: #4c6481;
-  font-weight: 750;
-}
-
-.source-article {
-  position: relative;
-  display: inline-flex;
-  align-items: baseline;
-  gap: 5px;
-}
-
-.source-article + .source-article::before {
-  margin-right: 5px;
-  color: #b5c1cf;
-  content: "·";
-}
-
-.source-article small {
-  color: #95a2b2;
-  font-size: 11px;
-}
-
 .answer-card :deep(.feedback-panel) {
   border-top-color: rgba(166, 191, 221, 0.42);
+}
+
+.answer-card :deep(.source-list) {
+  padding-top: 4px;
 }
 </style>
