@@ -166,6 +166,7 @@ const GRAPH_PADDING = 66;
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 2.4;
 const VIEW_STATE_VERSION = 2;
+const SEARCH_DEBOUNCE_MS = 140;
 const canvasHost = ref(null);
 const layoutLocked = ref(false);
 const selectedNodeId = ref("");
@@ -187,8 +188,14 @@ let isGraphReady = false;
 let nodeLookup = new Map();
 let parentLookup = new Map();
 let edgeLookup = new Map();
+let descendantLookup = new Map();
+let searchTextLookup = new Map();
+let visualStateLookup = new Map();
+let renderedMasteredIds = new Set();
 let searchMatchIds = [];
 let searchIndex = -1;
+let searchTimer = 0;
+let pendingSearchTerm = null;
 let renderVersion = 0;
 let isRestoring = false;
 let presentedConstructionRevision = 0;
@@ -258,10 +265,20 @@ function flattenTree(root) {
   nodeLookup = new Map();
   parentLookup = new Map();
   edgeLookup = new Map();
+  descendantLookup = new Map();
+  searchTextLookup = new Map();
 
   function visit(node, parentId = null, branchIndex = -1, visualDepth = 0) {
+    const descendants = new Set([node.id]);
     nodeLookup.set(node.id, node);
     if (parentId) parentLookup.set(node.id, parentId);
+    searchTextLookup.set(
+      node.id,
+      [node.title, node.summary, ...(node.key_points || [])]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase(),
+    );
     nodes.push({
       id: node.id,
       data: {
@@ -289,9 +306,17 @@ function flattenTree(root) {
       edgeLookup.set(edgeId, edge);
     }
 
-    node.children?.forEach((child, index) => {
-      visit(child, node.id, visualDepth === 0 ? index : branchIndex, visualDepth + 1);
+    (node.children || []).forEach((child, index) => {
+      const childIds = visit(
+        child,
+        node.id,
+        visualDepth === 0 ? index : branchIndex,
+        visualDepth + 1,
+      );
+      childIds.forEach((id) => descendants.add(id));
     });
+    descendantLookup.set(node.id, descendants);
+    return descendants;
   }
 
   visit(root);
@@ -380,12 +405,14 @@ function nodeBadges(datum) {
 async function renderGraph() {
   const version = ++renderVersion;
   isGraphReady = false;
+  visualStateLookup = new Map();
   await nextTick();
   if (!canvasHost.value || !props.root) return;
 
   graph?.destroy();
   const renderRoot = props.root;
   const data = flattenTree(renderRoot);
+  renderedMasteredIds = new Set(props.masteredNodeIds);
   const shouldReveal = props.constructionRevision > 0
     && props.constructionRevision !== presentedConstructionRevision
     && data.nodes.length <= 120
@@ -532,7 +559,10 @@ async function renderGraph() {
     || activeRoot.value.id;
   await selectNodeById(nodeLookup.has(preferredNodeId) ? preferredNodeId : activeRoot.value.id, false);
   if (props.focusRootId) await applyFocusMode(props.focusRootId, { initial: true });
-  if (props.searchTerm) await updateSearch(props.searchTerm);
+  if (props.searchTerm) {
+    cancelScheduledSearch();
+    await updateSearch(props.searchTerm);
+  }
   isGraphReady = true;
   if (resizePending) scheduleCanvasResize();
   if (recoveredViewState) notifyViewChange();
@@ -574,14 +604,7 @@ function currentLayout() {
 }
 
 function descendantIds(nodeId) {
-  const ids = new Set();
-  const walk = (node) => {
-    if (!node) return;
-    ids.add(node.id);
-    node.children?.forEach(walk);
-  };
-  walk(nodeLookup.get(nodeId));
-  return ids;
+  return descendantLookup.get(nodeId) || new Set();
 }
 
 function fullVisibility() {
@@ -642,7 +665,6 @@ async function centerCanvasPoint(point, animation = false) {
 async function fitNodeIds(nodeIds, animation = false) {
   if (!graph) return;
   const targetGraph = graph;
-  const dataById = new Map(targetGraph.getNodeData().map((node) => [node.id, node]));
   const bounds = {
     minX: Number.POSITIVE_INFINITY,
     minY: Number.POSITIVE_INFINITY,
@@ -652,7 +674,7 @@ async function fitNodeIds(nodeIds, animation = false) {
   const validNodeIds = [];
 
   nodeIds.forEach((nodeId) => {
-    const datum = dataById.get(nodeId);
+    const datum = targetGraph.getNodeData(nodeId);
     const position = targetGraph.getElementPosition(nodeId);
     if (targetGraph.getElementVisibility(nodeId) === "hidden") return;
     if (!datum || !Number.isFinite(position?.[0]) || !Number.isFinite(position?.[1])) return;
@@ -789,10 +811,12 @@ function pathTo(nodeId) {
 
 async function applyVisualStates() {
   if (!graph) return;
+  const targetGraph = graph;
   const selectedPath = new Set(pathTo(selectedNodeId.value));
   const searchMatches = new Set(searchMatchIds);
   const shouldDim = selectedNodeId.value && selectedNodeId.value !== props.root.id;
-  const states = {};
+  const changedStates = {};
+  const nextStateLookup = new Map();
 
   nodeLookup.forEach((node, id) => {
     const nodeStates = [];
@@ -800,15 +824,23 @@ async function applyVisualStates() {
     else if (selectedPath.has(id) && shouldDim) nodeStates.push("path");
     if (searchMatches.has(id)) nodeStates.push("searchMatch");
     if (shouldDim && !selectedPath.has(id) && !searchMatches.has(id)) nodeStates.push("dimmed");
-    states[id] = nodeStates;
+    const stateKey = nodeStates.join("|");
+    nextStateLookup.set(id, stateKey);
+    if (visualStateLookup.get(id) !== stateKey) changedStates[id] = nodeStates;
   });
 
   edgeLookup.forEach((edge, id) => {
     const isPathEdge = selectedPath.has(edge.source) && selectedPath.has(edge.target);
-    states[id] = shouldDim ? (isPathEdge ? ["path"] : ["dimmed"]) : [];
+    const edgeStates = shouldDim ? (isPathEdge ? ["path"] : ["dimmed"]) : [];
+    const stateKey = edgeStates.join("|");
+    nextStateLookup.set(id, stateKey);
+    if (visualStateLookup.get(id) !== stateKey) changedStates[id] = edgeStates;
   });
 
-  await graph.setElementState(states, false);
+  visualStateLookup = nextStateLookup;
+  if (Object.keys(changedStates).length) {
+    await targetGraph.setElementState(changedStates, false);
+  }
 }
 
 function emitBranchState(nodeId = selectedNodeId.value) {
@@ -842,14 +874,9 @@ async function updateSearch(value) {
   }
 
   const visibleIds = props.focusRootId ? descendantIds(props.focusRootId) : null;
-  searchMatchIds = [...nodeLookup.values()]
-    .filter((node) => !visibleIds || visibleIds.has(node.id))
-    .filter((node) => [node.title, node.summary, ...(node.key_points || [])]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase()
-      .includes(term))
-    .map((node) => node.id);
+  searchMatchIds = [...nodeLookup.keys()]
+    .filter((nodeId) => !visibleIds || visibleIds.has(nodeId))
+    .filter((nodeId) => searchTextLookup.get(nodeId)?.includes(term));
   searchIndex = searchMatchIds.length ? 0 : -1;
   emit("search-change", { count: searchMatchIds.length, index: searchIndex });
   if (searchIndex >= 0) await selectNodeById(searchMatchIds[searchIndex], true);
@@ -857,6 +884,7 @@ async function updateSearch(value) {
 }
 
 async function stepSearch(direction = 1) {
+  await flushScheduledSearch();
   if (!searchMatchIds.length) return;
   searchIndex = (searchIndex + direction + searchMatchIds.length) % searchMatchIds.length;
   emit("search-change", { count: searchMatchIds.length, index: searchIndex });
@@ -876,17 +904,63 @@ async function focusNode(nodeId) {
 }
 
 async function updateLearningSignals() {
-  if (!graph) return;
-  const updates = graph.getNodeData().map((node) => ({
-    id: node.id,
-    data: {
-      ...node.data,
-      mastered: masteredIdSet.value.has(node.id),
-    },
-  }));
-  graph.updateNodeData(updates);
-  await graph.draw();
-  await applyVisualStates();
+  const nextMasteredIds = new Set(props.masteredNodeIds);
+  const changedIds = new Set([
+    ...[...renderedMasteredIds].filter((id) => !nextMasteredIds.has(id)),
+    ...[...nextMasteredIds].filter((id) => !renderedMasteredIds.has(id)),
+  ]);
+  renderedMasteredIds = nextMasteredIds;
+  if (!graph || !changedIds.size) return;
+
+  const targetGraph = graph;
+  const updates = [...changedIds]
+    .filter((id) => nodeLookup.has(id))
+    .map((id) => {
+      const node = targetGraph.getNodeData(id);
+      return {
+        id,
+        data: {
+          ...node.data,
+          mastered: nextMasteredIds.has(id),
+        },
+      };
+    });
+  if (!updates.length) return;
+  targetGraph.updateNodeData(updates);
+  await targetGraph.draw();
+}
+
+function cancelScheduledSearch() {
+  if (searchTimer) window.clearTimeout(searchTimer);
+  searchTimer = 0;
+  pendingSearchTerm = null;
+}
+
+function scheduleSearchUpdate(value) {
+  if (searchTimer) window.clearTimeout(searchTimer);
+  pendingSearchTerm = value;
+  if (!String(value || "").trim()) {
+    searchTimer = 0;
+    const nextValue = pendingSearchTerm;
+    pendingSearchTerm = null;
+    updateSearch(nextValue);
+    return;
+  }
+  searchTimer = window.setTimeout(() => {
+    searchTimer = 0;
+    const nextValue = pendingSearchTerm;
+    pendingSearchTerm = null;
+    updateSearch(nextValue);
+  }, SEARCH_DEBOUNCE_MS);
+}
+
+async function flushScheduledSearch() {
+  if (!searchTimer) return;
+  window.clearTimeout(searchTimer);
+  searchTimer = 0;
+  const nextValue = pendingSearchTerm;
+  pendingSearchTerm = null;
+  await updateSearch(nextValue);
 }
 
 async function applyPresentationOptions() {
@@ -1110,7 +1184,7 @@ onMounted(() => {
 });
 
 watch(() => props.root, () => renderGraph());
-watch(() => props.searchTerm, updateSearch);
+watch(() => props.searchTerm, scheduleSearchUpdate);
 watch(() => props.selectedNodeId, (nodeId) => {
   if (nodeId && nodeId !== selectedNodeId.value) selectNodeById(nodeId);
 });
@@ -1120,7 +1194,7 @@ watch(() => props.immersive, async () => {
   scheduleCanvasResize(true);
 });
 watch(() => props.focusRootId, (nodeId) => queueFocusMode(nodeId));
-watch(() => props.masteredNodeIds, updateLearningSignals, { deep: true });
+watch(() => props.masteredNodeIds, updateLearningSignals);
 watch([() => props.density, () => props.displayMode], applyPresentationOptions);
 
 onBeforeUnmount(() => {
@@ -1129,6 +1203,7 @@ onBeforeUnmount(() => {
   isGraphReady = false;
   resizePending = false;
   resizeNeedsFit = false;
+  cancelScheduledSearch();
   if (resizeFrame) window.cancelAnimationFrame(resizeFrame);
   resizeObserver?.disconnect();
   isRevealing.value = false;
