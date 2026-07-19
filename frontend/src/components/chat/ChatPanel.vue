@@ -181,7 +181,10 @@
               <span class="status-dot" :class="{ active: loading }"></span>
               {{ loading ? "正在检索并组织回答" : answerStatus }}
             </div>
-            <h1>{{ questionSnapshot }}</h1>
+            <div class="result-question">
+              <span>检索问题：</span>
+              {{ rewrittenQuestion || questionSnapshot }}
+            </div>
             <p>
               {{ currentKnowledgeBase?.name || "当前知识库" }}
               <span aria-hidden="true">·</span>
@@ -201,7 +204,6 @@
         <AnswerCard
           :answer="answer"
           :status="answerStatus"
-          :rewritten-question="rewrittenQuestion"
           :qa-record-id="qaRecordId"
           :sources="sources"
           :knowledge-base-name="currentKnowledgeBase?.name"
@@ -219,6 +221,11 @@ import { useRouter } from "vue-router";
 import { DEFAULT_SCORE_THRESHOLD, streamChatQuestion } from "../../api/chat";
 import { listQaRecords } from "../../api/qaHistory";
 import { useUserStore } from "../../stores/user";
+import {
+  clearChatResultState,
+  readChatResultState,
+  saveChatResultState,
+} from "../../utils/chatResultState";
 import AnswerCard from "./AnswerCard.vue";
 
 const props = defineProps({
@@ -266,6 +273,7 @@ const historyOpen = ref(false);
 const recentRecords = ref([]);
 const recentHistoryLoaded = ref(false);
 let suppressNextHistoryOpen = false;
+let restoredKnowledgeBaseId = null;
 
 const currentKnowledgeBase = computed(() =>
   props.knowledgeBases.find((base) => base.id === props.knowledgeBaseId),
@@ -283,8 +291,20 @@ watch(
   () => props.initialQuestion,
   (nextQuestion) => {
     if (nextQuestion) {
+      clearPersistedResult();
       question.value = nextQuestion;
+      if (viewState.value !== "compose" && !loading.value) {
+        resetAnswerState();
+        viewState.value = "compose";
+      }
     }
+  },
+);
+
+watch(
+  () => props.knowledgeBases,
+  (bases) => {
+    applyRestoredKnowledgeBase(bases);
   },
 );
 
@@ -298,6 +318,9 @@ watch(scoreThreshold, (value) => {
 
 onMounted(() => {
   document.addEventListener("pointerdown", closeHistoryOnOutsideClick);
+  if (!props.initialQuestion.trim()) {
+    restorePersistedResult();
+  }
 });
 
 function selectKnowledgeBase(id) {
@@ -352,6 +375,7 @@ async function askQuestion() {
   }
 
   questionSnapshot.value = trimmedQuestion;
+  clearPersistedResult();
   viewState.value = "result";
   loading.value = true;
   hasError.value = false;
@@ -408,25 +432,26 @@ async function askQuestion() {
   } finally {
     if (streamController.value === controller) streamController.value = null;
     loading.value = false;
+    persistResult();
   }
 }
 
 async function returnToComposer() {
   if (loading.value) return;
+  clearPersistedResult();
   question.value = "";
-  questionSnapshot.value = "";
-  answer.value = "";
-  rewrittenQuestion.value = "";
-  qaRecordId.value = null;
-  sources.value = [];
-  hasError.value = false;
-  answerStatus.value = "等待提问";
+  resetAnswerState();
   viewState.value = "compose";
   await focusQuestion();
 }
 
 onBeforeUnmount(() => {
   streamController.value?.abort();
+  if (viewState.value === "result" && loading.value) {
+    loading.value = false;
+    answerStatus.value = "已停止生成";
+    persistResult();
+  }
   document.removeEventListener("pointerdown", closeHistoryOnOutsideClick);
 });
 
@@ -436,11 +461,110 @@ async function focusQuestion() {
 }
 
 function setQuestion(nextQuestion) {
+  clearPersistedResult();
   question.value = nextQuestion;
   if (viewState.value !== "compose" && !loading.value) {
+    resetAnswerState();
     viewState.value = "compose";
   }
   focusQuestion();
+}
+
+function resetAnswerState() {
+  questionSnapshot.value = "";
+  answer.value = "";
+  rewrittenQuestion.value = "";
+  qaRecordId.value = null;
+  sources.value = [];
+  hasError.value = false;
+  answerStatus.value = "等待提问";
+}
+
+function restorePersistedResult() {
+  if (!userStore.isLoggedIn || !userStore.userId) return;
+
+  const state = readChatResultState(userStore.userId);
+  if (
+    !state ||
+    state.viewState !== "result" ||
+    typeof state.questionSnapshot !== "string" ||
+    !state.questionSnapshot.trim() ||
+    typeof state.answer !== "string"
+  ) {
+    return;
+  }
+
+  question.value = state.questionSnapshot.slice(0, 500);
+  questionSnapshot.value = state.questionSnapshot.slice(0, 500);
+  answer.value = state.answer;
+  rewrittenQuestion.value =
+    typeof state.rewrittenQuestion === "string" ? state.rewrittenQuestion : "";
+  answerStatus.value =
+    typeof state.answerStatus === "string" && state.answerStatus
+      ? state.answerStatus
+      : "已生成回答";
+  qaRecordId.value = Number.isInteger(state.qaRecordId) ? state.qaRecordId : null;
+  sources.value = Array.isArray(state.sources) ? state.sources : [];
+  hasError.value = Boolean(state.hasError);
+  topK.value =
+    Number.isInteger(state.topK) && state.topK > 0 && state.topK <= 20
+      ? state.topK
+      : 4;
+
+  const restoredThreshold = Number(state.scoreThreshold);
+  scoreThreshold.value =
+    Number.isFinite(restoredThreshold) &&
+    restoredThreshold >= 0 &&
+    restoredThreshold <= 1
+      ? restoredThreshold
+      : normalizedDefaultScoreThreshold;
+  scoreThresholdInput.value = scoreThreshold.value.toFixed(2);
+
+  restoredKnowledgeBaseId =
+    Number.isInteger(state.knowledgeBaseId) && state.knowledgeBaseId > 0
+      ? state.knowledgeBaseId
+      : null;
+  applyRestoredKnowledgeBase(props.knowledgeBases);
+  loading.value = false;
+  viewState.value = "result";
+}
+
+function applyRestoredKnowledgeBase(bases) {
+  if (!restoredKnowledgeBaseId || !Array.isArray(bases) || !bases.length) return;
+
+  if (bases.some((base) => base.id === restoredKnowledgeBaseId)) {
+    emit("update:knowledge-base-id", restoredKnowledgeBaseId);
+  }
+  restoredKnowledgeBaseId = null;
+}
+
+function persistResult() {
+  if (
+    !userStore.isLoggedIn ||
+    !userStore.userId ||
+    viewState.value !== "result" ||
+    !questionSnapshot.value.trim()
+  ) {
+    return;
+  }
+
+  saveChatResultState(userStore.userId, {
+    viewState: "result",
+    questionSnapshot: questionSnapshot.value,
+    knowledgeBaseId: props.knowledgeBaseId,
+    topK: topK.value,
+    scoreThreshold: scoreThreshold.value,
+    answer: answer.value,
+    answerStatus: answerStatus.value,
+    rewrittenQuestion: rewrittenQuestion.value,
+    qaRecordId: qaRecordId.value,
+    sources: sources.value,
+    hasError: hasError.value,
+  });
+}
+
+function clearPersistedResult() {
+  clearChatResultState(userStore.userId);
 }
 
 async function openRecentHistory() {
@@ -892,15 +1016,21 @@ textarea::placeholder {
   animation: pulse 1.6s ease-out infinite;
 }
 
-.result-intro h1 {
-  margin: 0;
-  color: #10213a;
-  font-family: "Source Han Serif SC", "Songti SC", "STSong", serif;
-  font-size: clamp(30px, 4.4vw, 48px);
-  font-weight: 600;
-  letter-spacing: -0.035em;
-  line-height: 1.25;
-  text-wrap: balance;
+.result-question {
+  max-width: 760px;
+  padding: 12px 15px;
+  border: 1px solid rgba(166, 191, 221, 0.5);
+  border-radius: 14px;
+  color: #465b75;
+  background: rgba(245, 250, 255, 0.72);
+  font-size: 14px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  backdrop-filter: blur(12px);
+}
+
+.result-question span {
+  color: #7b899d;
 }
 
 .result-intro p {

@@ -64,7 +64,13 @@
           </div>
 
           <div v-if="selectedChunk" class="chunk-body">
-            <p class="chunk-text" :class="{ collapsed: !chunkExpanded }">
+            <MarkdownContent
+              v-if="isMarkdownDocument"
+              class="chunk-text markdown-chunk"
+              :class="{ collapsed: !chunkExpanded }"
+              :content="selectedChunk.chunk_text"
+            />
+            <p v-else class="chunk-text" :class="{ collapsed: !chunkExpanded }">
               {{ selectedChunk.chunk_text }}
             </p>
             <el-button link type="primary" @click="chunkExpanded = !chunkExpanded">
@@ -79,10 +85,11 @@
 </template>
 
 <script setup>
-import { onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { getHealth } from "../api/health";
 import { getDocument, getDocumentChunk, listDocumentChunks } from "../api/documents";
+import MarkdownContent from "../components/common/MarkdownContent.vue";
 import AppHeader from "../components/layout/AppHeader.vue";
 
 const route = useRoute();
@@ -94,6 +101,9 @@ const document = ref(null);
 const chunks = ref([]);
 const selectedChunk = ref(null);
 const chunkExpanded = ref(false);
+const isMarkdownDocument = computed(() => (
+  ["md", "markdown"].includes(String(document.value?.file_type || "").toLowerCase())
+));
 
 onMounted(() => {
   checkHealth();
@@ -317,6 +327,17 @@ function statusType(status) {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 5;
   white-space: normal;
+}
+
+.markdown-chunk {
+  width: 100%;
+  white-space: normal;
+}
+
+.markdown-chunk.collapsed {
+  display: block;
+  max-height: 9.5em;
+  overflow: hidden;
 }
 
 .chunk-body {

@@ -31,7 +31,11 @@
       <section v-loading="loading" class="viewer-card">
         <iframe v-if="viewerType === 'pdf' && objectUrl" :src="objectUrl" class="pdf-viewer" title="PDF 文档预览" />
 
-        <article v-else-if="viewerType === 'markdown'" class="rendered-content markdown-body" v-html="renderedHtml" />
+        <MarkdownContent
+          v-else-if="viewerType === 'markdown'"
+          class="rendered-content markdown-body"
+          :content="textContent"
+        />
 
         <article v-else-if="viewerType === 'docx'" class="rendered-content docx-body" v-html="renderedHtml" />
 
@@ -50,10 +54,10 @@ import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Download } from "@element-plus/icons-vue";
 import { useRoute, useRouter } from "vue-router";
 import DOMPurify from "dompurify";
-import { marked } from "marked";
 import * as mammoth from "mammoth";
 import { getDocument, getDocumentContent } from "../api/documents";
 import { getHealth } from "../api/health";
+import MarkdownContent from "../components/common/MarkdownContent.vue";
 import AppHeader from "../components/layout/AppHeader.vue";
 
 const route = useRoute();
@@ -109,8 +113,7 @@ async function renderFile(type, buffer) {
 
   if (["md", "markdown"].includes(normalizedType)) {
     viewerType.value = "markdown";
-    const markdownText = new TextDecoder("utf-8").decode(buffer);
-    renderedHtml.value = DOMPurify.sanitize(await marked.parse(markdownText));
+    textContent.value = new TextDecoder("utf-8").decode(buffer);
     return;
   }
 

@@ -11,22 +11,12 @@
     <el-skeleton v-if="loading && !answer" :rows="4" animated />
 
     <template v-else>
-      <p class="answer-text">
-        <template v-for="(segment, index) in answerSegments" :key="`${segment.text}-${index}`">
-          <RouterLink
-            v-if="segment.target"
-            class="source-citation"
-            :to="segment.target"
-            :title="`查看${segment.text}对应的原文片段`"
-          >
-            {{ segment.text }}
-          </RouterLink>
-          <span v-else>{{ segment.text }}</span>
-        </template>
-      </p>
-      <p v-if="rewrittenQuestion" class="rewritten">
-        检索问题：{{ rewrittenQuestion }}
-      </p>
+      <MarkdownContent
+        class="answer-text"
+        :content="answer"
+        fallback="提交问题后，这里会显示回答。"
+        :citation-targets="citationTargets"
+      />
       <div v-if="sourceArticles.length" class="source-articles">
         <span class="source-articles__label">来源文章</span>
         <span
@@ -45,6 +35,7 @@
 
 <script setup>
 import { computed } from "vue";
+import MarkdownContent from "../common/MarkdownContent.vue";
 import FeedbackPanel from "./FeedbackPanel.vue";
 
 const props = defineProps({
@@ -55,10 +46,6 @@ const props = defineProps({
   status: {
     type: String,
     default: "等待提问",
-  },
-  rewrittenQuestion: {
-    type: String,
-    default: "",
   },
   qaRecordId: {
     type: Number,
@@ -82,32 +69,7 @@ const props = defineProps({
   },
 });
 
-const answerSegments = computed(() => {
-  const value = props.answer || "提交问题后，这里会显示回答。";
-  const citationPattern = /\[来源\s*(\d+)\]/g;
-  const segments = [];
-  let cursor = 0;
-
-  for (const match of value.matchAll(citationPattern)) {
-    const matchIndex = match.index ?? 0;
-    if (matchIndex > cursor) {
-      segments.push({ text: value.slice(cursor, matchIndex), target: null });
-    }
-
-    const source = props.sources[Number(match[1]) - 1];
-    segments.push({
-      text: match[0],
-      target: sourceTarget(source),
-    });
-    cursor = matchIndex + match[0].length;
-  }
-
-  if (cursor < value.length) {
-    segments.push({ text: value.slice(cursor), target: null });
-  }
-
-  return segments;
-});
+const citationTargets = computed(() => props.sources.map(sourceTarget));
 
 const sourceArticles = computed(() => {
   const seen = new Set();
@@ -190,36 +152,6 @@ function sourceTarget(source) {
   color: #28394f;
   font-size: 16px;
   line-height: 1.95;
-  white-space: pre-wrap;
-}
-
-.source-citation {
-  color: #4b9bea;
-  font-weight: 700;
-  text-decoration: none;
-  text-underline-offset: 3px;
-  transition:
-    color 0.18s ease,
-    text-decoration-color 0.18s ease;
-}
-
-.source-citation:hover,
-.source-citation:focus-visible {
-  color: #2074cd;
-  text-decoration: underline;
-  text-decoration-color: rgba(32, 116, 205, 0.5);
-  outline: none;
-}
-
-.rewritten {
-  margin: 0;
-  padding: 12px 14px;
-  border: 1px solid rgba(166, 191, 221, 0.48);
-  border-radius: 13px;
-  color: #728096;
-  background: rgba(245, 250, 255, 0.78);
-  font-size: 13px;
-  line-height: 1.65;
 }
 
 .source-articles {
