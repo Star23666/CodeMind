@@ -11,21 +11,43 @@
     <el-skeleton v-if="loading && !answer" :rows="4" animated />
 
     <template v-else>
-      <p class="answer-text">{{ answer || "提交问题后，这里会显示回答。" }}</p>
+      <p class="answer-text">
+        <template v-for="(segment, index) in answerSegments" :key="`${segment.text}-${index}`">
+          <RouterLink
+            v-if="segment.target"
+            class="source-citation"
+            :to="segment.target"
+            :title="`查看${segment.text}对应的原文片段`"
+          >
+            {{ segment.text }}
+          </RouterLink>
+          <span v-else>{{ segment.text }}</span>
+        </template>
+      </p>
       <p v-if="rewrittenQuestion" class="rewritten">
         检索问题：{{ rewrittenQuestion }}
       </p>
-      <SourceList :sources="sources" />
+      <div v-if="sourceArticles.length" class="source-articles">
+        <span class="source-articles__label">来源文章</span>
+        <span
+          v-for="article in sourceArticles"
+          :key="article.key"
+          class="source-article"
+        >
+          {{ article.fileName }}
+          <small>{{ article.knowledgeBaseName }}</small>
+        </span>
+      </div>
       <FeedbackPanel v-if="qaRecordId && answer && !error" :qa-record-id="qaRecordId" />
     </template>
   </section>
 </template>
 
 <script setup>
-import SourceList from "./SourceList.vue";
+import { computed } from "vue";
 import FeedbackPanel from "./FeedbackPanel.vue";
 
-defineProps({
+const props = defineProps({
   answer: {
     type: String,
     default: "",
@@ -46,6 +68,10 @@ defineProps({
     type: Array,
     default: () => [],
   },
+  knowledgeBaseName: {
+    type: String,
+    default: "当前知识库",
+  },
   loading: {
     type: Boolean,
     default: false,
@@ -55,6 +81,61 @@ defineProps({
     default: false,
   },
 });
+
+const answerSegments = computed(() => {
+  const value = props.answer || "提交问题后，这里会显示回答。";
+  const citationPattern = /\[来源\s*(\d+)\]/g;
+  const segments = [];
+  let cursor = 0;
+
+  for (const match of value.matchAll(citationPattern)) {
+    const matchIndex = match.index ?? 0;
+    if (matchIndex > cursor) {
+      segments.push({ text: value.slice(cursor, matchIndex), target: null });
+    }
+
+    const source = props.sources[Number(match[1]) - 1];
+    segments.push({
+      text: match[0],
+      target: sourceTarget(source),
+    });
+    cursor = matchIndex + match[0].length;
+  }
+
+  if (cursor < value.length) {
+    segments.push({ text: value.slice(cursor), target: null });
+  }
+
+  return segments;
+});
+
+const sourceArticles = computed(() => {
+  const seen = new Set();
+  return props.sources.reduce((articles, source, index) => {
+    const key = source.document_id ?? source.file_name ?? index;
+    if (seen.has(key)) return articles;
+    seen.add(key);
+    articles.push({
+      key,
+      fileName: source.file_name || "未命名文档",
+      knowledgeBaseName: props.knowledgeBaseName,
+    });
+    return articles;
+  }, []);
+});
+
+function sourceTarget(source) {
+  if (!source) return null;
+  if (source.jump_url) return source.jump_url;
+  if (source.document_id == null || source.chunk_id == null) return null;
+  return {
+    name: "document-chunk",
+    params: {
+      documentId: source.document_id,
+      chunkId: source.chunk_id,
+    },
+  };
+}
 </script>
 
 <style scoped>
@@ -112,6 +193,24 @@ defineProps({
   white-space: pre-wrap;
 }
 
+.source-citation {
+  color: #4b9bea;
+  font-weight: 700;
+  text-decoration: none;
+  text-underline-offset: 3px;
+  transition:
+    color 0.18s ease,
+    text-decoration-color 0.18s ease;
+}
+
+.source-citation:hover,
+.source-citation:focus-visible {
+  color: #2074cd;
+  text-decoration: underline;
+  text-decoration-color: rgba(32, 116, 205, 0.5);
+  outline: none;
+}
+
 .rewritten {
   margin: 0;
   padding: 12px 14px;
@@ -123,35 +222,37 @@ defineProps({
   line-height: 1.65;
 }
 
-.answer-card :deep(.source-list) {
-  gap: 14px;
-  padding-top: 6px;
+.source-articles {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px 12px;
+  color: #74849a;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
-.answer-card :deep(.source-list h3) {
-  font-family: "Source Han Serif SC", "Songti SC", "STSong", serif;
-  font-size: 21px;
-  font-weight: 600;
+.source-articles__label {
+  color: #4c6481;
+  font-weight: 750;
 }
 
-.answer-card :deep(.source-item) {
-  border-color: rgba(166, 191, 221, 0.46);
-  border-radius: 17px;
-  background: rgba(247, 251, 255, 0.74);
-  transition:
-    border-color 0.2s ease,
-    transform 0.2s ease;
+.source-article {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
 }
 
-.answer-card :deep(.source-item:hover) {
-  border-color: rgba(91, 147, 213, 0.56);
-  transform: translateY(-1px);
+.source-article + .source-article::before {
+  margin-right: 5px;
+  color: #b5c1cf;
+  content: "·";
 }
 
-.answer-card :deep(.rank) {
-  border-radius: 11px;
-  color: #2f70bc;
-  background: rgba(224, 239, 255, 0.82);
+.source-article small {
+  color: #95a2b2;
+  font-size: 11px;
 }
 
 .answer-card :deep(.feedback-panel) {

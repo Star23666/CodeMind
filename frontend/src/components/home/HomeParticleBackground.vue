@@ -82,23 +82,36 @@ const fragmentShaderSource = `
 
     float broadFlow = flowNoise(aspectUv * 1.24 + loopOffset * 0.52);
     float secondaryFlow = flowNoise(aspectUv * 2.34 + perpendicularOffset * 0.7);
+    float diagonalRise = (uv.x - 0.5) * 0.28;
+    float rightGather = smoothstep(0.38, 1.0, uv.x);
 
     float waveLine =
-      0.36
+      0.35
+      + diagonalRise
+      + rightGather * 0.035
       + sin(uv.x * 3.1 + phase) * 0.068
       + sin(uv.x * 7.4 - phase * 2.0) * 0.032
       + (broadFlow - 0.5) * 0.24
-      + (secondaryFlow - 0.5) * 0.066;
+      + (secondaryFlow - 0.5) * mix(0.055, 0.082, rightGather);
 
     float waveBody = 1.0 - smoothstep(waveLine - 0.25, waveLine + 0.28, uv.y);
     float lowerCurrent =
       1.0
       - smoothstep(
-        0.2 + sin(uv.x * 4.6 - phase) * 0.07,
-        0.56 + sin(uv.x * 2.4 + phase * 2.0) * 0.05,
+        0.18 + diagonalRise * 0.48 + sin(uv.x * 4.6 - phase) * 0.07,
+        0.54 + diagonalRise * 0.72 + sin(uv.x * 2.4 + phase * 2.0) * 0.05,
         uv.y
       );
-    float blueAmount = clamp(waveBody * 0.92 + lowerCurrent * 0.2, 0.0, 1.0);
+    float upperRightGather =
+      rightGather
+      * (1.0 - smoothstep(waveLine + 0.04, waveLine + 0.3, uv.y));
+    float blueAmount = clamp(
+      waveBody * 0.92
+      + lowerCurrent * 0.2
+      + upperRightGather * 0.075,
+      0.0,
+      1.0
+    );
 
     vec3 lightColor = vec3(0.985, 0.993, 1.0);
     vec3 frostColor = vec3(0.87, 0.965, 1.0);
@@ -149,6 +162,11 @@ const fragmentShaderSource = `
     float microGrain = valueNoise(gl_FragCoord.xy / 1.08 - grainFlow * 0.55);
     float grain = mix(fineGrain, microGrain, 0.46);
     float grainStrength = mix(0.012, 0.078, smoothstep(0.16, 0.96, blueAmount));
+    grainStrength *= mix(
+      0.94,
+      1.12,
+      rightGather * smoothstep(0.28, 0.88, uv.y)
+    );
 
     color += (grain - 0.5) * grainStrength;
     color += vec3(-0.035, 0.006, 0.038) * (secondaryFlow - 0.5) * blueAmount;
@@ -342,7 +360,7 @@ onBeforeUnmount(() => {
   inset: 0;
   background:
     radial-gradient(ellipse 72% 44% at 48% 14%, #ffffff 0 38%, rgba(246, 251, 255, 0.9) 64%, transparent 100%),
-    linear-gradient(168deg, #ffffff 0%, #f8fcff 30%, #c9efff 52%, #3fa8ef 76%, #1454ca 100%);
+    linear-gradient(150deg, #ffffff 0%, #f8fcff 30%, #c9efff 52%, #3fa8ef 76%, #1454ca 100%);
 }
 
 .wave-canvas {

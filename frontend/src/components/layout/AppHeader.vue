@@ -27,7 +27,6 @@
       <RouterLink to="/mind-map" @click="mobileMenuOpen = false">知识地图</RouterLink>
       <RouterLink to="/quiz" @click="mobileMenuOpen = false">AI 出题</RouterLink>
       <RouterLink to="/library" @click="mobileMenuOpen = false">文档库</RouterLink>
-      <RouterLink to="/history" @click="mobileMenuOpen = false">问答历史</RouterLink>
       <RouterLink to="/me" @click="mobileMenuOpen = false">我的</RouterLink>
       <RouterLink v-if="userStore.user?.role === 'admin'" to="/admin" @click="mobileMenuOpen = false">
         管理后台
@@ -35,9 +34,16 @@
     </nav>
 
     <div class="actions">
-      <el-tag v-if="showHealth" :type="healthOnline ? 'success' : 'info'" effect="light" round>
-        {{ healthOnline ? "后端在线" : "后端未连接" }}
-      </el-tag>
+      <span
+        v-if="showHealth"
+        class="health-indicator"
+        :class="healthOnline ? 'health-indicator--online' : 'health-indicator--error'"
+        role="status"
+        :aria-label="healthOnline ? '后端在线' : '后端服务异常'"
+        :title="healthOnline ? '后端在线' : '后端服务异常'"
+      >
+        <span class="health-dot"></span>
+      </span>
 
       <template v-if="userStore.isLoggedIn">
         <RouterLink class="user-link" to="/me">{{ userStore.displayName }}</RouterLink>
@@ -207,6 +213,31 @@ async function logout() {
   gap: 10px;
   color: #526071;
   white-space: nowrap;
+}
+
+.health-indicator {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+}
+
+.health-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 13%, transparent);
+}
+
+.health-indicator--online {
+  color: #31a36b;
+}
+
+.health-indicator--error {
+  color: #df5b5b;
 }
 
 .user-link {

@@ -432,6 +432,18 @@ class QaRecordRead(BaseModel):
     created_at: datetime | None = None
 
 
+class QaRecordBatchDeleteRequest(BaseModel):
+    qa_record_ids: list[int] = Field(..., min_length=1, max_length=50)
+
+    @field_validator("qa_record_ids")
+    @classmethod
+    def normalize_record_ids(cls, value: list[int]) -> list[int]:
+        normalized = list(dict.fromkeys(value))
+        if any(record_id < 1 for record_id in normalized):
+            raise ValueError("问答记录 ID 必须为正整数。")
+        return normalized
+
+
 class FeedbackCreate(BaseModel):
     rating: int = Field(..., ge=1, le=5)
     comment: str | None = Field(default=None, max_length=1000)

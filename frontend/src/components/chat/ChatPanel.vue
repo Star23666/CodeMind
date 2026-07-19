@@ -4,17 +4,46 @@
       <div v-if="viewState === 'compose'" key="compose" class="compose-stage">
         <slot name="intro" />
 
-        <form class="composer" @submit.prevent="askQuestion">
+        <form ref="composerRef" class="composer" @submit.prevent="askQuestion">
           <label class="sr-only" for="home-question">输入你的问题</label>
           <textarea
             id="home-question"
             ref="questionInput"
             v-model="question"
             maxlength="500"
-            rows="4"
+            rows="2"
             placeholder="向你的知识库提问…"
+            aria-controls="recent-question-history"
+            :aria-expanded="historyOpen && visibleRecentRecords.length > 0"
+            @focus="openRecentHistory"
+            @keydown.esc="historyOpen = false"
             @keydown.ctrl.enter.prevent="askQuestion"
           ></textarea>
+
+          <Transition name="history-reveal">
+            <section
+              v-if="historyOpen && visibleRecentRecords.length"
+              id="recent-question-history"
+              class="recent-history"
+              aria-label="最近提问"
+            >
+              <div class="recent-history__head">
+                <span>{{ question.trim() ? "匹配历史" : "最近提问" }}</span>
+                <RouterLink to="/history" @mousedown.prevent>查看完整历史</RouterLink>
+              </div>
+              <button
+                v-for="record in visibleRecentRecords"
+                :key="record.id"
+                class="recent-question"
+                type="button"
+                @mousedown.prevent
+                @click="applyHistoryQuestion(record.question)"
+              >
+                <span>{{ record.question }}</span>
+                <small>{{ formatHistoryTime(record.created_at) }}</small>
+              </button>
+            </section>
+          </Transition>
 
           <div class="composer-meta">
             <span class="character-count">{{ question.length }} / 500</span>
@@ -96,28 +125,30 @@
                   <div class="threshold-panel">
                     <div class="threshold-heading">
                       <span>检索置信度</span>
-                      <strong>{{ scoreThreshold.toFixed(2) }}</strong>
-                    </div>
-                    <div class="threshold-presets">
-                      <button
-                        v-for="value in thresholdPresets"
-                        :key="value"
-                        type="button"
-                        :class="{ active: scoreThreshold === value }"
-                        @click="scoreThreshold = value"
-                      >
-                        {{ value.toFixed(2) }}
-                      </button>
+                      <label class="threshold-input">
+                        <span class="sr-only">手动输入检索置信度</span>
+                        <input
+                          v-model="scoreThresholdInput"
+                          type="number"
+                          inputmode="decimal"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          @change="commitScoreThreshold"
+                          @blur="commitScoreThreshold"
+                          @keydown.enter.prevent="commitScoreThreshold"
+                        />
+                      </label>
                     </div>
                     <el-slider
                       v-model="scoreThreshold"
-                      :min="-1"
+                      :min="0"
                       :max="1"
                       :step="0.01"
                       :show-tooltip="false"
                       aria-label="检索置信度"
                     />
-                    <p>数值越高，进入回答的片段与问题越相近。</p>
+                    <p>请输入 0–1，超出范围将恢复默认值。</p>
                   </div>
                 </el-popover>
               </div>
@@ -173,6 +204,7 @@
           :rewritten-question="rewrittenQuestion"
           :qa-record-id="qaRecordId"
           :sources="sources"
+          :knowledge-base-name="currentKnowledgeBase?.name"
           :loading="loading"
           :error="hasError"
         />
@@ -182,9 +214,10 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { DEFAULT_SCORE_THRESHOLD, streamChatQuestion } from "../../api/chat";
+import { listQaRecords } from "../../api/qaHistory";
 import { useUserStore } from "../../stores/user";
 import AnswerCard from "./AnswerCard.vue";
 
@@ -209,8 +242,14 @@ const userStore = useUserStore();
 const question = ref(props.initialQuestion);
 const questionSnapshot = ref("");
 const topK = ref(4);
-const scoreThreshold = ref(DEFAULT_SCORE_THRESHOLD);
-const thresholdPresets = [0.3, 0.45, 0.6, 0.75];
+const normalizedDefaultScoreThreshold =
+  Number.isFinite(Number(DEFAULT_SCORE_THRESHOLD)) &&
+  Number(DEFAULT_SCORE_THRESHOLD) >= 0 &&
+  Number(DEFAULT_SCORE_THRESHOLD) <= 1
+    ? Number(DEFAULT_SCORE_THRESHOLD)
+    : 0.45;
+const scoreThreshold = ref(normalizedDefaultScoreThreshold);
+const scoreThresholdInput = ref(normalizedDefaultScoreThreshold.toFixed(2));
 const answer = ref("");
 const answerStatus = ref("等待提问");
 const rewrittenQuestion = ref("");
@@ -220,12 +259,25 @@ const loading = ref(false);
 const hasError = ref(false);
 const validationMessage = ref("");
 const questionInput = ref(null);
+const composerRef = ref(null);
 const streamController = ref(null);
 const viewState = ref("compose");
+const historyOpen = ref(false);
+const recentRecords = ref([]);
+const recentHistoryLoaded = ref(false);
+let suppressNextHistoryOpen = false;
 
 const currentKnowledgeBase = computed(() =>
   props.knowledgeBases.find((base) => base.id === props.knowledgeBaseId),
 );
+
+const visibleRecentRecords = computed(() => {
+  const query = question.value.trim().toLocaleLowerCase();
+  if (!query) return recentRecords.value.slice(0, 5);
+  return recentRecords.value
+    .filter((record) => record.question.toLocaleLowerCase().includes(query))
+    .slice(0, 5);
+});
 
 watch(
   () => props.initialQuestion,
@@ -240,6 +292,14 @@ watch(question, () => {
   if (validationMessage.value) validationMessage.value = "";
 });
 
+watch(scoreThreshold, (value) => {
+  scoreThresholdInput.value = Number(value).toFixed(2);
+});
+
+onMounted(() => {
+  document.addEventListener("pointerdown", closeHistoryOnOutsideClick);
+});
+
 function selectKnowledgeBase(id) {
   emit("update:knowledge-base-id", id);
   validationMessage.value = "";
@@ -247,6 +307,16 @@ function selectKnowledgeBase(id) {
 
 function selectTopK(value) {
   topK.value = value;
+}
+
+function commitScoreThreshold() {
+  const rawValue = String(scoreThresholdInput.value ?? "").trim();
+  const value = Number(rawValue);
+  scoreThreshold.value =
+    rawValue !== "" && Number.isFinite(value) && value >= 0 && value <= 1
+      ? Math.round(value * 100) / 100
+      : normalizedDefaultScoreThreshold;
+  scoreThresholdInput.value = scoreThreshold.value.toFixed(2);
 }
 
 async function askQuestion() {
@@ -323,6 +393,7 @@ async function askQuestion() {
           qaRecordId.value = data.qa_record_id || null;
           sources.value = data.sources || sources.value;
           answerStatus.value = sources.value.length ? "已生成带来源回答" : "资料依据不足";
+          loadRecentHistory({ force: true, show: false });
         },
       },
     );
@@ -356,6 +427,7 @@ async function returnToComposer() {
 
 onBeforeUnmount(() => {
   streamController.value?.abort();
+  document.removeEventListener("pointerdown", closeHistoryOnOutsideClick);
 });
 
 async function focusQuestion() {
@@ -369,6 +441,53 @@ function setQuestion(nextQuestion) {
     viewState.value = "compose";
   }
   focusQuestion();
+}
+
+async function openRecentHistory() {
+  if (suppressNextHistoryOpen) {
+    suppressNextHistoryOpen = false;
+    return;
+  }
+  if (!userStore.isLoggedIn) return;
+  historyOpen.value = true;
+  await loadRecentHistory();
+}
+
+async function loadRecentHistory({ force = false, show = true } = {}) {
+  if (!userStore.isLoggedIn || (recentHistoryLoaded.value && !force)) return;
+  try {
+    recentRecords.value = await listQaRecords({ limit: 50 });
+    recentHistoryLoaded.value = true;
+    if (show && visibleRecentRecords.value.length) historyOpen.value = true;
+  } catch {
+    recentRecords.value = [];
+  }
+}
+
+function applyHistoryQuestion(historyQuestion) {
+  question.value = historyQuestion;
+  historyOpen.value = false;
+  suppressNextHistoryOpen = true;
+  focusQuestion();
+}
+
+function closeHistoryOnOutsideClick(event) {
+  if (!composerRef.value?.contains(event.target)) {
+    historyOpen.value = false;
+  }
+}
+
+function formatHistoryTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
 }
 
 defineExpose({
@@ -386,13 +505,16 @@ defineExpose({
   position: relative;
   display: grid;
   justify-items: center;
-  gap: 40px;
+  gap: 28px;
   width: 100%;
+  transform: translateY(-76px);
 }
 
 .composer {
+  position: relative;
+  z-index: 4;
   width: min(880px, 100%);
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid rgba(149, 181, 219, 0.62);
   border-radius: 26px;
   background: rgba(255, 255, 255, 0.84);
@@ -403,8 +525,7 @@ defineExpose({
   backdrop-filter: blur(24px) saturate(132%);
   transition:
     border-color 0.25s ease,
-    box-shadow 0.25s ease,
-    transform 0.25s ease;
+    box-shadow 0.25s ease;
 }
 
 .composer:focus-within {
@@ -412,25 +533,129 @@ defineExpose({
   box-shadow:
     0 32px 90px rgba(48, 107, 175, 0.2),
     0 0 0 4px rgba(51, 126, 218, 0.07);
-  transform: translateY(-2px);
 }
 
 textarea {
   display: block;
   width: 100%;
-  min-height: 132px;
+  height: 76px;
+  min-height: 76px;
+  max-height: 76px;
+  overflow-y: auto;
   resize: none;
   border: 0;
   outline: 0;
-  padding: 25px 28px 12px;
+  padding: 11px 22px 5px;
   color: #18283f;
   background: transparent;
   font-size: 18px;
-  line-height: 1.7;
+  line-height: 1.55;
+  scrollbar-color: rgba(104, 151, 204, 0.4) transparent;
+  scrollbar-width: thin;
 }
 
 textarea::placeholder {
   color: #8997aa;
+}
+
+.recent-history {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  left: 0;
+  z-index: 12;
+  display: grid;
+  gap: 1px;
+  max-height: 242px;
+  overflow-y: auto;
+  padding: 9px;
+  border: 1px solid rgba(147, 180, 218, 0.58);
+  border-radius: 18px;
+  background: rgba(251, 253, 255, 0.96);
+  box-shadow:
+    0 24px 60px rgba(45, 91, 145, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(22px) saturate(130%);
+  scrollbar-color: rgba(104, 151, 204, 0.45) transparent;
+  scrollbar-width: thin;
+}
+
+.recent-history__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 9px 8px;
+  color: #718096;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+}
+
+.recent-history__head a {
+  color: #5595dc;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.recent-history__head a:hover {
+  color: #226ebf;
+}
+
+.recent-question {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  width: 100%;
+  border: 0;
+  border-radius: 11px;
+  min-height: 35px;
+  padding: 7px 10px;
+  color: #344961;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    color 0.18s ease,
+    background 0.18s ease;
+}
+
+.recent-question:hover,
+.recent-question:focus-visible {
+  color: #1d65b5;
+  background: rgba(220, 237, 255, 0.66);
+  outline: none;
+}
+
+.recent-question span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-question small {
+  flex: 0 0 auto;
+  color: #99a6b6;
+  font-size: 10px;
+}
+
+.history-reveal-enter-active,
+.history-reveal-leave-active {
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+}
+
+.history-reveal-enter-from,
+.history-reveal-leave-to {
+  opacity: 0;
+  transform: translateY(-8px) scale(0.99);
+}
+
+.history-reveal-enter-active {
+  transform-origin: top center;
 }
 
 .composer-meta {
@@ -598,31 +823,26 @@ textarea::placeholder {
   font-size: 13px;
 }
 
-.threshold-heading strong {
-  color: #174f9e;
-  font-family: "DIN Alternate", Consolas, monospace;
-  font-size: 15px;
-}
-
-.threshold-presets {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
-}
-
-.threshold-presets button {
-  border: 1px solid #dce6f1;
+.threshold-input input {
+  width: 76px;
+  border: 1px solid #d7e3f0;
   border-radius: 9px;
-  padding: 7px 4px;
-  color: #617086;
+  outline: none;
+  padding: 6px 8px;
+  color: #174f9e;
   background: #f8fbff;
-  cursor: pointer;
+  font-family: "DIN Alternate", Consolas, monospace;
+  font-size: 14px;
+  font-weight: 750;
+  text-align: center;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
 }
 
-.threshold-presets button.active {
-  border-color: #6ba4e9;
-  color: #174f9e;
-  background: #edf5ff;
+.threshold-input input:focus {
+  border-color: #70a8e9;
+  box-shadow: 0 0 0 3px rgba(67, 137, 219, 0.1);
 }
 
 .threshold-panel p {
@@ -806,7 +1026,8 @@ textarea::placeholder {
 
 @media (max-width: 700px) {
   .compose-stage {
-    gap: 30px;
+    gap: 24px;
+    transform: translateY(-28px);
   }
 
   .composer {
@@ -814,13 +1035,25 @@ textarea::placeholder {
   }
 
   textarea {
-    min-height: 124px;
-    padding: 21px 20px 10px;
+    height: 72px;
+    min-height: 72px;
+    max-height: 72px;
+    padding: 10px 18px 4px;
     font-size: 16px;
   }
 
   .composer-meta {
     padding: 0 9px 10px;
+  }
+
+  .recent-history {
+    top: calc(100% + 8px);
+    max-height: 224px;
+    border-radius: 15px;
+  }
+
+  .recent-question small {
+    display: none;
   }
 
   .composer-toolbar {

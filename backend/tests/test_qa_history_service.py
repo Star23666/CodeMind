@@ -123,6 +123,121 @@ class QaHistoryServiceTest(unittest.TestCase):
         count = self.db.execute(text("SELECT COUNT(*) FROM qa_records")).scalar_one()
         self.assertEqual(count, 0)
 
+    def test_history_keeps_only_latest_fifty_records_per_user(self):
+        for index in range(51):
+            run_async(
+                self.service.save_qa_record(
+                    db=self.db,
+                    user_id=1,
+                    request=ChatRequest(
+                        knowledge_base_id=1,
+                        question=f"历史问题 {index}",
+                    ),
+                    rewritten_question=None,
+                    answer=f"历史回答 {index}",
+                    sources=[],
+                )
+            )
+
+        records = self.service.list_qa_records(self.db, user_id=1, limit=50)
+
+        self.assertEqual(len(records), 50)
+        self.assertEqual(records[0].question, "历史问题 50")
+        self.assertNotIn("历史问题 0", {record.question for record in records})
+
+    def test_delete_record_is_owner_scoped_and_cascades_sources(self):
+        record_id = run_async(
+            self.service.save_qa_record(
+                db=self.db,
+                user_id=1,
+                request=ChatRequest(knowledge_base_id=1, question="删除这条记录"),
+                rewritten_question=None,
+                answer="待删除回答。[来源1]",
+                sources=[self._source()],
+            )
+        )
+
+        with self.assertRaises(ValueError):
+            self.service.delete_qa_record(
+                self.db,
+                qa_record_id=record_id,
+                user_id=2,
+            )
+
+        self.service.delete_qa_record(
+            self.db,
+            qa_record_id=record_id,
+            user_id=1,
+        )
+
+        self.assertEqual(
+            self.db.execute(
+                text("SELECT COUNT(*) FROM qa_sources WHERE qa_record_id = :record_id"),
+                {"record_id": record_id},
+            ).scalar_one(),
+            0,
+        )
+        with self.assertRaises(ValueError):
+            self.service.get_qa_record(
+                self.db,
+                qa_record_id=record_id,
+                user_id=1,
+            )
+
+    def test_batch_delete_only_removes_current_users_records(self):
+        first_record_id = run_async(
+            self.service.save_qa_record(
+                db=self.db,
+                user_id=1,
+                request=ChatRequest(knowledge_base_id=1, question="批量删除一"),
+                rewritten_question=None,
+                answer="回答一",
+                sources=[],
+            )
+        )
+        second_record_id = run_async(
+            self.service.save_qa_record(
+                db=self.db,
+                user_id=1,
+                request=ChatRequest(knowledge_base_id=1, question="批量删除二"),
+                rewritten_question=None,
+                answer="回答二",
+                sources=[],
+            )
+        )
+        other_user_record_id = int(
+            self.db.execute(
+                text(
+                    """
+                    INSERT INTO qa_records (
+                        user_id, knowledge_base_id, question, answer, source_count
+                    )
+                    VALUES (2, 1, '其他用户记录', '不能删除', 0)
+                    """
+                )
+            ).lastrowid
+        )
+        self.db.commit()
+
+        deleted_count = self.service.delete_qa_records(
+            self.db,
+            qa_record_ids=[
+                first_record_id,
+                second_record_id,
+                other_user_record_id,
+            ],
+            user_id=1,
+        )
+
+        self.assertEqual(deleted_count, 2)
+        remaining_ids = {
+            int(row[0])
+            for row in self.db.execute(text("SELECT id FROM qa_records")).all()
+        }
+        self.assertNotIn(first_record_id, remaining_ids)
+        self.assertNotIn(second_record_id, remaining_ids)
+        self.assertIn(other_user_record_id, remaining_ids)
+
     def _seed_data(self) -> None:
         self.db.execute(
             text("INSERT INTO users (id, username) VALUES (1, 'user1'), (2, 'user2')")

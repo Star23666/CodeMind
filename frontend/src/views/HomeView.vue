@@ -7,16 +7,13 @@
       <ChatPanel
         :knowledge-base-id="knowledgeBaseId"
         :knowledge-bases="knowledgeBases"
+        :initial-question="initialQuestion"
         @update:knowledge-base-id="updateKnowledgeBase"
       >
         <template #intro>
           <section class="hero-copy">
             <p class="eyebrow">CodeMind · Knowledge with evidence</p>
             <h1>让知识可问，<br />让每个答案都有依据</h1>
-            <p class="description">
-              从个人资料与公共知识库中寻找真正相关的内容，
-              获得清晰、可信、可以追溯原文的回答。
-            </p>
           </section>
         </template>
       </ChatPanel>
@@ -25,7 +22,8 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from "vue";
+import { nextTick, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { getHealth } from "../api/health";
 import { listKnowledgeBases } from "../api/knowledgeBases";
 import ChatPanel from "../components/chat/ChatPanel.vue";
@@ -35,9 +33,25 @@ import { useUserStore } from "../stores/user";
 import { pickDefaultKnowledgeBase } from "../utils/knowledgeBases";
 
 const userStore = useUserStore();
+const route = useRoute();
+const router = useRouter();
 const healthOnline = ref(false);
 const knowledgeBases = ref([]);
 const knowledgeBaseId = ref(null);
+const initialQuestion = ref("");
+
+watch(
+  () => route.query.question,
+  async (nextQuestion) => {
+    if (typeof nextQuestion !== "string" || !nextQuestion.trim()) return;
+    initialQuestion.value = nextQuestion.slice(0, 500);
+    await nextTick();
+    const nextQuery = { ...route.query };
+    delete nextQuery.question;
+    router.replace({ query: nextQuery });
+  },
+  { immediate: true },
+);
 
 onMounted(() => {
   checkHealth();
@@ -87,14 +101,14 @@ function updateKnowledgeBase(nextId) {
   width: min(1080px, calc(100% - 40px));
   min-height: calc(100svh - 106px);
   margin: 0 auto;
-  padding: 24px 0 28px;
+  padding: 14px 0 24px;
   place-items: center;
 }
 
 .hero-copy {
   display: grid;
   justify-items: center;
-  gap: 18px;
+  gap: 13px;
   width: min(890px, 100%);
   text-align: center;
 }
@@ -113,20 +127,10 @@ h1 {
   margin: 0;
   color: #11213a;
   font-family: "Source Han Serif SC", "Songti SC", "STSong", serif;
-  font-size: clamp(46px, 6.6vw, 76px);
+  font-size: clamp(43px, 5.8vw, 68px);
   font-weight: 600;
   letter-spacing: -0.045em;
   line-height: 1.12;
-  text-wrap: balance;
-}
-
-.description {
-  width: min(650px, 100%);
-  margin: 0;
-  color: #627187;
-  font-size: 16px;
-  letter-spacing: 0.015em;
-  line-height: 1.85;
   text-wrap: balance;
 }
 
@@ -150,9 +154,5 @@ h1 {
     letter-spacing: -0.035em;
   }
 
-  .description {
-    font-size: 15px;
-    line-height: 1.75;
-  }
 }
 </style>
