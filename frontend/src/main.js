@@ -6,6 +6,9 @@ import { getCurrentUser } from './api/auth'
 import { setUnauthorizedHandler } from './api/request'
 import { useUserStore } from './stores/user'
 
+localStorage.removeItem('codemind-theme')
+document.documentElement.dataset.theme = 'light'
+
 const app = createApp(App)
 const userStore = useUserStore()
 

@@ -60,16 +60,20 @@ defineProps({
 <style scoped>
 .answer-card {
   display: grid;
-  gap: 18px;
-  padding: 18px;
-  border: 1px solid color-mix(in srgb, var(--cm-primary) 20%, var(--cm-border));
-  border-radius: var(--cm-radius);
-  background: var(--cm-primary-soft);
+  gap: 24px;
+  padding: clamp(22px, 4vw, 38px);
+  border: 1px solid rgba(153, 183, 219, 0.52);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow:
+    0 28px 80px rgba(62, 112, 168, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(24px) saturate(125%);
 }
 
 .answer-card.error {
-  border-color: color-mix(in srgb, var(--cm-danger) 36%, var(--cm-border));
-  background: color-mix(in srgb, var(--cm-danger) 10%, var(--cm-surface));
+  border-color: rgba(207, 111, 111, 0.42);
+  background: rgba(255, 248, 248, 0.84);
 }
 
 .answer-head {
@@ -85,30 +89,72 @@ defineProps({
 }
 
 .answer-head span {
-  color: var(--cm-muted);
-  font-size: 13px;
-  font-weight: 700;
+  color: #3b76bd;
+  font-family: "DIN Alternate", "Avenir Next", sans-serif;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .answer-head strong {
-  color: var(--cm-heading);
-  font-size: 18px;
+  color: #1c304d;
+  font-family: "Source Han Serif SC", "Songti SC", "STSong", serif;
+  font-size: 20px;
+  font-weight: 600;
 }
 
 .answer-text {
   margin: 0;
-  color: var(--cm-text);
-  line-height: 1.8;
+  color: #28394f;
+  font-size: 16px;
+  line-height: 1.95;
   white-space: pre-wrap;
 }
 
 .rewritten {
   margin: 0;
-  padding: 10px 12px;
-  border: 1px dashed var(--cm-border);
-  border-radius: var(--cm-radius);
-  color: var(--cm-muted);
-  background: var(--cm-surface);
-  line-height: 1.6;
+  padding: 12px 14px;
+  border: 1px solid rgba(166, 191, 221, 0.48);
+  border-radius: 13px;
+  color: #728096;
+  background: rgba(245, 250, 255, 0.78);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.answer-card :deep(.source-list) {
+  gap: 14px;
+  padding-top: 6px;
+}
+
+.answer-card :deep(.source-list h3) {
+  font-family: "Source Han Serif SC", "Songti SC", "STSong", serif;
+  font-size: 21px;
+  font-weight: 600;
+}
+
+.answer-card :deep(.source-item) {
+  border-color: rgba(166, 191, 221, 0.46);
+  border-radius: 17px;
+  background: rgba(247, 251, 255, 0.74);
+  transition:
+    border-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.answer-card :deep(.source-item:hover) {
+  border-color: rgba(91, 147, 213, 0.56);
+  transform: translateY(-1px);
+}
+
+.answer-card :deep(.rank) {
+  border-radius: 11px;
+  color: #2f70bc;
+  background: rgba(224, 239, 255, 0.82);
+}
+
+.answer-card :deep(.feedback-panel) {
+  border-top-color: rgba(166, 191, 221, 0.42);
 }
 </style>
