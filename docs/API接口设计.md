@@ -7,7 +7,7 @@
 - 文件上传：`multipart/form-data`
 - 认证：除健康检查、注册和登录外，受保护接口使用 `Authorization: Bearer <token>`
 - 时间格式：ISO 8601 字符串
-- 相似度分数：余弦相似度范围为 `[-1, 1]`，默认过滤阈值为 `0.45`
+- 检索分数：启用 rerank 时返回 0 到 1 的证据相关度，默认阈值为 `0.55`；关闭 rerank 时为 `[-1, 1]` 的余弦相似度
 
 通用错误响应：
 
@@ -405,7 +405,7 @@ POST /api/search
   "knowledge_base_id": 1,
   "query": "进程和线程有什么区别？",
   "top_k": 4,
-  "score_threshold": 0.45,
+  "score_threshold": 0.55,
   "rerank_top_n": 2,
   "enable_rewrite": true,
   "enable_rerank": true
@@ -448,7 +448,7 @@ POST /api/chat
   "knowledge_base_id": 1,
   "question": "操作系统中的进程和线程有什么区别？",
   "top_k": 4,
-  "score_threshold": 0.45,
+  "score_threshold": 0.55,
   "rerank_top_n": 2,
   "enable_rewrite": true,
   "enable_rerank": true
@@ -459,9 +459,9 @@ POST /api/chat
 
 1. 根据上下文可选重写问题。
 2. 调用 Embedding API 生成问题向量。
-3. 在 Chroma 中召回 `top_k=4` 个候选片段。
-4. 按 `score_threshold=0.45` 过滤低相似度片段。
-5. 可选 rerank，并默认保留前 `rerank_top_n=2` 个片段进入 prompt。
+3. 从 Chroma 取得至少 12 个 Dense 候选，同时从 MySQL 片段取得 12 个 BM25 候选。
+4. 通过 RRF 融合为最多 20 个候选，在线 reranker 按直接证据相关性重新评分。
+5. 按 `score_threshold=0.55` 过滤后，默认保留前 `rerank_top_n=2` 个片段进入 prompt；reranker 故障时按服务器配置降级到 `0.45` 向量阈值。
 6. 调用在线 LLM API 生成回答。
 7. 将回答写入 `qa_records`，来源写入 `qa_sources`。
 
@@ -849,7 +849,7 @@ GET   /api/admin/documents?query=&owner_id=&knowledge_base_id=&parse_status=&vis
 | `vector_id`            | `document_chunks.vector_id`、Chroma id                               | 向量记录唯一编号                         |
 | `qa_record_id`         | `qa_records.id`、`qa_sources.qa_record_id`                           | 问答历史和来源引用关联                   |
 | `source_text`          | `qa_sources.source_text`、Chroma document                            | 来源片段快照                             |
-| `score`                | `qa_sources.score`                                                   | 检索相似度或 rerank 分数，范围 `[-1, 1]` |
+| `score`                | `qa_sources.score`                                                   | 正常链路为 0 到 1 的 reranker 证据相关度；降级或关闭 rerank 时为 `[-1, 1]` 的向量相似度 |
 | `job_id`               | `mind_map_jobs.id`                                                   | 地图后台任务编号                         |
 | `history_id`           | `mind_map_histories.id`                                              | 地图历史版本编号                         |
 | `node_type`            | `mind_map_histories.result_json`                                     | 地图节点类型，不单独占数据库列           |

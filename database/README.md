@@ -36,6 +36,12 @@ CodeMind 使用 MySQL 保存结构化业务数据，使用 Chroma 保存文档�
 
 生产数据库执行迁移前必须备份。迁移脚本按说明执行一次，不要通过删除 Docker 数据卷来替代迁移。
 
+### 2026-07-22 混合检索升级
+
+本次升级没有修改 MySQL 表结构，不需要新增或执行 SQL migration。章节标题保存在 Chroma metadata 的 `section_title` 字段中，MySQL `document_chunks` 继续保存原始片段正文和 `vector_id`。
+
+旧 Chroma 向量仍可由新代码读取，但其 Embedding 输入不包含文件名和章节标题。部署后应在文档库对已有 `completed` 文档执行“重建索引”；新索引成功后才替换旧索引，失败不会删除原有可用向量。详细配置、VPS 步骤和回滚方式见 [2026-07-22 混合检索升级说明](../docs/2026-07-22混合检索升级说明.md)。
+
 Linux、macOS 或 WSL 示例：
 
 ```bash

@@ -114,7 +114,7 @@
                 >
                   <template #reference>
                     <button class="tool-control" type="button">
-                      <span>置信度</span>
+                      <span>证据阈值</span>
                       <strong>{{ scoreThreshold.toFixed(2) }}</strong>
                       <svg viewBox="0 0 16 16" aria-hidden="true">
                         <path d="m4.5 6 3.5 3.5L11.5 6" />
@@ -124,9 +124,9 @@
 
                   <div class="threshold-panel">
                     <div class="threshold-heading">
-                      <span>检索置信度</span>
+                      <span>证据相关度阈值</span>
                       <label class="threshold-input">
-                        <span class="sr-only">手动输入检索置信度</span>
+                        <span class="sr-only">手动输入证据相关度阈值</span>
                         <input
                           v-model="scoreThresholdInput"
                           type="number"
@@ -146,7 +146,7 @@
                       :max="1"
                       :step="0.01"
                       :show-tooltip="false"
-                      aria-label="检索置信度"
+                      aria-label="证据相关度阈值"
                     />
                     <p>请输入 0–1，超出范围将恢复默认值。</p>
                   </div>
@@ -190,7 +190,7 @@
               <span aria-hidden="true">·</span>
               Top {{ topK }}
               <span aria-hidden="true">·</span>
-              置信度 {{ scoreThreshold.toFixed(2) }}
+              证据阈值 {{ scoreThreshold.toFixed(2) }}
             </p>
           </div>
           <button class="ask-again" type="button" :disabled="loading" @click="returnToComposer">

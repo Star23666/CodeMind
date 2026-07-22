@@ -141,12 +141,14 @@ flowchart LR
 - 主导航提供独立检索页面，支持知识库选择、召回参数、加载/空结果/失败/无权状态。
 - 将用户问题转换为向量。
 - 私人库按 `owner_id + knowledge_base_id` 限定检索范围；公共库按动态取得的 `knowledge_base_id` 聚合所有上传者资料。
-- 使用 Chroma 进行余弦相似度召回。
-- 支持 `top_k`、相似度阈值、问题重写和 rerank 参数。
+- 使用 Chroma 进行 Dense 召回，同时从 MySQL 片段执行 BM25 关键词召回，并通过 RRF 融合候选。
+- 在线 `Qwen/Qwen3-Reranker-8B` 按直接证据相关性排序和过滤，服务异常时可降级到纯向量链路。
+- 支持 `top_k`、问题重写、最终保留数量和检索阈值参数；正常与降级链路使用不同分数定义。
 - 返回文档、片段、页码、相关度、原文和跳转地址。
 
-相似度阈值与 Embedding 模型和切分粒度密切相关。更换模型后应使用项目测试集重新评估阈值，不能直接沿用旧模型参数。
-当前针对 `Qwen/Qwen3-VL-Embedding-8B`、4096 维向量的默认值为 `0.45`。
+阈值与 Embedding、reranker、切分粒度和候选策略密切相关。更换任一环节后应使用项目测试集重新评估，不能直接沿用旧参数。
+当前完整链路使用 `RERANK_SCORE_THRESHOLD=0.55`，2026-07-22 固定基线取得 100% 正例召回和 0% 依据不足误召；`RETRIEVAL_SCORE_THRESHOLD=0.45` 只用于 reranker 故障降级。
+运行命令、指标定义和强制重评条件见 [RAG 与 AI 出题质量评估](../RAG与AI出题质量评估.md)。
 
 ### 6.5 RAG 问答
 
@@ -170,7 +172,7 @@ flowchart LR
 | `file_name` | 文件名 |
 | `chunk_index` | 片段在文档中的顺序 |
 | `page_no` | 页码，无法识别时为空 |
-| `score` | 语义相似度或综合排序分数 |
+| `score` | 正常链路的 reranker 证据相关度，或降级链路的向量相似度 |
 | `source_text` | 作为回答依据的片段快照 |
 | `jump_url` | 文档片段查看地址 |
 
@@ -232,7 +234,8 @@ sequenceDiagram
     participant File as 文件存储
     participant DB as MySQL
     participant Embed as Embedding API
-    participant Vector as Chroma
+    participant Stores as Chroma / MySQL
+    participant Rerank as 在线 Reranker
 
     User->>Web: 选择知识库并上传文档
     Web->>API: POST /api/documents/upload
@@ -267,9 +270,12 @@ sequenceDiagram
     Web->>API: POST /api/chat
     API->>API: 校验 JWT 和知识库归属
     API->>Retrieve: 问题重写、向量化和召回
-    Retrieve->>Vector: topK 相似度检索
-    Vector-->>Retrieve: 返回候选片段
-    Retrieve->>Retrieve: 阈值过滤和 rerank
+    Retrieve->>Stores: Dense + BM25 候选
+    Stores-->>Retrieve: 返回两路候选片段
+    Retrieve->>Retrieve: RRF 融合
+    Retrieve->>Rerank: 直接证据相关性评分
+    Rerank-->>Retrieve: 排序与分数
+    Retrieve->>Retrieve: 0.55 阈值过滤
     Retrieve-->>API: 返回来源列表
     alt 找到有效来源
         API->>API: 组装问题、来源和引用规则
@@ -500,6 +506,14 @@ EMBEDDING_API_KEY=replace_with_embedding_key
 EMBEDDING_BASE_URL=https://provider.example.com/v1
 EMBEDDING_MODEL=replace_with_embedding_model
 
+# 留空时复用 LLM_API_KEY 与 LLM_BASE_URL
+RERANK_API_KEY=
+RERANK_BASE_URL=
+RERANK_MODEL=Qwen/Qwen3-Reranker-8B
+RERANK_SCORE_THRESHOLD=0.55
+# reranker 故障降级使用
+RETRIEVAL_SCORE_THRESHOLD=0.45
+
 JWT_SECRET_KEY=replace_with_a_long_random_secret
 JWT_ALGORITHM=HS256
 JWT_EXPIRE_MINUTES=180
@@ -558,7 +572,7 @@ docker compose down
 - 知识地图生成、来源校验、并发限制和失败取消。
 - 知识地图任务、历史事务和文档归属校验。
 
-当前后端自动化测试基线为 135 项，包括公共/私人跨用户权限、管理员初始化和账号启停、私人数据脱敏、私人文档迁移与 MySQL/Chroma 补偿、个人模型连接错误分类、敏感日志和问答、知识地图模型路由，以及 AI 出题权限、文档轮询、覆盖度、难度结构、评分、来源编号白名单和临时清理回归。
+当前后端自动化测试基线为 160 项，包括公共/私人跨用户权限、管理员初始化和账号启停、私人数据脱敏、私人文档迁移与 MySQL/Chroma 补偿、Dense/BM25/RRF/reranker 与降级、个人模型连接错误分类、敏感日志和问答、知识地图模型路由、固定质量数据与基线产物，以及 AI 出题权限、文档轮询、覆盖度、难度结构、评分、来源编号白名单和临时清理回归。
 
 ### 12.2 核心验收流程
 
@@ -626,7 +640,7 @@ docker compose down
 - 私人知识库、唯一全局公共知识库及权限化文档管理。
 - PDF、DOCX、Markdown、TXT 解析和切分。
 - Embedding 与 Chroma 入库。
-- 问题重写、相似度过滤和 rerank 流程。
+- 问题重写、Dense/BM25 召回、RRF 融合、直接证据 rerank 和故障降级流程。
 - RAG Prompt、在线 LLM 调用和来源引用。
 - 问答历史后端保存及查询。
 - 问答历史前端页面和删除原文后的来源快照。
@@ -641,10 +655,10 @@ docker compose down
 
 ### 14.2 待完成或待优化
 
-- 持续记录 AI 出题的在线模型耗时、错误率和语义质量；当前 4 份资料、39 个片段生成 10 道进阶题约需 77 秒。
+- 持续记录 AI 出题的在线模型耗时、错误率和语义质量；当前固定基线覆盖 8 份语料、16 套期望，首轮 8 套结构成功率为 50%，成功生成的 40 题人工事实正确率为 98.75%。
 - 将真实 MySQL、Chroma 和在线模型端到端回归整理为可选 smoke 测试，减少供应商或数据库兼容问题漏检。
 - 第一版练习结果只保存在当前标签页，主观题采用用户自评；长期历史和 AI 辅助点评需要另行设计。
-- 完成固定 RAG 测试集与阈值评估，以及项目报告、PPT、演示视频和部署文档。
+- 扩充真实长文档、同主题干扰文档和跨章节问题，持续复跑固定 RAG 用例并监控 reranker 降级；继续整理项目报告、PPT、演示视频和部署文档。
 
 完整优先级、证据和处理建议见 [已知问题与后续计划](../已知问题与后续计划.md)。
 

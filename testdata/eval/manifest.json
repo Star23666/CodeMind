@@ -1,0 +1,23 @@
+{
+  "dataset_id": "codemind-computer-knowledge-v1",
+  "version": "1.0.0",
+  "created_on": "2026-07-22",
+  "language": "zh-CN",
+  "license": "project-authored-test-fixture",
+  "description": "CodeMind 固定 RAG 与 AI 出题质量评估语料，内容由项目组为测试自行编写。",
+  "chunking": {
+    "chunk_size": 800,
+    "overlap": 120
+  },
+  "documents": [
+    {"id": "os-process-threads", "document_no": 1, "title": "操作系统：进程、线程与并发", "domain": "操作系统", "path": "corpus/os_process_threads.md"},
+    {"id": "os-virtual-memory", "document_no": 2, "title": "操作系统：虚拟内存与页面置换", "domain": "操作系统", "path": "corpus/os_virtual_memory.md"},
+    {"id": "network-tcp", "document_no": 3, "title": "计算机网络：TCP 可靠传输", "domain": "计算机网络", "path": "corpus/network_tcp.md"},
+    {"id": "network-http-dns", "document_no": 4, "title": "计算机网络：DNS、HTTP 与反向代理", "domain": "计算机网络", "path": "corpus/network_http_dns.md"},
+    {"id": "data-structures", "document_no": 5, "title": "数据结构：散列表、树、堆与图", "domain": "数据结构", "path": "corpus/data_structures.md"},
+    {"id": "mysql-indexes", "document_no": 6, "title": "MySQL：InnoDB 索引与执行计划", "domain": "数据库", "path": "corpus/mysql_indexes.md"},
+    {"id": "mysql-transactions", "document_no": 7, "title": "MySQL：事务、隔离级别与死锁", "domain": "数据库", "path": "corpus/mysql_transactions.md"},
+    {"id": "software-testing", "document_no": 8, "title": "软件工程：自动化测试与持续集成", "domain": "软件工程", "path": "corpus/software_testing.md"}
+  ]
+}
+

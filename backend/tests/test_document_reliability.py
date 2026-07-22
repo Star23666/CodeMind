@@ -289,6 +289,64 @@ class DocumentReliabilityTest(unittest.TestCase):
 
         self.assertEqual([source.source_text for source in sources], ["旧索引内容"])
 
+    def test_lexical_retrieval_respects_private_owner_and_public_scope(self) -> None:
+        with self.engine.begin() as connection:
+            connection.execute(text("INSERT INTO users (id) VALUES (8)"))
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO documents (
+                        id, knowledge_base_id, owner_id, file_name, file_type,
+                        file_size, file_path, parse_status, chunk_count
+                    ) VALUES (
+                        2, 10, 8, 'other.txt', 'txt', 20, 'other.txt',
+                        'completed', 1
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO document_chunks (
+                        document_id, knowledge_base_id, chunk_index, chunk_text,
+                        page_no, start_offset, end_offset, vector_id
+                    ) VALUES (
+                        2, 10, 0, '其他用户的独有配置内容',
+                        1, 0, 30, 'other-vector'
+                    )
+                    """
+                )
+            )
+
+        service = RetrievalService()
+        store = Mock()
+        store.get_metadatas.return_value = {
+            "old-vector": {"section_title": "普通章节"},
+            "other-vector": {"section_title": "alpha_private_token"},
+        }
+        with (
+            patch("app.services.retrieval_service.SessionLocal", self.SessionLocal),
+            patch("app.services.retrieval_service.get_vector_store", return_value=store),
+        ):
+            private_hits = service._lexical_hits(
+                query="alpha_private_token",
+                knowledge_base_id=10,
+                owner_id=7,
+            )
+            public_hits = service._lexical_hits(
+                query="alpha_private_token",
+                knowledge_base_id=10,
+                owner_id=None,
+            )
+
+        self.assertEqual(private_hits, [])
+        self.assertEqual([hit.vector_id for hit in public_hits], ["other-vector"])
+        self.assertEqual(public_hits[0].metadata["document_id"], 2)
+        self.assertEqual(
+            public_hits[0].metadata["section_title"], "alpha_private_token"
+        )
+
     def test_cancellation_during_embedding_preserves_previous_index(self) -> None:
         service = DocumentService()
         store = RecordingVectorStore()

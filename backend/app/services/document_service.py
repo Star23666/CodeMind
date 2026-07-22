@@ -12,6 +12,7 @@ from app.db.session import SessionLocal
 from app.schemas.contracts import DocumentChunkRead, DocumentRead
 from app.services.document_parser import DocumentParseError, document_parser
 from app.services.embedding_client import EmbeddingServiceError, embedding_client
+from app.services.embedding_text import build_embedding_text
 from app.services.knowledge_base_service import (
     KnowledgeBasePermissionError,
     knowledge_base_service,
@@ -509,7 +510,16 @@ class DocumentService:
             if not chunks:
                 raise DocumentParseError("文档解析失败：未提取到可用文字。")
 
-            embeddings = embedding_client.embed_texts([chunk.text for chunk in chunks])
+            embeddings = embedding_client.embed_texts(
+                [
+                    build_embedding_text(
+                        file_name=str(document["file_name"]),
+                        text=chunk.text,
+                        section_title=getattr(chunk, "section_title", None),
+                    )
+                    for chunk in chunks
+                ]
+            )
             if not self._lock_processing_document(db, document_id):
                 db.rollback()
                 raise DocumentProcessingCancelled()
@@ -566,6 +576,9 @@ class DocumentService:
                         "page_no": int(chunk.page_no) if chunk.page_no is not None else 0,
                         "start_offset": int(chunk.start_offset),
                         "end_offset": int(chunk.end_offset),
+                        "section_title": str(
+                            getattr(chunk, "section_title", None) or ""
+                        ),
                     }
                 )
 

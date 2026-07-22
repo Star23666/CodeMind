@@ -21,6 +21,8 @@ storage/uploads/*
 storage/chroma/*
 !storage/chroma/.gitkeep
 logs/
+/quality-results/
+/tmp/
 
 .DS_Store
 Thumbs.db

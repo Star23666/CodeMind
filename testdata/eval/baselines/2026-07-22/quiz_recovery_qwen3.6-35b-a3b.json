@@ -1,0 +1,788 @@
+{
+  "schema_version": "1.0",
+  "evaluation_type": "quiz-quality",
+  "run_date": "2026-07-22",
+  "dataset": {
+    "dataset_id": "codemind-computer-knowledge-v1",
+    "version": "1.0.0",
+    "corpus_sha256": "cc8b08b5542e9fcacac496f4d062b7cde53e9a2d2fc57a5a21151bdd3303d64a"
+  },
+  "configuration": {
+    "llm_model": "Qwen/Qwen3.6-35B-A3B",
+    "llm_base_url": "https://api.siliconflow.cn/v1",
+    "quiz_timeout_seconds": 300.0,
+    "quiz_max_tokens": 12000,
+    "quiz_structure_max_retries": 1,
+    "quiz_enable_thinking": false,
+    "quiz_context_max_chunks": 24,
+    "quiz_context_max_tokens": 8000,
+    "quiz_context_max_chars": 30000,
+    "quiz_context_max_chars_per_chunk": 1600
+  },
+  "summary": {
+    "case_count": 4,
+    "successful_case_count": 4,
+    "failed_case_count": 0,
+    "question_count": 20,
+    "mean_generation_seconds": 17.705,
+    "exact_duplicate_count": 0,
+    "near_duplicate_pair_count": 0,
+    "mean_key_point_coverage": 0.875,
+    "mean_source_verifiable_rate_heuristic": 1.0,
+    "manual_review_required": true
+  },
+  "cases": [
+    {
+      "case_id": "quiz-tcp-basic",
+      "status": "completed",
+      "error_type": null,
+      "error_message": null,
+      "document_ids": [
+        "network-tcp"
+      ],
+      "configuration": {
+        "question_count": 5,
+        "difficulty": "basic",
+        "question_types": [
+          "single_choice",
+          "true_false",
+          "fill_blank"
+        ],
+        "random_mix": true,
+        "context_chunk_count": 1,
+        "context_character_count": 775
+      },
+      "duration_seconds": 9.345,
+      "automatic_metrics": {
+        "question_count": 5,
+        "question_type_distribution": {
+          "fill_blank": 1,
+          "single_choice": 3,
+          "true_false": 1
+        },
+        "cognitive_level_distribution": {
+          "remember": 3,
+          "understand": 2
+        },
+        "exact_duplicate_count": 0,
+        "near_duplicate_pairs": [],
+        "duplicate_rate": 0.0,
+        "source_verifiable_rate_heuristic": 1.0,
+        "mean_source_overlap": 0.6701,
+        "key_point_coverage": 0.75,
+        "matched_key_points": [
+          "三次握手",
+          "字节流",
+          "重传"
+        ],
+        "manual_review_required": true
+      },
+      "questions": [
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "remember",
+          "prompt": "根据资料，TCP 连接由哪四个要素组成的四元组标识？",
+          "options": [
+            {
+              "id": "A",
+              "text": "源 IP、源端口、目的 IP、目的端口"
+            },
+            {
+              "id": "B",
+              "text": "源 MAC、源端口、目的 MAC、目的端口"
+            },
+            {
+              "id": "C",
+              "text": "源 IP、目的 IP、协议类型、校验和"
+            },
+            {
+              "id": "D",
+              "text": "源端口、目的端口、序列号、确认号"
+            }
+          ],
+          "correct_answer": "A",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "根据资料，TCP 连接由源 IP、源端口、目的 IP、目的端口四元组标识。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "true_false",
+          "cognitive_level": "understand",
+          "prompt": "TCP 提供有序、可靠的字节流，因此应用层可以假设一次 send 操作对应一次 recv 操作。",
+          "options": [],
+          "correct_answer": false,
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "根据资料，TCP 不保留应用消息边界。应用不能假设一次 send 对应一次 recv，必须使用长度字段、分隔符或固定格式自行分帧。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "remember",
+          "prompt": "在 TCP 流量控制中，实际可发送窗口受哪两个窗口中较小者限制？",
+          "options": [
+            {
+              "id": "A",
+              "text": "接收窗口和拥塞窗口"
+            },
+            {
+              "id": "B",
+              "text": "拥塞窗口和重传窗口"
+            },
+            {
+              "id": "C",
+              "text": "接收窗口和发送窗口"
+            },
+            {
+              "id": "D",
+              "text": "慢启动窗口和拥塞避免窗口"
+            }
+          ],
+          "correct_answer": "A",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "根据资料，实际可发送窗口受接收窗口和拥塞窗口中较小者限制。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "fill_blank",
+          "cognitive_level": "remember",
+          "prompt": "TCP 使用______次握手建立连接。",
+          "options": [],
+          "correct_answer": null,
+          "accepted_answers": [
+            "三",
+            "3"
+          ],
+          "keywords": [
+            "三",
+            "3"
+          ],
+          "reference_answer": null,
+          "explanation": "根据资料，TCP 使用三次握手建立连接。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "understand",
+          "prompt": "关于 TCP 连接关闭后的 TIME_WAIT 状态，以下说法正确的是？",
+          "options": [
+            {
+              "id": "A",
+              "text": "TIME_WAIT 证明应用数据仍在传输"
+            },
+            {
+              "id": "B",
+              "text": "TIME_WAIT 是为了处理延迟报文并确保最后的 ACK 有机会重传"
+            },
+            {
+              "id": "C",
+              "text": "TIME_WAIT 是服务端主动关闭时进入的状态"
+            },
+            {
+              "id": "D",
+              "text": "TIME_WAIT 状态下无法进行新的连接建立"
+            }
+          ],
+          "correct_answer": "B",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "根据资料，主动关闭方可能进入 TIME_WAIT，以便处理延迟报文并确保最后的 ACK 有机会重传。TIME_WAIT 不是应用数据仍在传输的证明。",
+          "source_ids": [
+            "S1"
+          ]
+        }
+      ],
+      "sources": [
+        {
+          "source_id": "S1",
+          "knowledge_base_id": 1,
+          "knowledge_base_name": "CodeMind 固定评估语料",
+          "chunk_id": 3,
+          "document_id": 3,
+          "file_name": "network_tcp.md",
+          "chunk_index": 0,
+          "page_no": null,
+          "source_text": "# 计算机网络：TCP 可靠传输 本文是 CodeMind 质量评估使用的项目自编固定语料。 ## 建立连接 TCP 使用三次握手建立连接。客户端先发送带初始序列号的 SYN，服务端回复 SYN-ACK 并给出自己的初始序列号，客户端再发送 ACK。第三次报文证明客户端能够收到服务端的序列号，也使双方确认双向通信路径可用。 TCP 连接由源 IP、源端口、目的 IP、目的端口四元组标识。同一服务端口可以同时服务多个客户端，因为客户端地址和端口不同。 ## 字节流与可靠性 TCP 提供有序、可靠的字节流，不保留应用消息边界。应用不能假设一次 `send` 对应一次 `recv`，必须使用长度字段、分隔符或固定格式自行分帧。 序列号标识字节位置，确认号表示接收方下一步期望的字节序号。发送方在重传超时到期或收到足够的重复确认时重传数据。校验和只能帮助发现传输错误，可靠性还依赖确认、重传、排序和去重。 ## 流量控制与拥塞控制 流量控制保护接收方。接收方通过通告窗口说明当前可接收的数据量，发送方未确认数据不能超过该窗口。拥塞控制保护网络路径，发送方根据拥塞窗口调整在途数据量。实际可发送窗口受接收窗口和拥塞窗口中较小者限制。 慢启动从较小拥塞窗口开始，收到确认后快速增长；达到阈值后进入拥塞避免并较平缓增长。出现丢包或显著拥塞信号时，发送方降低发送速率。 ## 关闭连接与排错 TCP 是全双工协议，两个方向需要分别关闭，典型正常关闭包含 FIN、ACK 的双向交换。主动关闭方可能进入 TIME_WAIT，以便处理延迟报文并确保最后的 ACK 有机会重传。TIME_WAIT 不是应用数据仍在传输的证明。 排查连接问题时可依次检查 DNS 解析、路由可达性、目标端口监听、防火墙、握手是否完成、是否发生重传，以及应用层是否正确处理字节流边界。",
+          "jump_url": "/eval/documents/network-tcp/chunks/0"
+        }
+      ]
+    },
+    {
+      "case_id": "quiz-ds-basic",
+      "status": "completed",
+      "error_type": null,
+      "error_message": null,
+      "document_ids": [
+        "data-structures"
+      ],
+      "configuration": {
+        "question_count": 5,
+        "difficulty": "basic",
+        "question_types": [
+          "single_choice",
+          "true_false",
+          "fill_blank"
+        ],
+        "random_mix": true,
+        "context_chunk_count": 1,
+        "context_character_count": 714
+      },
+      "duration_seconds": 15.264,
+      "automatic_metrics": {
+        "question_count": 5,
+        "question_type_distribution": {
+          "fill_blank": 1,
+          "single_choice": 3,
+          "true_false": 1
+        },
+        "cognitive_level_distribution": {
+          "remember": 3,
+          "understand": 2
+        },
+        "exact_duplicate_count": 0,
+        "near_duplicate_pairs": [],
+        "duplicate_rate": 0.0,
+        "source_verifiable_rate_heuristic": 1.0,
+        "mean_source_overlap": 0.6692,
+        "key_point_coverage": 0.75,
+        "matched_key_points": [
+          "散列表",
+          "堆",
+          "BFS"
+        ],
+        "manual_review_required": true
+      },
+      "questions": [
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "remember",
+          "prompt": "根据资料，散列表在理想情况下的查找、插入和删除的平均时间复杂度是多少？",
+          "options": [
+            {
+              "id": "A",
+              "text": "O(1)"
+            },
+            {
+              "id": "B",
+              "text": "O(log n)"
+            },
+            {
+              "id": "C",
+              "text": "O(n)"
+            },
+            {
+              "id": "D",
+              "text": "O(n log n)"
+            }
+          ],
+          "correct_answer": "A",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "资料指出，散列表通过哈希函数把键映射到桶，理想情况下查找、插入和删除的平均时间复杂度为 O(1)。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "true_false",
+          "cognitive_level": "understand",
+          "prompt": "根据资料，二叉堆中父节点不大于子节点的最小堆，能够保证兄弟节点或不同子树全局有序。",
+          "options": [],
+          "correct_answer": false,
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "资料明确说明，最小堆只保证父节点不大于子节点，不保证兄弟节点或不同子树全局有序。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "remember",
+          "prompt": "在无权图中，哪种遍历算法能得到最少边数路径？",
+          "options": [
+            {
+              "id": "A",
+              "text": "深度优先搜索 (DFS)"
+            },
+            {
+              "id": "B",
+              "text": "广度优先搜索 (BFS)"
+            },
+            {
+              "id": "C",
+              "text": "Dijkstra 算法"
+            },
+            {
+              "id": "D",
+              "text": "Bellman-Ford 算法"
+            }
+          ],
+          "correct_answer": "B",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "资料指出，广度优先搜索使用队列，按与起点的边数逐层访问，在无权图中，BFS 能得到最少边数路径。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "fill_blank",
+          "cognitive_level": "remember",
+          "prompt": "Dijkstra 算法适用于边权______的单源最短路问题。",
+          "options": [],
+          "correct_answer": null,
+          "accepted_answers": [
+            "非负"
+          ],
+          "keywords": [
+            "非负"
+          ],
+          "reference_answer": null,
+          "explanation": "资料中明确提到，Dijkstra 算法适用于边权非负的单源最短路。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "understand",
+          "prompt": "根据资料，如果需要频繁按优先级取最值，应该优先选择哪种数据结构？",
+          "options": [
+            {
+              "id": "A",
+              "text": "散列表"
+            },
+            {
+              "id": "B",
+              "text": "平衡搜索树"
+            },
+            {
+              "id": "C",
+              "text": "堆"
+            },
+            {
+              "id": "D",
+              "text": "链表"
+            }
+          ],
+          "correct_answer": "C",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "资料最后部分指出，选择数据结构应依据操作模式，需要频繁按优先级取最值时使用堆。",
+          "source_ids": [
+            "S1"
+          ]
+        }
+      ],
+      "sources": [
+        {
+          "source_id": "S1",
+          "knowledge_base_id": 1,
+          "knowledge_base_name": "CodeMind 固定评估语料",
+          "chunk_id": 6,
+          "document_id": 5,
+          "file_name": "data_structures.md",
+          "chunk_index": 0,
+          "page_no": null,
+          "source_text": "# 数据结构：散列表、树、堆与图 本文是 CodeMind 质量评估使用的项目自编固定语料。 ## 散列表 散列表通过哈希函数把键映射到桶。理想情况下查找、插入和删除的平均时间复杂度为 O(1)，但最坏情况可退化为 O(n)。链地址法让同一桶保存多个元素；开放寻址法在冲突时按探测序列寻找其他位置。负载因子升高通常会增加冲突，因此实现会在达到阈值后扩容并重新散列。 ## 搜索树与堆 二叉搜索树要求左子树键小于当前键，右子树键大于当前键。普通二叉搜索树在有序插入时可能退化为链，操作复杂度变为 O(n)。AVL 树通过旋转保持严格高度平衡，红黑树使用较宽松的颜色约束，二者都能保证基本操作为 O(log n)。 二叉堆是一棵完全二叉树。最小堆只保证父节点不大于子节点，不保证兄弟节点或不同子树全局有序。查看堆顶为 O(1)，插入和删除堆顶为 O(log n)。构建堆可以从最后一个非叶节点向前下沉，整体复杂度为 O(n)。 ## 图遍历与最短路 广度优先搜索使用队列，按与起点的边数逐层访问。在无权图中，BFS 能得到最少边数路径。深度优先搜索使用递归或显式栈，适合连通性、拓扑结构和回溯问题，但不能直接保证无权最短路径。 Dijkstra 算法适用于边权非负的单源最短路，常与优先队列配合。若存在负权边，Dijkstra 的贪心确定过程不再可靠，可根据问题条件选择 Bellman-Ford 等算法。有向无环图的拓扑排序可以使用入度队列；若最终处理节点数少于图中节点总数，则图中存在有向环。 选择数据结构应依据操作模式。需要频繁按优先级取最值时使用堆，需要有序范围查询时考虑平衡搜索树，只做键到值的快速映射时可优先考虑散列表。",
+          "jump_url": "/eval/documents/data-structures/chunks/0"
+        }
+      ]
+    },
+    {
+      "case_id": "quiz-index-basic",
+      "status": "completed",
+      "error_type": null,
+      "error_message": null,
+      "document_ids": [
+        "mysql-indexes"
+      ],
+      "configuration": {
+        "question_count": 5,
+        "difficulty": "basic",
+        "question_types": [
+          "single_choice",
+          "true_false",
+          "fill_blank"
+        ],
+        "random_mix": true,
+        "context_chunk_count": 1,
+        "context_character_count": 736
+      },
+      "duration_seconds": 30.987,
+      "automatic_metrics": {
+        "question_count": 5,
+        "question_type_distribution": {
+          "fill_blank": 1,
+          "single_choice": 3,
+          "true_false": 1
+        },
+        "cognitive_level_distribution": {
+          "remember": 2,
+          "understand": 3
+        },
+        "exact_duplicate_count": 0,
+        "near_duplicate_pairs": [],
+        "duplicate_rate": 0.0,
+        "source_verifiable_rate_heuristic": 1.0,
+        "mean_source_overlap": 0.6937,
+        "key_point_coverage": 1.0,
+        "matched_key_points": [
+          "聚簇索引",
+          "二级索引",
+          "回表",
+          "覆盖索引"
+        ],
+        "manual_review_required": true
+      },
+      "questions": [
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "remember",
+          "prompt": "根据资料，InnoDB 的二级索引叶子节点中保存了什么内容？",
+          "options": [
+            {
+              "id": "A",
+              "text": "完整行记录"
+            },
+            {
+              "id": "B",
+              "text": "二级索引键和主键值"
+            },
+            {
+              "id": "C",
+              "text": "二级索引键和所有列的值"
+            },
+            {
+              "id": "D",
+              "text": "聚簇索引的页指针"
+            }
+          ],
+          "correct_answer": "B",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "资料指出，InnoDB 的主键索引通常是聚簇索引，叶子节点保存完整行记录；而二级索引叶子节点保存二级索引键和主键值。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "true_false",
+          "cognitive_level": "understand",
+          "prompt": "判断正误：覆盖索引是指查询所需列都能从某个索引取得，从而不必回表。",
+          "options": [],
+          "correct_answer": true,
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "资料中明确定义：覆盖索引是指查询所需列都能从某个索引取得，从而不必回表。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "understand",
+          "prompt": "对于联合索引 `(tenant_id, status, created_at)`，以下哪种查询通常不能充分利用该索引完成定位？",
+          "options": [
+            {
+              "id": "A",
+              "text": "只使用 `tenant_id` 进行查询"
+            },
+            {
+              "id": "B",
+              "text": "先等值限定 `tenant_id` 和 `status`，再对 `created_at` 做范围过滤"
+            },
+            {
+              "id": "C",
+              "text": "只按 `status` 进行查询"
+            },
+            {
+              "id": "D",
+              "text": "使用 `tenant_id` 进行等值查询"
+            }
+          ],
+          "correct_answer": "C",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "资料指出，联合索引按字段顺序组织。只按 `status` 查询缺少最左列（`tenant_id`），通常不能充分利用该联合索引完成定位。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "fill_blank",
+          "cognitive_level": "remember",
+          "prompt": "通过二级索引找到主键后，如果查询还需要索引中没有的列，就要再次访问聚簇索引，这一步称为______。",
+          "options": [],
+          "correct_answer": null,
+          "accepted_answers": [
+            "回表"
+          ],
+          "keywords": [
+            "回表"
+          ],
+          "reference_answer": null,
+          "explanation": "资料中定义：通过二级索引找到主键后，如果查询还需要索引中没有的列，就要再次访问聚簇索引，这一步称为回表。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "understand",
+          "prompt": "关于索引的选择性，以下哪种说法符合资料描述？",
+          "options": [
+            {
+              "id": "A",
+              "text": "低选择性列单独建索引一定有利"
+            },
+            {
+              "id": "B",
+              "text": "性别、布尔状态等低选择性列单独建索引未必有利"
+            },
+            {
+              "id": "C",
+              "text": "选择性越高，索引效果越差"
+            },
+            {
+              "id": "D",
+              "text": "优化器总是会选择所有存在的索引"
+            }
+          ],
+          "correct_answer": "B",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "资料指出，性别、布尔状态等低选择性列单独建索引未必有利，因为读取大量索引项再回表可能比全表扫描更贵。同时，存在索引不代表优化器一定使用。",
+          "source_ids": [
+            "S1"
+          ]
+        }
+      ],
+      "sources": [
+        {
+          "source_id": "S1",
+          "knowledge_base_id": 1,
+          "knowledge_base_name": "CodeMind 固定评估语料",
+          "chunk_id": 7,
+          "document_id": 6,
+          "file_name": "mysql_indexes.md",
+          "chunk_index": 0,
+          "page_no": null,
+          "source_text": "# MySQL：InnoDB 索引与执行计划 本文是 CodeMind 质量评估使用的项目自编固定语料。 ## 聚簇索引与二级索引 InnoDB 的主键索引通常是聚簇索引，叶子节点保存完整行记录。二级索引叶子节点保存二级索引键和主键值。通过二级索引找到主键后，如果查询还需要索引中没有的列，就要再次访问聚簇索引，这一步称为回表。 覆盖索引是指查询所需列都能从某个索引取得，从而不必回表。覆盖是针对具体查询而言，同一索引对一个查询可能覆盖，对另一个查询可能不覆盖。 ## 联合索引 联合索引 `(tenant_id, status, created_at)` 按字段顺序组织。查询只使用 `tenant_id`，或先等值限定 `tenant_id`、`status` 再对 `created_at` 做范围过滤，通常可以有效利用该索引。只按 `status` 查询缺少最左列，通常不能充分利用该联合索引完成定位。 对联合索引中的某列使用范围条件后，后续列能否继续用于定位受查询形式和优化器能力影响。设计索引时应结合高频查询、选择性、排序需求和写入成本，而不是机械地把所有列放入一个索引。 ## 选择性与执行计划 选择性表示不同值数量相对总行数的比例。性别、布尔状态等低选择性列单独建索引未必有利，因为读取大量索引项再回表可能比全表扫描更贵。 `EXPLAIN` 可观察访问类型、候选索引、实际选择的索引、估算行数和额外信息。优化器基于统计信息估算成本，存在索引不代表一定使用。修改索引后应使用真实查询和接近生产的数据分布验证。 索引会加速部分读取，却增加磁盘空间、插入更新维护和页分裂成本。冗余索引还会扩大缓冲池压力。删除看似未使用的索引前，应确认监控周期覆盖完整业务场景。",
+          "jump_url": "/eval/documents/mysql-indexes/chunks/0"
+        }
+      ]
+    },
+    {
+      "case_id": "quiz-testing-basic",
+      "status": "completed",
+      "error_type": null,
+      "error_message": null,
+      "document_ids": [
+        "software-testing"
+      ],
+      "configuration": {
+        "question_count": 5,
+        "difficulty": "basic",
+        "question_types": [
+          "single_choice",
+          "true_false",
+          "fill_blank"
+        ],
+        "random_mix": true,
+        "context_chunk_count": 1,
+        "context_character_count": 726
+      },
+      "duration_seconds": 15.224,
+      "automatic_metrics": {
+        "question_count": 5,
+        "question_type_distribution": {
+          "fill_blank": 1,
+          "single_choice": 3,
+          "true_false": 1
+        },
+        "cognitive_level_distribution": {
+          "remember": 3,
+          "understand": 2
+        },
+        "exact_duplicate_count": 0,
+        "near_duplicate_pairs": [],
+        "duplicate_rate": 0.0,
+        "source_verifiable_rate_heuristic": 1.0,
+        "mean_source_overlap": 0.6523,
+        "key_point_coverage": 1.0,
+        "matched_key_points": [
+          "单元测试",
+          "集成测试",
+          "端到端测试",
+          "测试金字塔"
+        ],
+        "manual_review_required": true
+      },
+      "questions": [
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "remember",
+          "prompt": "根据资料，测试金字塔建议保留大量快速单元测试、适量集成测试和少量关键端到端测试。关于测试金字塔的描述，以下哪项是正确的？",
+          "options": [
+            {
+              "id": "A",
+              "text": "它是一个固定比例公式，必须严格遵守"
+            },
+            {
+              "id": "B",
+              "text": "它建议依据系统风险和架构进行调整"
+            },
+            {
+              "id": "C",
+              "text": "它要求只追求覆盖率百分比"
+            },
+            {
+              "id": "D",
+              "text": "它建议保留大量端到端测试"
+            }
+          ],
+          "correct_answer": "B",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "资料指出测试金字塔“不是固定比例公式，应依据系统风险和架构调整”，且只追求覆盖率百分比可能产生无效测试。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "true_false",
+          "cognitive_level": "remember",
+          "prompt": "根据资料，修复缺陷时应先修复实现，再添加能稳定复现问题的测试。",
+          "options": [],
+          "correct_answer": false,
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "资料明确指出：“修复缺陷时应先添加能稳定复现问题的测试，再修复实现，使测试从失败变为通过。”",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "understand",
+          "prompt": "以下哪种测试方法最适合用于验证具有明确状态转换的功能（如登录、订单处理）？",
+          "options": [
+            {
+              "id": "A",
+              "text": "等价类划分"
+            },
+            {
+              "id": "B",
+              "text": "边界值分析"
+            },
+            {
+              "id": "C",
+              "text": "状态机测试"
+            },
+            {
+              "id": "D",
+              "text": "随机测试"
+            }
+          ],
+          "correct_answer": "C",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "资料中提到：“状态机测试适合登录、任务处理、订单等具有明确状态转换的功能。”",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "fill_blank",
+          "cognitive_level": "remember",
+          "prompt": "根据资料，持续集成应在每次合并请求上至少执行格式检查、单元测试、关键集成测试和____。",
+          "options": [],
+          "correct_answer": null,
+          "accepted_answers": [
+            "生产构建"
+          ],
+          "keywords": [
+            "生产构建"
+          ],
+          "reference_answer": null,
+          "explanation": "资料指出：“持续集成应在每次合并请求上至少执行格式检查、单元测试、关键集成测试和生产构建。”",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "understand",
+          "prompt": "关于测试失败时的日志记录，资料建议以下哪项做法是正确的？",
+          "options": [
+            {
+              "id": "A",
+              "text": "日志中应包含密码和Token以便排查"
+            },
+            {
+              "id": "B",
+              "text": "日志不得包含密码、Token或真实API Key"
+            },
+            {
+              "id": "C",
+              "text": "不需要保留任何诊断信息"
+            },
+            {
+              "id": "D",
+              "text": "只保留截图，不保留日志"
+            }
+          ],
+          "correct_answer": "B",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "资料明确指出：“测试失败时应保留足够诊断信息……但日志不得包含密码、Token或真实API Key。”",
+          "source_ids": [
+            "S1"
+          ]
+        }
+      ],
+      "sources": [
+        {
+          "source_id": "S1",
+          "knowledge_base_id": 1,
+          "knowledge_base_name": "CodeMind 固定评估语料",
+          "chunk_id": 9,
+          "document_id": 8,
+          "file_name": "software_testing.md",
+          "chunk_index": 0,
+          "page_no": null,
+          "source_text": "# 软件工程：自动化测试与持续集成 本文是 CodeMind 质量评估使用的项目自编固定语料。 ## 测试层次 单元测试隔离验证函数、类或小型服务，运行快且定位问题准确。集成测试验证数据库、消息系统、文件或多个模块之间的契约。端到端测试从用户入口验证完整流程，最接近真实使用，但执行慢、维护成本高且失败定位较困难。 测试金字塔建议保留大量快速单元测试、适量集成测试和少量关键端到端测试。它不是固定比例公式，应依据系统风险和架构调整。只追求覆盖率百分比可能产生没有有效断言的测试。 ## 用例设计 等价类划分把大量输入划分为预期行为相同的集合，每类选择代表值。边界值分析重点检查最小值、最大值以及边界内外相邻值。状态机测试适合登录、任务处理、订单等具有明确状态转换的功能。 回归测试用于确认修改没有破坏原有行为。修复缺陷时应先添加能稳定复现问题的测试，再修复实现，使测试从失败变为通过。外部 API 可使用替身控制超时、限流、认证失败和异常响应，但仍需少量真实环境契约测试。 ## 稳定性与 CI 测试应独立、可重复，并清理自己创建的数据。依赖执行顺序、共享全局状态、真实时间和不受控网络会造成不稳定测试。可通过固定随机种子、注入时钟、隔离数据库和等待可观察条件来减少偶发失败，不应简单增加无限重试掩盖问题。 持续集成应在每次合并请求上至少执行格式检查、单元测试、关键集成测试和生产构建。需要真实付费 API Key 的在线质量评估不应在普通 PR 自动运行，可使用受保护 Secret 手工触发并保存模型、数据集版本和结果报告。 测试失败时应保留足够诊断信息，例如失败用例、日志、响应摘要和截图，但日志不得包含密码、Token 或真实 API Key。",
+          "jump_url": "/eval/documents/software-testing/chunks/0"
+        }
+      ]
+    }
+  ]
+}

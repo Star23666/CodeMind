@@ -20,6 +20,7 @@ from app.services.embedding_client import (
     EmbeddingClient,
     EmbeddingServiceError,
 )
+from app.services.embedding_text import build_embedding_text
 from app.services.text_splitter import TextBlock, TextSplitter
 
 
@@ -83,6 +84,45 @@ class DocumentPipelineTest(unittest.TestCase):
         self.assertEqual(chunks[0].page_no, 2)
         self.assertLess(chunks[0].start_offset, chunks[0].end_offset)
         self.assertEqual(chunks[1].chunk_index, 1)
+
+    def test_text_splitter_preserves_section_title(self):
+        chunks = TextSplitter(chunk_size=30, overlap=5).split_blocks(
+            [TextBlock(text="进程和线程。" * 10, section_title="操作系统 > 并发")]
+        )
+
+        self.assertTrue(chunks)
+        self.assertTrue(all(chunk.section_title == "操作系统 > 并发" for chunk in chunks))
+
+    def test_markdown_parser_preserves_heading_hierarchy(self):
+        parser = DocumentParser()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "os.md"
+            file_path.write_text(
+                "# 操作系统\n总览。\n## 进程与线程\n线程共享资源。\n"
+                "```python\n# 这里不是标题\n```\n",
+                encoding="utf-8",
+            )
+            blocks = parser.parse(str(file_path), "md")
+
+        assert [block.section_title for block in blocks] == [
+            "操作系统",
+            "操作系统 > 进程与线程",
+        ]
+        assert "这里不是标题" in blocks[1].text
+
+    def test_embedding_text_adds_document_and_section_without_changing_source(self):
+        source = "线程共享进程资源。"
+        value = build_embedding_text(
+            file_name="操作系统笔记.md",
+            section_title="进程与线程",
+            text=source,
+        )
+
+        self.assertEqual(
+            value,
+            "文档：操作系统笔记\n章节：进程与线程\n内容：线程共享进程资源。",
+        )
+        self.assertEqual(source, "线程共享进程资源。")
 
     def test_missing_online_config_never_falls_back_locally(self):
         import app.services.embedding_client as embedding_module

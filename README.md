@@ -15,7 +15,7 @@ CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented
 - 文档解析、文本切分和处理状态展示
 - 文档任务并发防重、处理中取消、服务重启恢复和失败时旧索引保留
 - 在线 Embedding API 和 Chroma 向量入库
-- 问题重写、topK 检索、相似度过滤和 rerank
+- 章节感知 Embedding、问题重写、Dense + BM25 混合召回、RRF 融合和在线直接证据 rerank
 - 独立语义检索页面，支持知识库选择、高级参数、加载/空/错误状态、来源 metadata 与原文跳转
 - 在线 LLM RAG 回答、来源编号校验和 SSE 流式输出
 - 用户个人大模型配置（BYOK）、加密存储、连接测试和系统模型切换
@@ -35,12 +35,13 @@ CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented
 - Docker Compose 本地及服务器部署
 - MySQL、Chroma 就绪检查与独立存活检查
 - 路由懒加载和 G6、Element Plus、文档预览独立分包
+- 固定 RAG/AI 出题质量数据集、Embedding 阈值扫描、拒答评估和人工语义评分
 
 当前限制与后续计划：
 
-- AI 出题已通过真实 MySQL、Chroma 和在线模型端到端回归；在线模型耗时与题目语义质量仍需持续记录。
+- AI 出题已建立固定在线基线；成功题目的语义质量较高，但进阶用例首轮结构成功率仍需改进。
 - 第一版不保存练习历史，主观题采用参考答案加用户自评。
-- 固定 RAG 测试集、Embedding 阈值评估和最终成果物由对应负责人继续推进。
+- 当前混合检索固定基线在 reranker 阈值 `0.55` 下达到 100% 召回和 0% 依据不足误召；仍需用更多真实资料持续验证泛化表现。
 
 完整清单和处理建议见 [已知问题与后续计划](docs/已知问题与后续计划.md)。
 
@@ -93,6 +94,8 @@ CodeMind/
 │  ├─ schema.sql           新数据库初始化结构
 │  └─ migrations/          已有数据库升级脚本
 ├─ docs/                   需求、接口与项目文档
+├─ testdata/eval/          固定 RAG 与 AI 出题质量语料、标注和基线
+├─ .github/workflows/      受保护 Secret 手动触发的在线质量评估
 ├─ storage/                非 Docker 模式下的本地持久化目录
 ├─ .env.example
 └─ docker-compose.yml
@@ -175,12 +178,20 @@ QUIZ_CONTEXT_MAX_TOKENS=8000
 EMBEDDING_API_KEY=replace_with_embedding_api_key
 EMBEDDING_BASE_URL=https://provider.example.com/v1
 EMBEDDING_MODEL=replace_with_embedding_model
+# 在线 reranker 正常工作时，检索结果展示的是 reranker 相关性分数
+RERANK_API_KEY=
+RERANK_BASE_URL=
+RERANK_MODEL=Qwen/Qwen3-Reranker-8B
+RERANK_SCORE_THRESHOLD=0.55
+# reranker 不可用且允许降级时使用的向量相似度阈值
 RETRIEVAL_SCORE_THRESHOLD=0.45
 
 DOCUMENT_WORKER_CONCURRENCY=2
 
 JWT_SECRET_KEY=replace_with_a_long_random_secret
 ```
+
+`RERANK_API_KEY` 和 `RERANK_BASE_URL` 留空时复用 `LLM_API_KEY` 与 `LLM_BASE_URL`。当前完整链路先从 Chroma 取 12 个 Dense 候选、从 MySQL 片段取 12 个 BM25 候选，通过 RRF 合并为最多 20 个候选，再用 `Qwen/Qwen3-Reranker-8B` 判断是否存在直接证据。2026-07-22 固定基线验证的生产阈值是 `RERANK_SCORE_THRESHOLD=0.55`。`RETRIEVAL_SCORE_THRESHOLD=0.45` 只在 reranker 失败并允许降级时生效，两个分数定义不同，不能互换。详见 [RAG 与 AI 出题质量评估](docs/RAG与AI出题质量评估.md)。
 
 `MIND_MAP_TIMEOUT_SECONDS` 是连接、读取、写入等网络阶段的超时；`MIND_MAP_TOTAL_TIMEOUT_SECONDS`
 才是每次知识地图模型调用的墙钟总时限。管理员可以显式设为 `0` 关闭总时限，但异常上游若持续零星返回
@@ -225,6 +236,10 @@ docker compose logs -f mysql
 ## 已有数据库升级
 
 `database/schema.sql` 只会在 MySQL 数据卷第一次初始化时执行。拉取包含数据库结构变更的新代码后，不能只重建镜像，还需要执行对应迁移。
+
+### 2026-07-22：混合检索与章节感知 Embedding
+
+本次升级不修改 MySQL schema，不需要执行 SQL migration。需要在 `backend/.env` 增加混合召回和 reranker 配置，并建议对已有 `completed` 文档逐个执行“重建索引”，使 Chroma 向量包含文件名和章节标题。VPS 命令、配置清单、验证与回滚见 [2026-07-22 混合检索升级说明](docs/2026-07-22混合检索升级说明.md)。
 
 ### 2026-07-17：AI 出题临时会话
 
@@ -390,7 +405,7 @@ Get-Content -Raw database\migrations\20260711_preserve_qa_source_snapshots.sql |
 12. 提交后查看明确标注的客观题得分，完成主观题自评，并按“需复习/待自评”筛选折叠结果；原文在新标签页打开，当前标签页刷新后仍能恢复本次结果。
 13. 公共文档只能由上传者或管理员重建、取消和删除；公共知识库本身不能删除。
 
-如果检索不到资料，请先确认文档处理状态、Embedding 配置和相似度阈值。阈值与 Embedding 模型及切分粒度有关，更换模型后必须重新评估。
+如果检索不到资料，请先确认文档处理状态、Embedding 与 reranker 配置，并查看后端日志是否发生 reranker 降级。正常链路使用 `RERANK_SCORE_THRESHOLD`，降级链路才使用 `RETRIEVAL_SCORE_THRESHOLD`；更换模型、维度、切分或检索策略后必须重新评估，Embedding 模型或维度变化时还要重建 Chroma。
 
 ## API 与认证
 
@@ -455,7 +470,16 @@ python -m pip install pytest==8.3.5
 python -m pytest -q
 ```
 
-当前后端测试共 135 项，覆盖认证和 JWT 撤销、公共/私人知识库跨用户权限、管理员初始化与账号启停、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、文档处理与重启恢复、取消和重复任务防护、私人文档迁移及 MySQL/Chroma 事务补偿、向量 metadata 更新后校验、索引事务补偿与陈旧向量过滤、反馈持久化与管理员详情脱敏、健康检查、删除清理、检索降级、Prompt、LLM 异常、RAG 编排、SSE 流式生成、问答历史、知识地图，以及 AI 出题的多库权限、文档轮询、覆盖度、难度结构、输入预算、来源编号白名单、答案隔离、BYOK 路由、六类题型评分和临时清理。
+当前后端测试共 160 项，覆盖认证和 JWT 撤销、公共/私人知识库跨用户权限、管理员初始化与账号启停、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、文档处理与重启恢复、取消和重复任务防护、私人文档迁移及 MySQL/Chroma 事务补偿、向量 metadata 更新后校验、索引事务补偿与陈旧向量过滤、Dense/BM25/RRF/reranker 与降级、反馈持久化与管理员详情脱敏、健康检查、删除清理、Prompt、LLM 异常、RAG 编排、SSE 流式生成、问答历史、知识地图、固定质量数据校验与基线产物，以及 AI 出题的多库权限、文档轮询、覆盖度、难度结构、输入预算、来源编号白名单、答案隔离、BYOK 路由、六类题型评分和临时清理。
+
+固定质量数据不调用在线 API 也能先做完整性校验：
+
+```bash
+cd backend
+python scripts/evaluate_quality.py validate
+```
+
+在线 Embedding 阈值、RAG 拒答和 AI 出题基线通过 `scripts/evaluate_quality.py` 手动执行，不加入普通 PR CI。固定语料、命令、指标和首轮结果见 [质量评估说明](docs/RAG与AI出题质量评估.md) 与 [2026-07-22 基线](docs/evaluation/2026-07-22质量基线.md)。
 
 Docker 端到端测试已验证前端 Nginx 代理下的注册、登录、默认私人库、公共上传确认、独立语义检索、跨用户公共文档检索和问答、来源片段与原文查看、反馈提交及管理员详情、普通用户管理路由拦截、管理员隐私脱敏、私人文档迁移、上传者/管理员重建和删除，以及 MySQL/文件/Chroma 同步一致性。AI 出题另以真实 MySQL、在线 Embedding 和 `Qwen/Qwen3.6-35B-A3B` 验证四份大资料的均衡覆盖、进阶认知层级、六种题型、评分、自评筛选、结果恢复、来源反查、提交即删和过期清理。当前实测 10 题覆盖项目报告、操作系统、MySQL 和计算机网络四份文档，约 77 秒完成生成。当前实测小范围知识地图约 36 秒完成，生成 15 个节点，节点数、历史记录和来源引用均通过一致性校验。
 
@@ -529,7 +553,9 @@ Docker Compose 使用三个命名卷：
 
 ### 问题没有召回来源
 
-确认知识库中存在 `completed` 文档，并检查相似度阈值。不要直接把其他 Embedding 模型下的阈值用于当前模型。
+确认知识库中存在 `completed` 文档，并检查后端日志是否出现 reranker 降级。正常链路调整证据相关度阈值，降级链路才调整向量相似度阈值；不要混用两个分数。
+
+部署本次章节感知 Embedding 后，旧文档仍可检索，但其既有向量不含文件名和章节标题。请在文档库对已有 `completed` 文档执行“重建索引”；重建成功后才会原子替换旧向量，失败时旧索引继续可用。更换 Embedding 模型或维度时必须完成全部文档重建。
 
 ### 知识地图无法生成或一直等待
 
@@ -560,6 +586,8 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 - [API 接口设计](docs/API接口设计.md)
 - [生成侧接口约定](docs/生成侧接口约定.md)
 - [已知问题与后续计划](docs/已知问题与后续计划.md)
+- [RAG 与 AI 出题质量评估](docs/RAG与AI出题质量评估.md)
+- [2026-07-22 质量基线](docs/evaluation/2026-07-22质量基线.md)
 - [GitHub Wiki 首页草稿](docs/wiki/Home.md)
 - [数据库结构](database/schema.sql)
 - [数据库与迁移说明](database/README.md)

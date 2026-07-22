@@ -15,7 +15,9 @@ FastAPI 后端负责认证、知识库与文档管理、Embedding 入库、Chrom
 | `app/services/feedback_service.py` | 问答反馈持久化、归属校验和管理员筛选 |
 | `app/services/admin_service.py` | 管理员概览、用户启停、公共文档治理和私人数据脱敏 |
 | `app/services/health_service.py` | MySQL 与 Chroma 就绪检查 |
-| `app/services/retrieval_service.py` | 问题重写、Embedding、Chroma 召回、过滤与 rerank |
+| `app/services/retrieval_service.py` | 问题重写、Dense/BM25 召回、RRF 融合、在线 rerank 与降级 |
+| `app/services/reranker_client.py` | OpenAI 兼容根地址下的在线 Rerank 调用、重试和安全错误分类 |
+| `app/services/retrieval_scoring.py` | BM25、RRF 和回退关键词评分 |
 | `app/services/rag_service.py` | 检索、Prompt、LLM、SSE 流式输出和历史保存的问答编排 |
 | `app/services/mind_map_service.py` | 知识地图结构生成、节点追问和分支扩展 |
 | `app/services/mind_map_job_service.py` | 异步任务状态、进度和结果持久化 |
@@ -23,6 +25,7 @@ FastAPI 后端负责认证、知识库与文档管理、Embedding 入库、Chrom
 | `app/services/quiz_service.py` | 多知识库抽样、结构化出题、来源校验、评分和临时会话清理 |
 | `app/services/quiz_job_service.py` | 出题后台任务、进度、启动恢复和过期清理 |
 | `scripts/promote_admin.py` | 将已注册用户安全提升为管理员 |
+| `scripts/evaluate_quality.py` | 固定 RAG 阈值、拒答与 AI 出题质量评估 |
 | `tests/` | 后端自动化测试 |
 
 ## 环境配置
@@ -60,6 +63,10 @@ QUIZ_CONTEXT_MAX_TOKENS=8000
 EMBEDDING_API_KEY=replace_with_embedding_key
 EMBEDDING_BASE_URL=https://provider.example.com/v1
 EMBEDDING_MODEL=replace_with_embedding_model
+RERANK_API_KEY=
+RERANK_BASE_URL=
+RERANK_MODEL=Qwen/Qwen3-Reranker-8B
+RERANK_SCORE_THRESHOLD=0.55
 RETRIEVAL_SCORE_THRESHOLD=0.45
 
 DOCUMENT_WORKER_CONCURRENCY=2
@@ -67,7 +74,7 @@ DOCUMENT_WORKER_CONCURRENCY=2
 JWT_SECRET_KEY=replace_with_a_long_random_secret
 ```
 
-Embedding 未配置时，文档入库和检索会明确失败；普通 RAG 问答在 LLM 未配置时保留本地演示回答。知识地图和 AI 出题依赖结构化 LLM 输出，因此必须配置在线 LLM。
+Embedding 未配置时，文档入库和检索会明确失败。`RERANK_API_KEY`/`RERANK_BASE_URL` 留空时复用系统 `LLM_*`；正常检索使用 `RERANK_SCORE_THRESHOLD=0.55`，reranker 不可用且 `RERANK_FAIL_OPEN=true` 时回退到向量链路及 `RETRIEVAL_SCORE_THRESHOLD=0.45`。普通 RAG 问答在 LLM 未配置时保留本地演示回答；知识地图和 AI 出题依赖结构化 LLM 输出，因此必须配置在线 LLM。
 
 ## 原生开发
 
@@ -159,6 +166,8 @@ RAG 问答提供两个接口：`POST /api/chat` 返回完整 JSON；`POST /api/c
 - 已有数据库必须先执行 `database/migrations/20260717_create_quiz_tables.sql`。
 - 在线模型生成耗时与语义质量、真实依赖测试自动化等后续事项见 [已知问题与后续计划](../docs/已知问题与后续计划.md)。
 
+固定质量数据位于 `../testdata/eval/`。先运行 `python scripts/evaluate_quality.py validate` 校验语料与标注；当前完整检索使用 `python scripts/evaluate_quality.py rag-hybrid --output <path> --with-generation` 评估，在线阈值、拒答、出题和人工评分说明见 [RAG 与 AI 出题质量评估](../docs/RAG与AI出题质量评估.md)。在线命令会消耗 API 额度，不加入普通 PR CI。
+
 ## 运行测试
 
 ```bash
@@ -166,7 +175,7 @@ cd backend
 python -m pytest -q
 ```
 
-当前基线为 `135 passed`。测试使用 SQLite 和替身服务覆盖主要业务，其中包括全局公共库唯一性、跨用户公共文档访问和管理、私人库隔离、管理员初始化与用户启停、私人数据脱敏、删除清理、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、问答和知识地图个人模型路由、知识地图流式总超时和并发槽位释放、文档重启恢复、重复入队、取消、私人库间迁移与 MySQL/Chroma 补偿、索引补偿和陈旧向量过滤，反馈持久化、越权与管理员筛选，JWT 注销撤销，MySQL/Chroma 就绪探针，以及 AI 出题的多库权限、文档轮询、覆盖度、难度结构、输入预算、来源编号白名单、答案隔离、评分、BYOK 与临时清理；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、Issue #28 角色流程、公共库跨用户检索、AI 六类题型、来源反查、权限按钮和数据同步清理。
+当前基线为 `160 passed`。测试使用 SQLite 和替身服务覆盖主要业务，其中包括全局公共库唯一性、跨用户公共文档访问和管理、私人库隔离、管理员初始化与用户启停、私人数据脱敏、删除清理、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、问答和知识地图个人模型路由、知识地图流式总超时和并发槽位释放、文档重启恢复、重复入队、取消、私人库间迁移与 MySQL/Chroma 补偿、索引补偿和陈旧向量过滤、Dense/BM25/RRF/reranker 与权限化词法召回、反馈持久化、越权与管理员筛选，JWT 注销撤销，MySQL/Chroma 就绪探针，固定质量数据校验、指标计算与基线产物，以及 AI 出题的多库权限、文档轮询、覆盖度、难度结构、输入预算、来源编号白名单、答案隔离、评分、BYOK 与临时清理；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、Issue #28 角色流程、公共库跨用户检索、AI 六类题型、来源反查、权限按钮和数据同步清理。
 
 ## Docker 运行
 
