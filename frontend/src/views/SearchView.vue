@@ -48,8 +48,8 @@
                 </el-select>
               </label>
               <label>
-                <span>相似度阈值</span>
-                <el-input-number v-model="scoreThreshold" :min="-1" :max="1" :step="0.01" />
+                <span>证据相关度阈值</span>
+                <el-input-number v-model="scoreThreshold" :min="0" :max="1" :step="0.01" />
               </label>
               <label>
                 <span>精排保留</span>
@@ -89,7 +89,7 @@
                   <template v-if="item.page_no"> · 第 {{ item.page_no }} 页</template>
                 </span>
               </div>
-              <el-tag effect="plain">相似度 {{ formatScore(item.score) }}</el-tag>
+              <el-tag effect="plain">相关度 {{ formatScore(item.score) }}</el-tag>
             </div>
             <p>{{ item.source_text }}</p>
             <el-button link type="primary" @click="openSource(item)">打开原文片段</el-button>
@@ -135,7 +135,7 @@ const errorMessage = ref("");
 
 const emptyDescription = computed(() => {
   if (!hasSearched.value) return "输入检索词后，这里会显示相关资料片段";
-  return responseMessage.value || "没有找到达到当前相似度阈值的片段";
+  return responseMessage.value || "没有找到达到当前证据相关度阈值的片段";
 });
 
 onMounted(async () => {

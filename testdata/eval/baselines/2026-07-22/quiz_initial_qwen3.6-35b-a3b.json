@@ -1,0 +1,985 @@
+{
+  "schema_version": "1.0",
+  "evaluation_type": "quiz-quality",
+  "run_date": "2026-07-22",
+  "dataset": {
+    "dataset_id": "codemind-computer-knowledge-v1",
+    "version": "1.0.0",
+    "corpus_sha256": "cc8b08b5542e9fcacac496f4d062b7cde53e9a2d2fc57a5a21151bdd3303d64a"
+  },
+  "configuration": {
+    "llm_model": "Qwen/Qwen3.6-35B-A3B",
+    "llm_base_url": "https://api.siliconflow.cn/v1",
+    "quiz_timeout_seconds": 300.0,
+    "quiz_max_tokens": 12000,
+    "quiz_structure_max_retries": 1,
+    "quiz_enable_thinking": false,
+    "quiz_context_max_chunks": 24,
+    "quiz_context_max_tokens": 8000,
+    "quiz_context_max_chars": 30000,
+    "quiz_context_max_chars_per_chunk": 1600
+  },
+  "summary": {
+    "case_count": 8,
+    "successful_case_count": 4,
+    "failed_case_count": 4,
+    "question_count": 20,
+    "mean_generation_seconds": 30.042,
+    "exact_duplicate_count": 0,
+    "near_duplicate_pair_count": 0,
+    "mean_key_point_coverage": 0.5,
+    "mean_source_verifiable_rate_heuristic": 1.0,
+    "manual_review_required": true
+  },
+  "cases": [
+    {
+      "case_id": "quiz-os-process-intermediate",
+      "status": "completed",
+      "error_type": null,
+      "error_message": null,
+      "document_ids": [
+        "os-process-threads"
+      ],
+      "configuration": {
+        "question_count": 5,
+        "difficulty": "intermediate",
+        "question_types": [
+          "single_choice",
+          "multiple_choice",
+          "short_answer",
+          "scenario"
+        ],
+        "random_mix": true,
+        "context_chunk_count": 1,
+        "context_character_count": 774
+      },
+      "duration_seconds": 27.096,
+      "automatic_metrics": {
+        "question_count": 5,
+        "question_type_distribution": {
+          "multiple_choice": 1,
+          "scenario": 1,
+          "short_answer": 1,
+          "single_choice": 2
+        },
+        "cognitive_level_distribution": {
+          "analyze": 2,
+          "apply": 2,
+          "understand": 1
+        },
+        "exact_duplicate_count": 0,
+        "near_duplicate_pairs": [],
+        "duplicate_rate": 0.0,
+        "source_verifiable_rate_heuristic": 1.0,
+        "mean_source_overlap": 0.5188,
+        "key_point_coverage": 0.5,
+        "matched_key_points": [
+          "持锁时间",
+          "虚假唤醒"
+        ],
+        "manual_review_required": true
+      },
+      "questions": [
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "understand",
+          "prompt": "根据资料，关于进程与线程的资源共享特性，下列哪项描述是正确的？",
+          "options": [
+            {
+              "id": "A",
+              "text": "线程共享堆和全局变量，但拥有独立的栈和寄存器现场"
+            },
+            {
+              "id": "B",
+              "text": "进程共享代码段和堆，但拥有独立的虚拟地址空间"
+            },
+            {
+              "id": "C",
+              "text": "线程之间通过文件描述符表进行通信，因此通信成本较高"
+            },
+            {
+              "id": "D",
+              "text": "进程切换不涉及地址空间变化，因此比线程切换更轻量"
+            }
+          ],
+          "correct_answer": "A",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "资料指出，同一进程内的线程共享代码段、堆、全局变量和打开的文件，但每个线程拥有独立的栈、程序计数器和寄存器现场。进程通常拥有独立的虚拟地址空间，且进程切换涉及地址空间变化，开销较大。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "scenario",
+          "cognitive_level": "apply",
+          "prompt": "某开发者在编写多线程程序时，需要在临界区中发起一个不可控的长时间网络请求。根据资料中的同步与死锁原则，这种做法存在什么主要风险？应如何改进？",
+          "options": [],
+          "correct_answer": null,
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": "主要风险是持锁时间过长，可能导致其他线程长时间等待，降低并发性能甚至引发死锁或系统响应迟缓。改进方法：持锁时间应尽量短，不应在持锁期间执行不可控的长时间网络请求。应将网络请求移出临界区，或在获取锁之前/之后执行。",
+          "explanation": "资料明确指出，持锁时间应尽量短，不应在持锁期间执行不可控的长时间网络请求。这是为了避免长时间占用资源，影响其他线程的执行效率。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "multiple_choice",
+          "cognitive_level": "analyze",
+          "prompt": "根据资料中关于状态与调度的描述，当一个进程发起磁盘读取并等待结果时，其状态变化及后续调度逻辑包括哪些？（多选）",
+          "options": [
+            {
+              "id": "A",
+              "text": "进程从运行态转为阻塞态"
+            },
+            {
+              "id": "B",
+              "text": "I/O 完成后，进程直接从阻塞态转为运行态"
+            },
+            {
+              "id": "C",
+              "text": "I/O 完成后，进程从阻塞态转为就绪态"
+            },
+            {
+              "id": "D",
+              "text": "调度器再次选中该进程后，进程才恢复运行"
+            }
+          ],
+          "correct_answer": [
+            "A",
+            "C",
+            "D"
+          ],
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "资料指出，发起磁盘读取并等待结果时转为阻塞态；I/O 完成后从阻塞态转为就绪态，而不是直接保证进入运行态；调度器再次选中后，进程才恢复运行。因此 B 错误，A、C、D 正确。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "short_answer",
+          "cognitive_level": "analyze",
+          "prompt": "在使用条件变量进行线程同步时，为什么线程必须在循环中重新检查条件，而不是使用 if 语句？请结合资料解释原因。",
+          "options": [],
+          "correct_answer": null,
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": "因为可能发生虚假唤醒，或者条件在重新获得锁前再次改变。使用循环可以确保在重新获取锁后，条件确实成立，从而避免逻辑错误。",
+          "explanation": "资料明确说明，线程必须在循环中重新检查条件，因为可能发生虚假唤醒，或者条件在重新获得锁前再次改变。这是为了确保线程在继续执行前，共享状态确实满足预期条件。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "apply",
+          "prompt": "为了防止死锁，资料建议采用哪种策略来破坏“循环等待”这一必要条件？",
+          "options": [
+            {
+              "id": "A",
+              "text": "允许资源抢占"
+            },
+            {
+              "id": "B",
+              "text": "规定所有代码按统一顺序获取多把锁"
+            },
+            {
+              "id": "C",
+              "text": "使用超时机制结束所有等待"
+            },
+            {
+              "id": "D",
+              "text": "减少临界区的代码量"
+            }
+          ],
+          "correct_answer": "B",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "资料指出，死锁的经典必要条件包括互斥、占有并等待、不可抢占和循环等待。规定所有代码按统一顺序获取多把锁，可以破坏循环等待条件。超时机制只能结束永久等待，不能预防死锁的形成。",
+          "source_ids": [
+            "S1"
+          ]
+        }
+      ],
+      "sources": [
+        {
+          "source_id": "S1",
+          "knowledge_base_id": 1,
+          "knowledge_base_name": "CodeMind 固定评估语料",
+          "chunk_id": 1,
+          "document_id": 1,
+          "file_name": "os_process_threads.md",
+          "chunk_index": 0,
+          "page_no": null,
+          "source_text": "# 操作系统：进程、线程与并发 本文是 CodeMind 质量评估使用的项目自编固定语料，所有评估答案均以本文为准。 ## 进程与线程 进程是程序的一次动态执行，也是操作系统进行资源分配和保护的基本单位。普通进程通常拥有独立的虚拟地址空间、文件描述符表和安全上下文。进程控制块保存进程标识符、状态、程序计数器、寄存器现场、调度信息和资源引用。 线程是处理器调度的基本执行单元。同一进程内的线程共享代码段、堆、全局变量和打开的文件，但每个线程拥有独立的栈、程序计数器和寄存器现场。线程共享内存使通信直接，却也可能导致数据竞争。进程切换通常还涉及地址空间变化，线程切换一般较轻，但二者都不是零成本操作。 ## 状态与调度 本文采用新建、就绪、运行、阻塞、终止五状态模型。运行进程的时间片用完后转为就绪态；发起磁盘读取并等待结果时转为阻塞态；I/O 完成后从阻塞态转为就绪态，而不是直接保证进入运行态。调度器再次选中后，进程才恢复运行。 上下文切换需要保存当前执行单元的程序计数器和必要寄存器，并恢复目标执行单元的现场。可运行线程远多于处理器核心时，调度、缓存失效和上下文切换开销可能抵消并行收益。 ## 同步与死锁 临界区是访问共享可变状态且不能被多个线程同时安全执行的代码区域。互斥锁保证同一时刻最多一个线程进入受保护临界区。持锁时间应尽量短，不应在持锁期间执行不可控的长时间网络请求。 条件变量用于等待共享状态成立。等待时会原子释放相关互斥锁并阻塞，被唤醒后重新获取锁。线程必须在循环中重新检查条件，因为可能发生虚假唤醒，或者条件在重新获得锁前再次改变。 死锁的经典必要条件包括互斥、占有并等待、不可抢占和循环等待。规定所有代码按统一顺序获取多把锁，可以破坏循环等待条件。锁等待超时只能结束永久等待，超时后仍需回滚部分操作、释放资源并记录诊断信息。",
+          "jump_url": "/eval/documents/os-process-threads/chunks/0"
+        }
+      ]
+    },
+    {
+      "case_id": "quiz-os-vm-basic",
+      "status": "completed",
+      "error_type": null,
+      "error_message": null,
+      "document_ids": [
+        "os-virtual-memory"
+      ],
+      "configuration": {
+        "question_count": 5,
+        "difficulty": "basic",
+        "question_types": [
+          "single_choice",
+          "true_false",
+          "fill_blank"
+        ],
+        "random_mix": true,
+        "context_chunk_count": 1,
+        "context_character_count": 746
+      },
+      "duration_seconds": 20.849,
+      "automatic_metrics": {
+        "question_count": 5,
+        "question_type_distribution": {
+          "fill_blank": 1,
+          "single_choice": 3,
+          "true_false": 1
+        },
+        "cognitive_level_distribution": {
+          "remember": 3,
+          "understand": 2
+        },
+        "exact_duplicate_count": 0,
+        "near_duplicate_pairs": [],
+        "duplicate_rate": 0.0,
+        "source_verifiable_rate_heuristic": 1.0,
+        "mean_source_overlap": 0.7169,
+        "key_point_coverage": 0.25,
+        "matched_key_points": [
+          "页表"
+        ],
+        "manual_review_required": true
+      },
+      "questions": [
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "remember",
+          "prompt": "当页大小为 4 KiB 时，页内偏移占多少位？",
+          "options": [
+            {
+              "id": "A",
+              "text": "8 位"
+            },
+            {
+              "id": "B",
+              "text": "10 位"
+            },
+            {
+              "id": "C",
+              "text": "12 位"
+            },
+            {
+              "id": "D",
+              "text": "16 位"
+            }
+          ],
+          "correct_answer": "C",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "根据资料，页大小为 4 KiB 时，页内偏移占 12 位。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "true_false",
+          "cognitive_level": "understand",
+          "prompt": "多级页表只为实际使用的虚拟地址范围分配下级结构，这有助于减少稀疏地址空间的页表内存占用。",
+          "options": [],
+          "correct_answer": true,
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "根据资料，多级页表只为实际使用的虚拟地址范围分配下级结构，可减少稀疏地址空间的页表内存。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "remember",
+          "prompt": "在页面置换算法中，哪种算法选择未来最晚再访问的页，但只能作为理论比较基准？",
+          "options": [
+            {
+              "id": "A",
+              "text": "LRU"
+            },
+            {
+              "id": "B",
+              "text": "CLOCK"
+            },
+            {
+              "id": "C",
+              "text": "OPT"
+            },
+            {
+              "id": "D",
+              "text": "FIFO"
+            }
+          ],
+          "correct_answer": "C",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "根据资料，理想的 OPT 算法选择未来最晚再访问的页，只能作为理论比较基准。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "fill_blank",
+          "cognitive_level": "remember",
+          "prompt": "当多个进程的工作集总量长期超过可用物理内存时，系统会频繁换入换出，CPU 大量时间等待存储，这种现象称为____。",
+          "options": [],
+          "correct_answer": null,
+          "accepted_answers": [
+            "抖动"
+          ],
+          "keywords": [
+            "抖动"
+          ],
+          "reference_answer": null,
+          "explanation": "根据资料，多个进程的工作集总量长期超过可用物理内存时，系统会频繁换入换出，CPU 大量时间等待存储，这种现象称为抖动。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "understand",
+          "prompt": "关于脏页和干净的文件映射页的置换，下列说法正确的是？",
+          "options": [
+            {
+              "id": "A",
+              "text": "脏页被置换前可以直接丢弃"
+            },
+            {
+              "id": "B",
+              "text": "干净的文件映射页被置换前必须写回存储"
+            },
+            {
+              "id": "C",
+              "text": "脏页被置换前必须写回存储"
+            },
+            {
+              "id": "D",
+              "text": "两者置换前都需要写回存储"
+            }
+          ],
+          "correct_answer": "C",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "根据资料，脏页被置换前必须写回存储，干净的文件映射页通常可以直接丢弃并在以后重新读取。",
+          "source_ids": [
+            "S1"
+          ]
+        }
+      ],
+      "sources": [
+        {
+          "source_id": "S1",
+          "knowledge_base_id": 1,
+          "knowledge_base_name": "CodeMind 固定评估语料",
+          "chunk_id": 2,
+          "document_id": 2,
+          "file_name": "os_virtual_memory.md",
+          "chunk_index": 0,
+          "page_no": null,
+          "source_text": "# 操作系统：虚拟内存与页面置换 本文是 CodeMind 质量评估使用的项目自编固定语料，所有数值与结论以本文为准。 ## 地址转换 虚拟内存为每个进程提供独立、连续的虚拟地址视图。处理器把虚拟地址拆为虚拟页号和页内偏移，页表项把虚拟页映射到物理页框。页大小为 4 KiB 时，页内偏移占 12 位。 多级页表只为实际使用的虚拟地址范围分配下级结构，可减少稀疏地址空间的页表内存。TLB 是地址转换缓存，保存近期页表映射。TLB 命中时可跳过常规页表遍历；切换地址空间可能使部分 TLB 项失效，但带地址空间标识符的处理器可减少这种刷新。 ## 缺页异常 访问的虚拟页没有有效映射时，处理器触发缺页异常。若访问合法但页面尚未驻留，操作系统分配页框，必要时从磁盘换入数据，更新页表后重新执行导致缺页的指令。若地址越界或权限不允许，则属于非法访问，不能通过普通换页修复。 匿名页首次写入时可以采用按需分配。写时复制允许父子进程暂时共享只读物理页；任一方写入时触发保护异常，系统复制页面并建立私有可写映射。 ## 页面置换与抖动 页面置换算法在物理内存不足时选择牺牲页。理想的 OPT 算法选择未来最晚再访问的页，只能作为理论比较基准。LRU 选择最长时间未使用的页，真实系统常用近似实现。CLOCK 算法维护访问位和循环指针：遇到访问位为 1 的页时清零并跳过，遇到 0 时可选择置换。 工作集表示进程近期活跃页面集合。多个进程的工作集总量长期超过可用物理内存时，系统会频繁换入换出，CPU 大量时间等待存储，这种现象称为抖动。减少并发进程数或增加可用物理内存都可能缓解抖动。 脏页被置换前必须写回存储，干净的文件映射页通常可以直接丢弃并在以后重新读取。因此后台回写脏页有助于降低前台置换延迟。",
+          "jump_url": "/eval/documents/os-virtual-memory/chunks/0"
+        }
+      ]
+    },
+    {
+      "case_id": "quiz-tcp-intermediate",
+      "status": "failed",
+      "error_type": "QuizServiceError",
+      "error_message": "大模型未能返回有效的题目结构，请稍后重试或更换模型。",
+      "document_ids": [
+        "network-tcp"
+      ],
+      "configuration": {
+        "question_count": 5,
+        "difficulty": "intermediate",
+        "question_types": [
+          "multiple_choice",
+          "short_answer",
+          "scenario"
+        ],
+        "random_mix": true,
+        "context_chunk_count": 1,
+        "context_character_count": 775
+      },
+      "duration_seconds": 72.312,
+      "automatic_metrics": {
+        "question_count": 0,
+        "question_type_distribution": {},
+        "cognitive_level_distribution": {},
+        "exact_duplicate_count": 0,
+        "near_duplicate_pairs": [],
+        "duplicate_rate": 0.0,
+        "source_verifiable_rate_heuristic": 0.0,
+        "mean_source_overlap": 0.0,
+        "key_point_coverage": 0.0,
+        "matched_key_points": [],
+        "manual_review_required": true
+      },
+      "questions": [],
+      "sources": [
+        {
+          "source_id": "S1",
+          "knowledge_base_id": 1,
+          "knowledge_base_name": "CodeMind 固定评估语料",
+          "chunk_id": 3,
+          "document_id": 3,
+          "file_name": "network_tcp.md",
+          "chunk_index": 0,
+          "page_no": null,
+          "source_text": "# 计算机网络：TCP 可靠传输 本文是 CodeMind 质量评估使用的项目自编固定语料。 ## 建立连接 TCP 使用三次握手建立连接。客户端先发送带初始序列号的 SYN，服务端回复 SYN-ACK 并给出自己的初始序列号，客户端再发送 ACK。第三次报文证明客户端能够收到服务端的序列号，也使双方确认双向通信路径可用。 TCP 连接由源 IP、源端口、目的 IP、目的端口四元组标识。同一服务端口可以同时服务多个客户端，因为客户端地址和端口不同。 ## 字节流与可靠性 TCP 提供有序、可靠的字节流，不保留应用消息边界。应用不能假设一次 `send` 对应一次 `recv`，必须使用长度字段、分隔符或固定格式自行分帧。 序列号标识字节位置，确认号表示接收方下一步期望的字节序号。发送方在重传超时到期或收到足够的重复确认时重传数据。校验和只能帮助发现传输错误，可靠性还依赖确认、重传、排序和去重。 ## 流量控制与拥塞控制 流量控制保护接收方。接收方通过通告窗口说明当前可接收的数据量，发送方未确认数据不能超过该窗口。拥塞控制保护网络路径，发送方根据拥塞窗口调整在途数据量。实际可发送窗口受接收窗口和拥塞窗口中较小者限制。 慢启动从较小拥塞窗口开始，收到确认后快速增长；达到阈值后进入拥塞避免并较平缓增长。出现丢包或显著拥塞信号时，发送方降低发送速率。 ## 关闭连接与排错 TCP 是全双工协议，两个方向需要分别关闭，典型正常关闭包含 FIN、ACK 的双向交换。主动关闭方可能进入 TIME_WAIT，以便处理延迟报文并确保最后的 ACK 有机会重传。TIME_WAIT 不是应用数据仍在传输的证明。 排查连接问题时可依次检查 DNS 解析、路由可达性、目标端口监听、防火墙、握手是否完成、是否发生重传，以及应用层是否正确处理字节流边界。",
+          "jump_url": "/eval/documents/network-tcp/chunks/0"
+        }
+      ]
+    },
+    {
+      "case_id": "quiz-http-basic",
+      "status": "completed",
+      "error_type": null,
+      "error_message": null,
+      "document_ids": [
+        "network-http-dns"
+      ],
+      "configuration": {
+        "question_count": 5,
+        "difficulty": "basic",
+        "question_types": [
+          "single_choice",
+          "true_false",
+          "fill_blank"
+        ],
+        "random_mix": true,
+        "context_chunk_count": 2,
+        "context_character_count": 955
+      },
+      "duration_seconds": 29.568,
+      "automatic_metrics": {
+        "question_count": 5,
+        "question_type_distribution": {
+          "fill_blank": 1,
+          "single_choice": 3,
+          "true_false": 1
+        },
+        "cognitive_level_distribution": {
+          "remember": 3,
+          "understand": 2
+        },
+        "exact_duplicate_count": 0,
+        "near_duplicate_pairs": [],
+        "duplicate_rate": 0.0,
+        "source_verifiable_rate_heuristic": 1.0,
+        "mean_source_overlap": 0.7201,
+        "key_point_coverage": 0.5,
+        "matched_key_points": [
+          "递归解析器",
+          "TTL"
+        ],
+        "manual_review_required": true
+      },
+      "questions": [
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "remember",
+          "prompt": "根据资料，关于 DNS 解析中的 TTL 字段，以下说法正确的是？",
+          "options": [
+            {
+              "id": "A",
+              "text": "降低 TTL 可以让已经缓存的旧记录立即失效"
+            },
+            {
+              "id": "B",
+              "text": "TTL 表示记录可被缓存的时间"
+            },
+            {
+              "id": "C",
+              "text": "递归解析器负责保存域名的最终记录"
+            },
+            {
+              "id": "D",
+              "text": "权威服务器负责代表客户端完成多步查询"
+            }
+          ],
+          "correct_answer": "B",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "根据资料，TTL 表示记录可被缓存的时间。降低 TTL 可以缩短计划变更后的缓存持续时间，但不能让已经缓存的旧记录立即失效。权威服务器保存域名的最终记录，递归解析器负责代表客户端完成多步查询。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "true_false",
+          "cognitive_level": "understand",
+          "prompt": "根据资料，HTTP 请求是否幂等仅取决于是否包含请求体。",
+          "options": [],
+          "correct_answer": false,
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "根据资料，是否幂等取决于协议语义和服务实现，不能仅凭是否包含请求体判断。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "remember",
+          "prompt": "在 HTTP 缓存机制中，`Cache-Control: no-cache` 的含义是？",
+          "options": [
+            {
+              "id": "A",
+              "text": "要求缓存不要存储响应"
+            },
+            {
+              "id": "B",
+              "text": "允许存储，但复用前必须向源服务器验证"
+            },
+            {
+              "id": "C",
+              "text": "禁止任何缓存行为"
+            },
+            {
+              "id": "D",
+              "text": "仅允许浏览器缓存，不允许代理缓存"
+            }
+          ],
+          "correct_answer": "B",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "根据资料，`Cache-Control: no-store` 要求缓存不要存储响应；`no-cache` 允许存储，但复用前必须向源服务器验证。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "fill_blank",
+          "cognitive_level": "remember",
+          "prompt": "反向代理在转发 SSE（Server-Sent Events）时，应关闭____，否则浏览器可能长时间收不到增量事件。",
+          "options": [],
+          "correct_answer": null,
+          "accepted_answers": [
+            "响应缓冲"
+          ],
+          "keywords": [
+            "响应缓冲",
+            "缓冲"
+          ],
+          "reference_answer": null,
+          "explanation": "根据资料，代理转发 SSE 时应关闭响应缓冲，否则浏览器可能长时间收不到增量事件。",
+          "source_ids": [
+            "S1",
+            "S2"
+          ]
+        },
+        {
+          "question_type": "single_choice",
+          "cognitive_level": "understand",
+          "prompt": "关于 HTTPS 和 TLS，以下哪项描述符合资料内容？",
+          "options": [
+            {
+              "id": "A",
+              "text": "TLS 可以替代应用层认证和权限检查"
+            },
+            {
+              "id": "B",
+              "text": "证书校验不需要检查域名"
+            },
+            {
+              "id": "C",
+              "text": "TLS 在 HTTP 与 TCP 之间加入"
+            },
+            {
+              "id": "D",
+              "text": "TLS 仅保护传输内容，不提供任何加密"
+            }
+          ],
+          "correct_answer": "C",
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": null,
+          "explanation": "根据资料，HTTPS 在 HTTP 与 TCP 之间加入 TLS。证书校验需要检查信任链、域名和有效期。TLS 保护传输内容，但不能替代应用层认证和权限检查。",
+          "source_ids": [
+            "S1",
+            "S2"
+          ]
+        }
+      ],
+      "sources": [
+        {
+          "source_id": "S1",
+          "knowledge_base_id": 1,
+          "knowledge_base_name": "CodeMind 固定评估语料",
+          "chunk_id": 4,
+          "document_id": 4,
+          "file_name": "network_http_dns.md",
+          "chunk_index": 0,
+          "page_no": null,
+          "source_text": "# 计算机网络：DNS、HTTP 与反向代理 本文是 CodeMind 质量评估使用的项目自编固定语料。 ## DNS 解析 客户端通常把查询交给递归解析器。解析器没有缓存时，会从根服务器获得顶级域服务器线索，再向权威服务器查询目标记录。权威服务器保存域名的最终记录，递归解析器负责代表客户端完成多步查询。 TTL 表示记录可被缓存的时间。降低 TTL 可以缩短计划变更后的缓存持续时间，但不能让已经缓存的旧记录立即失效。A 记录映射 IPv4 地址，AAAA 记录映射 IPv6 地址，CNAME 为名称建立别名。 ## HTTP 语义 HTTP 请求由方法、目标、头部和可选消息体组成。GET 通常用于读取资源，POST 常用于提交处理，PUT 表示以给定表示替换目标资源，PATCH 用于局部修改。是否幂等取决于协议语义和服务实现，不能仅凭是否包含请求体判断。 常见状态码中，200 表示成功，201 表示已创建，304 表示缓存仍可使用且通常不含新响应体，400 表示请求无效，401 表示缺少或无效认证，403 表示已识别但无权限，404 表示资源不存在，502 表示网关从上游收到无效响应，504 表示网关等待上游超时。 `Cache-Control: no-store` 要求缓存不要存储响应；`no-cache` 允许存储，但复用前必须向源服务器验证。ETag 可与 `If-None-Match` 配合进行条件请求。 ## TLS、代理与 SSE HTTPS 在 HTTP 与 TCP 之间加入 TLS。证书校验需要检查信任链、域名和有效期。TLS 保护传输内容，但不能替代应用层认证和权限检查。 反向代理代表服务端接收请求，可负责 TLS 终止、路由、负载均衡和静态资源。代理转发 SSE 时应关闭响应缓冲，否则浏览器可能长时间收不到增量事件。",
+          "jump_url": "/eval/documents/network-http-dns/chunks/0"
+        },
+        {
+          "source_id": "S2",
+          "knowledge_base_id": 1,
+          "knowledge_base_name": "CodeMind 固定评估语料",
+          "chunk_id": 5,
+          "document_id": 4,
+          "file_name": "network_http_dns.md",
+          "chunk_index": 1,
+          "page_no": null,
+          "source_text": "校验需要检查信任链、域名和有效期。TLS 保护传输内容，但不能替代应用层认证和权限检查。 反向代理代表服务端接收请求，可负责 TLS 终止、路由、负载均衡和静态资源。代理转发 SSE 时应关闭响应缓冲，否则浏览器可能长时间收不到增量事件。SSE 使用 `text/event-stream`，每个事件以空行结束；它适合服务器向浏览器单向推送文本。",
+          "jump_url": "/eval/documents/network-http-dns/chunks/1"
+        }
+      ]
+    },
+    {
+      "case_id": "quiz-ds-intermediate",
+      "status": "failed",
+      "error_type": "QuizServiceError",
+      "error_message": "大模型未能返回有效的题目结构，请稍后重试或更换模型。",
+      "document_ids": [
+        "data-structures"
+      ],
+      "configuration": {
+        "question_count": 5,
+        "difficulty": "intermediate",
+        "question_types": [
+          "multiple_choice",
+          "short_answer",
+          "scenario"
+        ],
+        "random_mix": true,
+        "context_chunk_count": 1,
+        "context_character_count": 714
+      },
+      "duration_seconds": 40.007,
+      "automatic_metrics": {
+        "question_count": 0,
+        "question_type_distribution": {},
+        "cognitive_level_distribution": {},
+        "exact_duplicate_count": 0,
+        "near_duplicate_pairs": [],
+        "duplicate_rate": 0.0,
+        "source_verifiable_rate_heuristic": 0.0,
+        "mean_source_overlap": 0.0,
+        "key_point_coverage": 0.0,
+        "matched_key_points": [],
+        "manual_review_required": true
+      },
+      "questions": [],
+      "sources": [
+        {
+          "source_id": "S1",
+          "knowledge_base_id": 1,
+          "knowledge_base_name": "CodeMind 固定评估语料",
+          "chunk_id": 6,
+          "document_id": 5,
+          "file_name": "data_structures.md",
+          "chunk_index": 0,
+          "page_no": null,
+          "source_text": "# 数据结构：散列表、树、堆与图 本文是 CodeMind 质量评估使用的项目自编固定语料。 ## 散列表 散列表通过哈希函数把键映射到桶。理想情况下查找、插入和删除的平均时间复杂度为 O(1)，但最坏情况可退化为 O(n)。链地址法让同一桶保存多个元素；开放寻址法在冲突时按探测序列寻找其他位置。负载因子升高通常会增加冲突，因此实现会在达到阈值后扩容并重新散列。 ## 搜索树与堆 二叉搜索树要求左子树键小于当前键，右子树键大于当前键。普通二叉搜索树在有序插入时可能退化为链，操作复杂度变为 O(n)。AVL 树通过旋转保持严格高度平衡，红黑树使用较宽松的颜色约束，二者都能保证基本操作为 O(log n)。 二叉堆是一棵完全二叉树。最小堆只保证父节点不大于子节点，不保证兄弟节点或不同子树全局有序。查看堆顶为 O(1)，插入和删除堆顶为 O(log n)。构建堆可以从最后一个非叶节点向前下沉，整体复杂度为 O(n)。 ## 图遍历与最短路 广度优先搜索使用队列，按与起点的边数逐层访问。在无权图中，BFS 能得到最少边数路径。深度优先搜索使用递归或显式栈，适合连通性、拓扑结构和回溯问题，但不能直接保证无权最短路径。 Dijkstra 算法适用于边权非负的单源最短路，常与优先队列配合。若存在负权边，Dijkstra 的贪心确定过程不再可靠，可根据问题条件选择 Bellman-Ford 等算法。有向无环图的拓扑排序可以使用入度队列；若最终处理节点数少于图中节点总数，则图中存在有向环。 选择数据结构应依据操作模式。需要频繁按优先级取最值时使用堆，需要有序范围查询时考虑平衡搜索树，只做键到值的快速映射时可优先考虑散列表。",
+          "jump_url": "/eval/documents/data-structures/chunks/0"
+        }
+      ]
+    },
+    {
+      "case_id": "quiz-index-intermediate",
+      "status": "failed",
+      "error_type": "QuizServiceError",
+      "error_message": "大模型未能返回有效的题目结构，请稍后重试或更换模型。",
+      "document_ids": [
+        "mysql-indexes"
+      ],
+      "configuration": {
+        "question_count": 5,
+        "difficulty": "intermediate",
+        "question_types": [
+          "multiple_choice",
+          "short_answer",
+          "scenario"
+        ],
+        "random_mix": true,
+        "context_chunk_count": 1,
+        "context_character_count": 736
+      },
+      "duration_seconds": 52.777,
+      "automatic_metrics": {
+        "question_count": 0,
+        "question_type_distribution": {},
+        "cognitive_level_distribution": {},
+        "exact_duplicate_count": 0,
+        "near_duplicate_pairs": [],
+        "duplicate_rate": 0.0,
+        "source_verifiable_rate_heuristic": 0.0,
+        "mean_source_overlap": 0.0,
+        "key_point_coverage": 0.0,
+        "matched_key_points": [],
+        "manual_review_required": true
+      },
+      "questions": [],
+      "sources": [
+        {
+          "source_id": "S1",
+          "knowledge_base_id": 1,
+          "knowledge_base_name": "CodeMind 固定评估语料",
+          "chunk_id": 7,
+          "document_id": 6,
+          "file_name": "mysql_indexes.md",
+          "chunk_index": 0,
+          "page_no": null,
+          "source_text": "# MySQL：InnoDB 索引与执行计划 本文是 CodeMind 质量评估使用的项目自编固定语料。 ## 聚簇索引与二级索引 InnoDB 的主键索引通常是聚簇索引，叶子节点保存完整行记录。二级索引叶子节点保存二级索引键和主键值。通过二级索引找到主键后，如果查询还需要索引中没有的列，就要再次访问聚簇索引，这一步称为回表。 覆盖索引是指查询所需列都能从某个索引取得，从而不必回表。覆盖是针对具体查询而言，同一索引对一个查询可能覆盖，对另一个查询可能不覆盖。 ## 联合索引 联合索引 `(tenant_id, status, created_at)` 按字段顺序组织。查询只使用 `tenant_id`，或先等值限定 `tenant_id`、`status` 再对 `created_at` 做范围过滤，通常可以有效利用该索引。只按 `status` 查询缺少最左列，通常不能充分利用该联合索引完成定位。 对联合索引中的某列使用范围条件后，后续列能否继续用于定位受查询形式和优化器能力影响。设计索引时应结合高频查询、选择性、排序需求和写入成本，而不是机械地把所有列放入一个索引。 ## 选择性与执行计划 选择性表示不同值数量相对总行数的比例。性别、布尔状态等低选择性列单独建索引未必有利，因为读取大量索引项再回表可能比全表扫描更贵。 `EXPLAIN` 可观察访问类型、候选索引、实际选择的索引、估算行数和额外信息。优化器基于统计信息估算成本，存在索引不代表一定使用。修改索引后应使用真实查询和接近生产的数据分布验证。 索引会加速部分读取，却增加磁盘空间、插入更新维护和页分裂成本。冗余索引还会扩大缓冲池压力。删除看似未使用的索引前，应确认监控周期覆盖完整业务场景。",
+          "jump_url": "/eval/documents/mysql-indexes/chunks/0"
+        }
+      ]
+    },
+    {
+      "case_id": "quiz-tx-intermediate",
+      "status": "completed",
+      "error_type": null,
+      "error_message": null,
+      "document_ids": [
+        "mysql-transactions"
+      ],
+      "configuration": {
+        "question_count": 5,
+        "difficulty": "intermediate",
+        "question_types": [
+          "multiple_choice",
+          "short_answer",
+          "scenario"
+        ],
+        "random_mix": true,
+        "context_chunk_count": 1,
+        "context_character_count": 774
+      },
+      "duration_seconds": 42.654,
+      "automatic_metrics": {
+        "question_count": 5,
+        "question_type_distribution": {
+          "multiple_choice": 2,
+          "scenario": 1,
+          "short_answer": 2
+        },
+        "cognitive_level_distribution": {
+          "analyze": 2,
+          "apply": 2,
+          "understand": 1
+        },
+        "exact_duplicate_count": 0,
+        "near_duplicate_pairs": [],
+        "duplicate_rate": 0.0,
+        "source_verifiable_rate_heuristic": 1.0,
+        "mean_source_overlap": 0.5107,
+        "key_point_coverage": 0.75,
+        "matched_key_points": [
+          "事务边界",
+          "Outbox",
+          "幂等键"
+        ],
+        "manual_review_required": true
+      },
+      "questions": [
+        {
+          "question_type": "multiple_choice",
+          "cognitive_level": "analyze",
+          "prompt": "根据资料，关于 MySQL 事务中 MVCC 与锁的关系，以下哪些说法是正确的？",
+          "options": [
+            {
+              "id": "A",
+              "text": "MVCC 机制意味着 InnoDB 完全不需要使用任何锁。"
+            },
+            {
+              "id": "B",
+              "text": "普通一致性读可以使用 MVCC 读取快照，从而避免与许多写操作直接互相阻塞。"
+            },
+            {
+              "id": "C",
+              "text": "写入操作、SELECT ... FOR UPDATE 等当前读以及唯一约束检查仍可能加锁。"
+            },
+            {
+              "id": "D",
+              "text": "MVCC 仅适用于 READ COMMITTED 隔离级别，在 REPEATABLE READ 下无效。"
+            }
+          ],
+          "correct_answer": [
+            "B",
+            "C"
+          ],
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": "",
+          "explanation": "资料指出“MVCC 不代表完全不需要锁：写入、SELECT ... FOR UPDATE 等当前读、唯一约束检查仍可能加锁”，同时说明“普通一致性读可以使用 MVCC 读取快照，避免与许多写操作直接互相阻塞”。因此 A 错误，D 错误（资料未限制 MVCC 仅用于 RC），B 和 C 正确。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "scenario",
+          "cognitive_level": "apply",
+          "prompt": "某电商系统在下单时，事务内部直接调用了慢速的外部 HTTP 接口来发送通知。这导致了数据库锁持有时间延长，增加了死锁概率。根据资料，应如何改进该事务边界设计？",
+          "options": [],
+          "correct_answer": null,
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": "更稳妥的方式通常是先完成数据库事务，再通过事务消息或 Outbox 表驱动外部动作。",
+          "explanation": "资料在“ACID 与事务边界”部分明确指出：“事务中执行慢速外部 HTTP 请求会延长锁持有时间并增加冲突。更稳妥的方式通常是先完成数据库事务，再通过事务消息或 Outbox 表驱动外部动作。”",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "short_answer",
+          "cognitive_level": "understand",
+          "prompt": "资料中提到“锁等待超时”与“死锁”是不同的概念。请根据资料解释这两者的区别。",
+          "options": [],
+          "correct_answer": null,
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": "死锁是指两个事务以相反顺序锁定资源形成循环等待，数据库检测后会回滚其中一个；而锁等待超时表示等待时间超过了限制，但未必已经形成循环等待。",
+          "explanation": "资料在“死锁与重试”部分说明：“两个事务以相反顺序锁定订单行和库存行时可能形成循环等待……锁等待超时与死锁不同：超时表示等待超过限制，未必已经形成循环。”",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "multiple_choice",
+          "cognitive_level": "analyze",
+          "prompt": "关于事务的隔离级别和读一致性，根据资料，以下哪些推断是合理的？",
+          "options": [
+            {
+              "id": "A",
+              "text": "InnoDB 的默认隔离级别是 REPEATABLE READ。"
+            },
+            {
+              "id": "B",
+              "text": "在 READ COMMITTED 级别下，事务中的每条语句都会读取较新的已提交快照。"
+            },
+            {
+              "id": "C",
+              "text": "在 REPEATABLE READ 级别下，同一事务中的一致性读会保持更稳定的快照。"
+            },
+            {
+              "id": "D",
+              "text": "REPEATABLE READ 级别下，事务内所有读操作都绝对看不到其他事务已提交的更新。"
+            }
+          ],
+          "correct_answer": [
+            "A",
+            "B",
+            "C"
+          ],
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": "",
+          "explanation": "资料指出“InnoDB 的默认隔离级别是 REPEATABLE READ”（A 正确）。“READ COMMITTED 通常让每条语句读取较新的已提交快照”（B 正确）。“REPEATABLE READ 让同一事务中的一致性读保持更稳定的快照”（C 正确）。D 选项过于绝对，资料未提及“绝对看不到”，且当前读可能看到最新数据，故不选。",
+          "source_ids": [
+            "S1"
+          ]
+        },
+        {
+          "question_type": "short_answer",
+          "cognitive_level": "apply",
+          "prompt": "在分布式系统中，客户端可能因网络问题重试请求。资料指出仅在客户端按钮上禁止重复点击是不够的，请说明服务端应如何实现幂等控制以避免重复扣款或创建。",
+          "options": [],
+          "correct_answer": null,
+          "accepted_answers": [],
+          "keywords": [],
+          "reference_answer": "服务端应在同一事务中检查并记录唯一请求标识（幂等键），如果检测到重复请求，则返回已有结果，而不是重新执行业务逻辑。",
+          "explanation": "资料在“死锁与重试”部分强调：“幂等键可避免客户端重试造成重复扣款或重复创建。服务端在同一事务中检查并记录唯一请求标识，重复请求返回已有结果。仅在客户端按钮上禁止重复点击不能替代服务端幂等控制。”",
+          "source_ids": [
+            "S1"
+          ]
+        }
+      ],
+      "sources": [
+        {
+          "source_id": "S1",
+          "knowledge_base_id": 1,
+          "knowledge_base_name": "CodeMind 固定评估语料",
+          "chunk_id": 8,
+          "document_id": 7,
+          "file_name": "mysql_transactions.md",
+          "chunk_index": 0,
+          "page_no": null,
+          "source_text": "# MySQL：事务、隔离级别与死锁 本文是 CodeMind 质量评估使用的项目自编固定语料。 ## ACID 与事务边界 原子性表示事务中的操作要么全部成功，要么全部回滚；一致性要求事务把数据库从一个满足约束的状态带到另一个满足约束的状态；隔离性控制并发事务之间可见的中间状态；持久性表示提交结果在故障恢复后仍应保留。 事务边界应覆盖一个不可分割的业务动作，但不应无谓扩大。事务中执行慢速外部 HTTP 请求会延长锁持有时间并增加冲突。更稳妥的方式通常是先完成数据库事务，再通过事务消息或 Outbox 表驱动外部动作。 ## 隔离与 MVCC 标准现象包括脏读、不可重复读和幻读。InnoDB 的默认隔离级别是 REPEATABLE READ。普通一致性读可以使用 MVCC 读取快照，避免与许多写操作直接互相阻塞。MVCC 不代表完全不需要锁：写入、`SELECT ... FOR UPDATE` 等当前读、唯一约束检查仍可能加锁。 READ COMMITTED 通常让每条语句读取较新的已提交快照；REPEATABLE READ 让同一事务中的一致性读保持更稳定的快照。具体锁范围还受索引、查询条件和执行计划影响。 ## 死锁与重试 两个事务以相反顺序锁定订单行和库存行时可能形成循环等待。数据库检测死锁后会回滚其中一个事务，使其他事务继续。应用应捕获死锁错误，只对具备幂等性或可安全重试的整个事务进行有限次数重试，并加入随机退避。 统一资源访问顺序、保持事务短小、为过滤条件建立合适索引，都有助于降低死锁概率。锁等待超时与死锁不同：超时表示等待超过限制，未必已经形成循环。 幂等键可避免客户端重试造成重复扣款或重复创建。服务端在同一事务中检查并记录唯一请求标识，重复请求返回已有结果。仅在客户端按钮上禁止重复点击不能替代服务端幂等控制。",
+          "jump_url": "/eval/documents/mysql-transactions/chunks/0"
+        }
+      ]
+    },
+    {
+      "case_id": "quiz-testing-intermediate",
+      "status": "failed",
+      "error_type": "QuizServiceError",
+      "error_message": "大模型未能返回有效的题目结构，请稍后重试或更换模型。",
+      "document_ids": [
+        "software-testing"
+      ],
+      "configuration": {
+        "question_count": 5,
+        "difficulty": "intermediate",
+        "question_types": [
+          "multiple_choice",
+          "short_answer",
+          "scenario"
+        ],
+        "random_mix": true,
+        "context_chunk_count": 1,
+        "context_character_count": 726
+      },
+      "duration_seconds": 31.408,
+      "automatic_metrics": {
+        "question_count": 0,
+        "question_type_distribution": {},
+        "cognitive_level_distribution": {},
+        "exact_duplicate_count": 0,
+        "near_duplicate_pairs": [],
+        "duplicate_rate": 0.0,
+        "source_verifiable_rate_heuristic": 0.0,
+        "mean_source_overlap": 0.0,
+        "key_point_coverage": 0.0,
+        "matched_key_points": [],
+        "manual_review_required": true
+      },
+      "questions": [],
+      "sources": [
+        {
+          "source_id": "S1",
+          "knowledge_base_id": 1,
+          "knowledge_base_name": "CodeMind 固定评估语料",
+          "chunk_id": 9,
+          "document_id": 8,
+          "file_name": "software_testing.md",
+          "chunk_index": 0,
+          "page_no": null,
+          "source_text": "# 软件工程：自动化测试与持续集成 本文是 CodeMind 质量评估使用的项目自编固定语料。 ## 测试层次 单元测试隔离验证函数、类或小型服务，运行快且定位问题准确。集成测试验证数据库、消息系统、文件或多个模块之间的契约。端到端测试从用户入口验证完整流程，最接近真实使用，但执行慢、维护成本高且失败定位较困难。 测试金字塔建议保留大量快速单元测试、适量集成测试和少量关键端到端测试。它不是固定比例公式，应依据系统风险和架构调整。只追求覆盖率百分比可能产生没有有效断言的测试。 ## 用例设计 等价类划分把大量输入划分为预期行为相同的集合，每类选择代表值。边界值分析重点检查最小值、最大值以及边界内外相邻值。状态机测试适合登录、任务处理、订单等具有明确状态转换的功能。 回归测试用于确认修改没有破坏原有行为。修复缺陷时应先添加能稳定复现问题的测试，再修复实现，使测试从失败变为通过。外部 API 可使用替身控制超时、限流、认证失败和异常响应，但仍需少量真实环境契约测试。 ## 稳定性与 CI 测试应独立、可重复，并清理自己创建的数据。依赖执行顺序、共享全局状态、真实时间和不受控网络会造成不稳定测试。可通过固定随机种子、注入时钟、隔离数据库和等待可观察条件来减少偶发失败，不应简单增加无限重试掩盖问题。 持续集成应在每次合并请求上至少执行格式检查、单元测试、关键集成测试和生产构建。需要真实付费 API Key 的在线质量评估不应在普通 PR 自动运行，可使用受保护 Secret 手工触发并保存模型、数据集版本和结果报告。 测试失败时应保留足够诊断信息，例如失败用例、日志、响应摘要和截图，但日志不得包含密码、Token 或真实 API Key。",
+          "jump_url": "/eval/documents/software-testing/chunks/0"
+        }
+      ]
+    }
+  ]
+}

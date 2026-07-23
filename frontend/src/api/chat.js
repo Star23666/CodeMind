@@ -1,7 +1,7 @@
 import { request } from "./request";
 import { TOKEN_KEY } from "../stores/user";
 
-export const DEFAULT_SCORE_THRESHOLD = 0.45;
+export const DEFAULT_SCORE_THRESHOLD = 0.55;
 
 export function sendChatQuestion(payload) {
   return request.post(

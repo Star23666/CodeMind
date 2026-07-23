@@ -55,7 +55,7 @@ defineEmits(["focus-chat", "focus-upload", "use-prompt"]);
 const prompts = [
   "进程和线程有什么区别？",
   "RAG 为什么能提升回答可信度？",
-  "知识库检索的相似度阈值有什么作用？",
+  "知识库检索的证据相关度阈值有什么作用？",
 ];
 
 const steps = [

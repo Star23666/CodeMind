@@ -5,6 +5,7 @@ from dataclasses import dataclass
 class TextBlock:
     text: str
     page_no: int | None = None
+    section_title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,7 @@ class TextChunk:
     page_no: int | None
     start_offset: int
     end_offset: int
+    section_title: str | None = None
 
 
 class TextSplitter:
@@ -44,6 +46,7 @@ class TextSplitter:
                         page_no=block.page_no,
                         start_offset=document_offset + start,
                         end_offset=document_offset + end,
+                        section_title=block.section_title,
                     )
                 )
 

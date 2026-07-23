@@ -1,0 +1,111 @@
+name: Manual quality evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Evaluation mode
+        required: true
+        default: validate
+        type: choice
+        options:
+          - validate
+          - rag
+          - rag-hybrid
+          - quiz
+      embedding_model:
+        description: Embedding model used by rag mode
+        required: false
+        default: Qwen/Qwen3-VL-Embedding-8B
+        type: string
+      llm_model:
+        description: LLM used by rag generation and quiz mode
+        required: false
+        default: Qwen/Qwen3.6-35B-A3B
+        type: string
+      rerank_model:
+        description: Reranker used by rag-hybrid mode
+        required: false
+        default: Qwen/Qwen3-Reranker-8B
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
+      EMBEDDING_BASE_URL: ${{ secrets.EMBEDDING_BASE_URL }}
+      EMBEDDING_MODEL: ${{ inputs.embedding_model }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+      LLM_MODEL: ${{ inputs.llm_model }}
+      RERANK_MODEL: ${{ inputs.rerank_model }}
+      RERANK_SCORE_THRESHOLD: "0.55"
+      QUIZ_ENABLE_THINKING: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate fixed dataset
+        run: python scripts/evaluate_quality.py validate
+
+      - name: Create result directory
+        if: inputs.mode != 'validate'
+        run: mkdir -p ../quality-results
+
+      - name: Run RAG threshold and refusal evaluation
+        if: inputs.mode == 'rag'
+        run: >-
+          python scripts/evaluate_quality.py rag
+          --output ../quality-results/rag.json
+          --with-generation
+          --generation-positive-per-document 1
+
+      - name: Run hybrid RAG, rerank, and refusal evaluation
+        if: inputs.mode == 'rag-hybrid'
+        run: >-
+          python scripts/evaluate_quality.py rag-hybrid
+          --output ../quality-results/rag-hybrid.json
+          --with-generation
+          --generation-positive-per-document 1
+          --generation-concurrency 2
+
+      - name: Run representative quiz baseline
+        if: inputs.mode == 'quiz'
+        run: >-
+          python scripts/evaluate_quality.py quiz
+          --output ../quality-results/quiz.json
+          --manual-csv ../quality-results/quiz-manual.csv
+          --case quiz-os-process-intermediate
+          --case quiz-os-vm-basic
+          --case quiz-tcp-intermediate
+          --case quiz-http-basic
+          --case quiz-ds-intermediate
+          --case quiz-index-intermediate
+          --case quiz-tx-intermediate
+          --case quiz-testing-intermediate
+
+      - name: Upload online evaluation results
+        if: inputs.mode != 'validate' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codemind-quality-${{ inputs.mode }}-${{ github.run_id }}
+          path: quality-results/
+          if-no-files-found: error
+          retention-days: 30

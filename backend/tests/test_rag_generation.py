@@ -122,10 +122,10 @@ class FakeLlmConfigService:
 
 
 class RagGenerationTest(unittest.TestCase):
-    def test_chat_request_uses_tuned_embedding_threshold_by_default(self):
+    def test_chat_request_uses_validated_reranker_threshold_by_default(self):
         request = ChatRequest(knowledge_base_id=1, question="进程是什么？")
 
-        self.assertEqual(request.score_threshold, 0.45)
+        self.assertEqual(request.score_threshold, 0.55)
 
     def test_build_prompt_numbers_sources_and_includes_guardrails(self):
         prompt = build_rag_prompt(

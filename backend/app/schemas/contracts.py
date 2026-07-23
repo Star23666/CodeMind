@@ -350,7 +350,14 @@ class MindMapJobRead(BaseModel):
 
 class RetrievalOptions(BaseModel):
     top_k: int = Field(default=4, ge=1, le=10)
-    score_threshold: float = Field(default=settings.retrieval_score_threshold, ge=-1, le=1)
+    score_threshold: float = Field(
+        default=settings.rerank_score_threshold,
+        ge=-1,
+        le=1,
+        description=(
+            "启用 rerank 时为证据相关度阈值；关闭 rerank 时为向量相似度阈值"
+        ),
+    )
     rerank_top_n: int = Field(default=2, ge=1, le=10)
     enable_rewrite: bool = True
     enable_rerank: bool = True

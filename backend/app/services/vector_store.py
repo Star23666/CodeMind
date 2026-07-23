@@ -79,6 +79,19 @@ class VectorStore:
             if actual is None or any(actual.get(key) != value for key, value in expected.items()):
                 raise RuntimeError(f"向量 metadata 更新后校验失败：{vector_id}")
 
+    def get_metadatas(self, ids: list[str]) -> dict[str, dict[str, Any]]:
+        if not ids:
+            return {}
+        result = self.collection.get(ids=ids, include=["metadatas"])
+        return {
+            str(vector_id): dict(metadata or {})
+            for vector_id, metadata in zip(
+                result.get("ids", []),
+                result.get("metadatas", []) or [],
+                strict=False,
+            )
+        }
+
     def search(
         self,
         *,

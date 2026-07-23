@@ -63,6 +63,24 @@ class Settings(BaseSettings):
     embedding_timeout_seconds: float = 30.0
     embedding_max_retries: int = 1
     retrieval_score_threshold: float = 0.45
+    retrieval_hybrid_enabled: bool = True
+    retrieval_dense_candidate_k: int = 12
+    retrieval_lexical_candidate_k: int = 12
+    retrieval_fusion_candidate_k: int = 20
+    retrieval_lexical_max_chunks: int = 3000
+    retrieval_rrf_k: int = 60
+
+    rerank_api_key: str = ""
+    rerank_base_url: str = ""
+    rerank_model: str = "Qwen/Qwen3-Reranker-8B"
+    rerank_timeout_seconds: float = 30.0
+    rerank_max_retries: int = 1
+    rerank_score_threshold: float = 0.55
+    rerank_fail_open: bool = True
+    rerank_instruction: str = (
+        "判断候选资料是否包含直接回答查询所需的明确事实或解释。"
+        "仅主题相关但没有给出所问具体信息、数值、版本、路径或结论时应给低分。"
+    )
 
     document_worker_concurrency: int = 2
 
@@ -106,6 +124,14 @@ class Settings(BaseSettings):
     @property
     def max_upload_size_bytes(self) -> int:
         return self.max_upload_size_mb * 1024 * 1024
+
+    @property
+    def effective_rerank_api_key(self) -> str:
+        return self.rerank_api_key or self.llm_api_key
+
+    @property
+    def effective_rerank_base_url(self) -> str:
+        return self.rerank_base_url or self.llm_base_url
 
     def _resolve_project_path(self, value: str) -> Path:
         path = Path(value)

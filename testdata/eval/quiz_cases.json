@@ -1,0 +1,23 @@
+{
+  "dataset_id": "codemind-computer-knowledge-v1",
+  "version": "1.0.0",
+  "cases": [
+    {"id":"quiz-os-process-basic","document_ids":["os-process-threads"],"question_count":5,"difficulty":"basic","question_types":["single_choice","true_false","fill_blank"],"random_mix":true,"expected_key_points":["进程","线程","状态转换","互斥锁","条件变量","死锁"]},
+    {"id":"quiz-os-process-intermediate","document_ids":["os-process-threads"],"question_count":5,"difficulty":"intermediate","question_types":["single_choice","multiple_choice","short_answer","scenario"],"random_mix":true,"expected_key_points":["上下文切换","持锁时间","虚假唤醒","统一加锁顺序"]},
+    {"id":"quiz-os-vm-basic","document_ids":["os-virtual-memory"],"question_count":5,"difficulty":"basic","question_types":["single_choice","true_false","fill_blank"],"random_mix":true,"expected_key_points":["页表","TLB","缺页异常","写时复制"]},
+    {"id":"quiz-os-vm-intermediate","document_ids":["os-virtual-memory"],"question_count":5,"difficulty":"intermediate","question_types":["multiple_choice","short_answer","scenario"],"random_mix":true,"expected_key_points":["CLOCK","工作集","抖动","脏页"]},
+    {"id":"quiz-tcp-basic","document_ids":["network-tcp"],"question_count":5,"difficulty":"basic","question_types":["single_choice","true_false","fill_blank"],"random_mix":true,"expected_key_points":["三次握手","字节流","确认","重传"]},
+    {"id":"quiz-tcp-intermediate","document_ids":["network-tcp"],"question_count":5,"difficulty":"intermediate","question_types":["multiple_choice","short_answer","scenario"],"random_mix":true,"expected_key_points":["流量控制","拥塞控制","TIME_WAIT","分帧"]},
+    {"id":"quiz-http-basic","document_ids":["network-http-dns"],"question_count":5,"difficulty":"basic","question_types":["single_choice","true_false","fill_blank"],"random_mix":true,"expected_key_points":["递归解析器","TTL","HTTP 状态码","ETag"]},
+    {"id":"quiz-http-intermediate","document_ids":["network-http-dns"],"question_count":5,"difficulty":"intermediate","question_types":["multiple_choice","short_answer","scenario"],"random_mix":true,"expected_key_points":["no-store","no-cache","TLS","反向代理","SSE"]},
+    {"id":"quiz-ds-basic","document_ids":["data-structures"],"question_count":5,"difficulty":"basic","question_types":["single_choice","true_false","fill_blank"],"random_mix":true,"expected_key_points":["散列表","二叉搜索树","堆","BFS"]},
+    {"id":"quiz-ds-intermediate","document_ids":["data-structures"],"question_count":5,"difficulty":"intermediate","question_types":["multiple_choice","short_answer","scenario"],"random_mix":true,"expected_key_points":["负载因子","平衡树","Dijkstra","拓扑排序"]},
+    {"id":"quiz-index-basic","document_ids":["mysql-indexes"],"question_count":5,"difficulty":"basic","question_types":["single_choice","true_false","fill_blank"],"random_mix":true,"expected_key_points":["聚簇索引","二级索引","回表","覆盖索引"]},
+    {"id":"quiz-index-intermediate","document_ids":["mysql-indexes"],"question_count":5,"difficulty":"intermediate","question_types":["multiple_choice","short_answer","scenario"],"random_mix":true,"expected_key_points":["联合索引","最左列","选择性","EXPLAIN"]},
+    {"id":"quiz-tx-basic","document_ids":["mysql-transactions"],"question_count":5,"difficulty":"basic","question_types":["single_choice","true_false","fill_blank"],"random_mix":true,"expected_key_points":["ACID","REPEATABLE READ","MVCC","死锁"]},
+    {"id":"quiz-tx-intermediate","document_ids":["mysql-transactions"],"question_count":5,"difficulty":"intermediate","question_types":["multiple_choice","short_answer","scenario"],"random_mix":true,"expected_key_points":["事务边界","Outbox","有限重试","幂等键"]},
+    {"id":"quiz-testing-basic","document_ids":["software-testing"],"question_count":5,"difficulty":"basic","question_types":["single_choice","true_false","fill_blank"],"random_mix":true,"expected_key_points":["单元测试","集成测试","端到端测试","测试金字塔"]},
+    {"id":"quiz-testing-intermediate","document_ids":["software-testing"],"question_count":5,"difficulty":"intermediate","question_types":["multiple_choice","short_answer","scenario"],"random_mix":true,"expected_key_points":["边界值","回归测试","不稳定测试","受保护 Secret"]}
+  ]
+}
+
