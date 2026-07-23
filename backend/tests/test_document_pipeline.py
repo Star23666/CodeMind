@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from docx import Document as DocxDocument
 from fastapi import HTTPException
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -120,6 +121,25 @@ class DocumentPipelineTest(unittest.TestCase):
             "操作系统 > 进程与线程",
         ]
         assert "这里不是标题" in blocks[1].text
+
+    def test_docx_parser_preserves_heading_hierarchy(self):
+        parser = DocumentParser()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "os.docx"
+            document = DocxDocument()
+            document.add_heading("操作系统", level=1)
+            document.add_paragraph("总览。")
+            document.add_heading("进程与线程", level=2)
+            document.add_paragraph("线程共享资源。")
+            document.save(file_path)
+
+            blocks = parser.parse(str(file_path), "docx")
+
+        assert [block.section_title for block in blocks] == [
+            "操作系统",
+            "操作系统 > 进程与线程",
+        ]
+        assert [block.text for block in blocks] == ["总览。", "线程共享资源。"]
 
     def test_embedding_text_adds_document_and_section_without_changing_source(self):
         source = "线程共享进程资源。"
@@ -273,10 +293,17 @@ class DocumentPipelineTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             file_path = Path(temp_dir) / "notes.md"
             file_path.write_text("# 第一章\n\n第一段内容。\n\n## 第二章\n\n第二段内容。", encoding="utf-8")
-            text_value = parser.parse(str(file_path), "md")[0].text
+            blocks = parser.parse(str(file_path), "md")
 
-        self.assertIn("第一章\n第一段内容。", text_value)
-        self.assertIn("第二章\n第二段内容。", text_value)
+        self.assertEqual(len(blocks), 2)
+        self.assertEqual(
+            [block.section_title for block in blocks],
+            ["第一章", "第一章 > 第二章"],
+        )
+        self.assertEqual(
+            [block.text for block in blocks],
+            ["第一段内容。", "第二段内容。"],
+        )
 
     def test_upload_name_and_file_signatures_are_validated(self):
         service = DocumentService()

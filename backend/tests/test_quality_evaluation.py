@@ -8,6 +8,7 @@ from app.evaluation.quality import (
     calculate_quiz_automatic_metrics,
     calculate_rag_metrics,
     cosine_similarity,
+    corpus_sha256,
     evaluate_rag_thresholds,
     is_refusal,
     load_dataset,
@@ -28,6 +29,23 @@ def test_fixed_quality_dataset_satisfies_issue_32_contract():
     assert summary["insufficient_count"] == 24
     assert summary["quiz_case_count"] == 16
     assert len(summary["corpus_sha256"]) == 64
+
+
+def test_fixed_quality_dataset_hash_is_independent_of_checkout_newlines(tmp_path: Path):
+    dataset = load_dataset(DATA_ROOT)
+    for file_name in ("manifest.json", "rag_cases.json", "quiz_cases.json"):
+        raw = (DATA_ROOT / file_name).read_bytes()
+        lf_only = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        (tmp_path / file_name).write_bytes(lf_only.replace(b"\n", b"\r\n"))
+    crlf_dataset = type(dataset)(
+        root=tmp_path,
+        manifest=dataset.manifest,
+        documents=dataset.documents,
+        rag_cases=dataset.rag_cases,
+        quiz_cases=dataset.quiz_cases,
+    )
+
+    assert corpus_sha256(crlf_dataset) == corpus_sha256(dataset)
 
 
 def test_cosine_similarity_matches_chroma_cosine_score_semantics():

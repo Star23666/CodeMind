@@ -863,6 +863,117 @@ class MindMapServiceTest(unittest.TestCase):
         self.assertEqual(cancelled.stage, "cancelled")
         self.assertTrue(task.cancelled())
 
+    def test_cross_instance_cancel_prevents_late_completion_and_history(self) -> None:
+        worker_service = MindMapJobService()
+        cancelling_service = MindMapJobService()
+        queued = worker_service.create_job(
+            self.db,
+            owner_id=1,
+            request=MindMapGenerateRequest(knowledge_base_id=10),
+        )
+        self.db.rollback()
+        result = MindMapResponse(
+            knowledge_base_id=10,
+            generation_mode="ai",
+            node_count=1,
+            message="done",
+            root=MindMapNode(id="root", title="操作系统"),
+        )
+
+        async def run_worker_and_cancel_from_another_instance():
+            generation_started = asyncio.Event()
+            allow_completion = asyncio.Event()
+
+            async def delayed_generate(*args, **kwargs):
+                generation_started.set()
+                await allow_completion.wait()
+                return result
+
+            with patch(
+                "app.services.mind_map_job_service.mind_map_service.generate",
+                new=delayed_generate,
+            ):
+                worker = asyncio.create_task(worker_service.process_job(queued.job_id))
+                await asyncio.wait_for(generation_started.wait(), timeout=1)
+                with self.SessionLocal() as cancel_db:
+                    cancelled = await cancelling_service.cancel_job(
+                        cancel_db,
+                        job_id=queued.job_id,
+                        owner_id=1,
+                    )
+                allow_completion.set()
+                await worker
+                return cancelled
+
+        with patch(
+            "app.services.mind_map_job_service.SessionLocal",
+            self.SessionLocal,
+        ):
+            cancelled = run_async(run_worker_and_cancel_from_another_instance())
+
+        self.db.rollback()
+        durable_job = worker_service.get_job(
+            self.db,
+            job_id=queued.job_id,
+            owner_id=1,
+        )
+        history_count = self.db.execute(
+            text("SELECT COUNT(*) FROM mind_map_histories")
+        ).scalar_one()
+        self.assertEqual(cancelled.status, "cancelled")
+        self.assertEqual(durable_job.status, "cancelled")
+        self.assertIsNone(durable_job.result)
+        self.assertEqual(history_count, 0)
+
+    def test_cancelled_job_rejects_late_progress_from_another_instance(self) -> None:
+        worker_service = MindMapJobService()
+        cancelling_service = MindMapJobService()
+        queued = worker_service.create_job(
+            self.db,
+            owner_id=1,
+            request=MindMapGenerateRequest(knowledge_base_id=10),
+        )
+        self.db.execute(
+            text(
+                """
+                UPDATE mind_map_jobs
+                SET status = 'processing', stage = 'extracting', progress = 40
+                WHERE id = :job_id
+                """
+            ),
+            {"job_id": queued.job_id},
+        )
+        self.db.commit()
+
+        with self.SessionLocal() as cancel_db:
+            cancelled = run_async(
+                cancelling_service.cancel_job(
+                    cancel_db,
+                    job_id=queued.job_id,
+                    owner_id=1,
+                )
+            )
+        with self.SessionLocal() as worker_db:
+            updated = worker_service._update(
+                worker_db,
+                queued.job_id,
+                status="processing",
+                stage="assembling",
+                progress=92,
+                message="正在整理画布节点和连线",
+            )
+
+        self.db.rollback()
+        durable_job = worker_service.get_job(
+            self.db,
+            job_id=queued.job_id,
+            owner_id=1,
+        )
+        self.assertEqual(cancelled.status, "cancelled")
+        self.assertFalse(updated)
+        self.assertEqual(durable_job.status, "cancelled")
+        self.assertEqual(durable_job.stage, "cancelled")
+
     def test_job_completion_and_generated_history_are_atomic(self) -> None:
         service = MindMapJobService()
         queued = service.create_job(
