@@ -14,36 +14,45 @@ class DocumentParseError(ValueError):
 
 
 class _HtmlTextExtractor(HTMLParser):
+    block_tags = {
+        "p",
+        "br",
+        "li",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "pre",
+        "blockquote",
+        "div",
+        "tr",
+    }
+
     def __init__(self) -> None:
         super().__init__()
         self.parts: list[str] = []
 
     def handle_data(self, data: str) -> None:
-        text = data.strip()
-        if text:
-            self.parts.append(text)
+        if data:
+            self.parts.append(data)
 
     def handle_starttag(self, tag: str, attrs) -> None:
-        if tag in {"p", "br", "li", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "blockquote"}:
+        if tag in self.block_tags:
             self.parts.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
-        if tag in {"p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "blockquote"}:
+        if tag in self.block_tags:
             self.parts.append("\n")
 
     def get_text(self) -> str:
-        lines: list[str] = []
-        current: list[str] = []
-        for part in self.parts:
-            if part == "\n":
-                if current:
-                    lines.append(" ".join(current).strip())
-                    current = []
-                continue
-            current.append(part)
-        if current:
-            lines.append(" ".join(current).strip())
-        return "\n".join(line for line in lines if line).strip()
+        lines = []
+        for line in "".join(self.parts).splitlines():
+            normalized = " ".join(line.split())
+            if normalized:
+                lines.append(normalized)
+        return "\n".join(lines)
 
 
 class DocumentParser:

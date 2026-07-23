@@ -246,7 +246,7 @@ CREATE TABLE IF NOT EXISTS mind_map_jobs (
     FOREIGN KEY (document_id) REFERENCES documents(id)
     ON DELETE SET NULL,
   CONSTRAINT chk_mind_map_jobs_status
-    CHECK (status IN ('queued', 'processing', 'completed', 'failed')),
+    CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'cancelled')),
   CONSTRAINT chk_mind_map_jobs_progress
     CHECK (progress BETWEEN 0 AND 100)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

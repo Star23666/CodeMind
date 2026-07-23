@@ -63,6 +63,7 @@ QUIZ_CONTEXT_MAX_TOKENS=8000
 EMBEDDING_API_KEY=replace_with_embedding_key
 EMBEDDING_BASE_URL=https://provider.example.com/v1
 EMBEDDING_MODEL=replace_with_embedding_model
+EMBEDDING_BATCH_SIZE=64
 RERANK_API_KEY=
 RERANK_BASE_URL=
 RERANK_MODEL=Qwen/Qwen3-Reranker-8B
@@ -70,6 +71,10 @@ RERANK_SCORE_THRESHOLD=0.55
 RETRIEVAL_SCORE_THRESHOLD=0.45
 
 DOCUMENT_WORKER_CONCURRENCY=2
+MAX_UPLOAD_SIZE_MB=50
+DOCUMENT_MAX_EXPANDED_SIZE_MB=100
+DOCUMENT_MAX_PARSED_CHARS=3500000
+DOCUMENT_MAX_CHUNKS=5000
 
 JWT_SECRET_KEY=replace_with_a_long_random_secret
 ```
@@ -137,6 +142,9 @@ RAG 问答提供两个接口：`POST /api/chat` 返回完整 JSON；`POST /api/c
 ## 文档任务说明
 
 - 上传和重建只写入 `pending` 状态，由受并发限制的后台 Worker 原子领取。
+- 上传文件会校验实际 PDF/DOCX 结构；DOCX 解压体积、解析字符数和切片数都有独立上限，防止小压缩包放大后耗尽内存。
+- 文件写盘不占用 FastAPI 事件循环；Embedding 按 `EMBEDDING_BATCH_SIZE` 分批调用，避免大文档一次请求过载供应商。
+- Markdown 解析保留标题和段落换行，切片时不会把整篇文档压成一行。
 - 同一文档不能重复入队；重建中的再次提交返回 `409`。
 - 后端启动时会将中断的 `processing` 文档恢复为 `pending` 并重新调度。
 - 新片段和新向量成功后才替换旧索引；解析、Embedding 或写入失败时保留旧索引。
@@ -145,11 +153,14 @@ RAG 问答提供两个接口：`POST /api/chat` 返回完整 JSON；`POST /api/c
 ## 知识地图说明
 
 - `POST /api/mind-maps/jobs` 创建后台任务，`GET /api/mind-maps/jobs/{job_id}` 查询进度。
-- 1～3 个资料片段会单次生成；更大范围先分批提炼，再合并为总览、章节、概念和细节节点。
+- 相同用户、知识库和文档范围已有活动任务时复用原任务；`POST /api/mind-maps/jobs/{job_id}/cancel` 可主动取消。
+- 1～3 个资料片段会单次生成；更大范围先按文档均衡采样、分批提炼，再按资料顺序合并为总览、章节、概念和细节节点。
 - 结构生成通过 LLM 流式响应收集文本，并受每次模型调用的墙钟总时限约束；首次生成和结构化输出长度重试共享该时限，超时会取消流并释放全局 LLM 并发槽位。
 - `MIND_MAP_TOTAL_TIMEOUT_SECONDS=0` 仅作为管理员显式关闭保护的特殊选项；异常上游持续零星输出但不结束时可能永久占用 3 个全局槽位，生产环境应保留有限值。
 - 后端重启时，处于等待或处理中的知识地图任务会自动重新排队，客户端可继续查询原任务 ID。
 - 每个节点可包含 `key_points`、`learning_tip`、原文来源和子节点。
+- 模型只能引用本次实际提供的片段；无真实来源、同级同名的重复节点会在保存前剔除。
+- 长时间等待模型前会释放只读数据库事务，避免生成期间占住连接池。
 - 同一后端实例的知识地图 LLM 调用并发上限为 3；分批调用失败时会取消剩余请求。
 - 自动生成结果会保存历史版本；前端也可创建、更新和删除版本。
 - 新增节点学习字段位于历史 JSON 中，旧数据可使用默认值读取，不需要数据库迁移。
@@ -175,7 +186,7 @@ cd backend
 python -m pytest -q
 ```
 
-当前基线为 `160 passed`。测试使用 SQLite 和替身服务覆盖主要业务，其中包括全局公共库唯一性、跨用户公共文档访问和管理、私人库隔离、管理员初始化与用户启停、私人数据脱敏、删除清理、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、问答和知识地图个人模型路由、知识地图流式总超时和并发槽位释放、文档重启恢复、重复入队、取消、私人库间迁移与 MySQL/Chroma 补偿、索引补偿和陈旧向量过滤、Dense/BM25/RRF/reranker 与权限化词法召回、反馈持久化、越权与管理员筛选，JWT 注销撤销，MySQL/Chroma 就绪探针，固定质量数据校验、指标计算与基线产物，以及 AI 出题的多库权限、文档轮询、覆盖度、难度结构、输入预算、来源编号白名单、答案隔离、评分、BYOK 与临时清理；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、Issue #28 角色流程、公共库跨用户检索、AI 六类题型、来源反查、权限按钮和数据同步清理。
+当前基线以本分支完整测试结果为准。测试使用 SQLite 和替身服务覆盖主要业务，其中包括全局公共库唯一性、跨用户公共文档访问和管理、私人库隔离、管理员初始化与用户启停、私人数据脱敏、删除清理、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、问答和知识地图个人模型路由、知识地图流式总超时、均衡采样、来源过滤、任务取消和并发槽位释放、文档格式与体积校验、Embedding 分批、重启恢复、重复入队、取消、私人库间迁移与 MySQL/Chroma 补偿、索引补偿和陈旧向量过滤、Dense/BM25/RRF/reranker 与权限化词法召回、反馈持久化、越权与管理员筛选，JWT 注销撤销，MySQL/Chroma 就绪探针，固定质量数据校验、指标计算与基线产物，以及 AI 出题的多库权限、文档轮询、覆盖度、难度结构、输入预算、来源编号白名单、答案隔离、评分、BYOK 与临时清理；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、Issue #28 角色流程、公共库跨用户检索、AI 六类题型、来源反查、权限按钮和数据同步清理。
 
 ## Docker 运行
 

@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     embedding_model: str = ""
     embedding_timeout_seconds: float = 30.0
     embedding_max_retries: int = 1
+    embedding_batch_size: int = 64
     retrieval_score_threshold: float = 0.45
     retrieval_hybrid_enabled: bool = True
     retrieval_dense_candidate_k: int = 12
@@ -83,6 +84,9 @@ class Settings(BaseSettings):
     )
 
     document_worker_concurrency: int = 2
+    document_max_parsed_chars: int = 3_500_000
+    document_max_chunks: int = 5_000
+    document_max_expanded_size_mb: int = 100
 
     # JWT
     jwt_secret_key: str = "change-me-in-production-use-a-long-random-string"
@@ -132,6 +136,10 @@ class Settings(BaseSettings):
     @property
     def effective_rerank_base_url(self) -> str:
         return self.rerank_base_url or self.llm_base_url
+
+    @property
+    def document_max_expanded_size_bytes(self) -> int:
+        return self.document_max_expanded_size_mb * 1024 * 1024
 
     def _resolve_project_path(self, value: str) -> Path:
         path = Path(value)

@@ -1,10 +1,12 @@
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from fastapi import HTTPException
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -37,6 +39,15 @@ class InvalidKeyEmbeddingClient(EmbeddingClient):
 class EmptyResponseEmbeddingClient(EmbeddingClient):
     def _embed_with_api(self, texts: list[str]) -> list[list[float]]:
         return []
+
+
+class BatchRecordingEmbeddingClient(EmbeddingClient):
+    def __init__(self) -> None:
+        self.batches: list[list[str]] = []
+
+    def _embed_with_api(self, texts: list[str]) -> list[list[float]]:
+        self.batches.append(list(texts))
+        return [[float(len(text)), 1.0] for text in texts]
 
 
 class RecordingEmbeddings:
@@ -165,6 +176,21 @@ class DocumentPipelineTest(unittest.TestCase):
         self.assertEqual(recording_client.embeddings.kwargs["model"], "test-model")
         self.assertEqual(recording_client.embeddings.kwargs["input"], ["第一段", "第二段"])
 
+    def test_embedding_requests_are_batched_without_changing_order(self):
+        import app.services.embedding_client as embedding_module
+
+        client = BatchRecordingEmbeddingClient()
+        texts = ["一", "二二", "三三三", "四四四四", "五五五五五"]
+        with (
+            patch.object(embedding_module.settings, "embedding_api_key", "test-key"),
+            patch.object(embedding_module.settings, "embedding_model", "test-model"),
+            patch.object(embedding_module.settings, "embedding_batch_size", 2),
+        ):
+            vectors = client.embed_texts(texts)
+
+        self.assertEqual(client.batches, [["一", "二二"], ["三三三", "四四四四"], ["五五五五五"]])
+        self.assertEqual([vector[0] for vector in vectors], [1.0, 2.0, 3.0, 4.0, 5.0])
+
     def test_embedding_api_failure_returns_controlled_error(self):
         import app.services.embedding_client as embedding_module
 
@@ -241,6 +267,38 @@ class DocumentPipelineTest(unittest.TestCase):
                 parser.parse(str(file_path), "txt")
 
         self.assertIn("未提取到可用文字", str(context.exception))
+
+    def test_markdown_parser_preserves_section_boundaries(self):
+        parser = DocumentParser()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "notes.md"
+            file_path.write_text("# 第一章\n\n第一段内容。\n\n## 第二章\n\n第二段内容。", encoding="utf-8")
+            text_value = parser.parse(str(file_path), "md")[0].text
+
+        self.assertIn("第一章\n第一段内容。", text_value)
+        self.assertIn("第二章\n第二段内容。", text_value)
+
+    def test_upload_name_and_file_signatures_are_validated(self):
+        service = DocumentService()
+        self.assertEqual(service._normalize_upload_name(r"C:\fakepath\课堂笔记?.txt"), "课堂笔记_.txt")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_pdf = temp_path / "fake.pdf"
+            fake_pdf.write_bytes(b"not-a-pdf")
+            with self.assertRaises(HTTPException):
+                service._validate_saved_file(fake_pdf, "pdf")
+
+            binary_text = temp_path / "binary.txt"
+            binary_text.write_bytes(b"plain\x00binary")
+            with self.assertRaises(HTTPException):
+                service._validate_saved_file(binary_text, "txt")
+
+            valid_docx = temp_path / "valid.docx"
+            with zipfile.ZipFile(valid_docx, "w") as archive:
+                archive.writestr("[Content_Types].xml", "<Types />")
+                archive.writestr("word/document.xml", "<document />")
+            service._validate_saved_file(valid_docx, "docx")
 
     def test_background_processing_persists_parse_and_embedding_errors(self):
         engine = create_engine(

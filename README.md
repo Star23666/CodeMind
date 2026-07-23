@@ -178,6 +178,7 @@ QUIZ_CONTEXT_MAX_TOKENS=8000
 EMBEDDING_API_KEY=replace_with_embedding_api_key
 EMBEDDING_BASE_URL=https://provider.example.com/v1
 EMBEDDING_MODEL=replace_with_embedding_model
+EMBEDDING_BATCH_SIZE=64
 # 在线 reranker 正常工作时，检索结果展示的是 reranker 相关性分数
 RERANK_API_KEY=
 RERANK_BASE_URL=
@@ -187,6 +188,10 @@ RERANK_SCORE_THRESHOLD=0.55
 RETRIEVAL_SCORE_THRESHOLD=0.45
 
 DOCUMENT_WORKER_CONCURRENCY=2
+MAX_UPLOAD_SIZE_MB=50
+DOCUMENT_MAX_EXPANDED_SIZE_MB=100
+DOCUMENT_MAX_PARSED_CHARS=3500000
+DOCUMENT_MAX_CHUNKS=5000
 
 JWT_SECRET_KEY=replace_with_a_long_random_secret
 ```
@@ -196,6 +201,10 @@ JWT_SECRET_KEY=replace_with_a_long_random_secret
 `MIND_MAP_TIMEOUT_SECONDS` 是连接、读取、写入等网络阶段的超时；`MIND_MAP_TOTAL_TIMEOUT_SECONDS`
 才是每次知识地图模型调用的墙钟总时限。管理员可以显式设为 `0` 关闭总时限，但异常上游若持续零星返回
 数据而不结束，可能长期占用 3 个全局导图 LLM 槽位，因此生产环境不建议这样配置。
+
+文档上传除压缩文件大小外，还分别限制 DOCX 解压体积、解析字符数和切片数量；Embedding 会按
+`EMBEDDING_BATCH_SIZE` 分批请求。默认值适合普通课程资料，管理员可根据机器内存和模型限制调整，
+但不建议仅放大上传体积而不同时评估解压和解析上限。
 
 注意事项：
 
@@ -310,6 +319,24 @@ Windows PowerShell：
 
 ```powershell
 Get-Content -Raw database\migrations\20260715_create_user_llm_configs.sql |
+  docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
+```
+
+### 2026-07-23：知识地图任务取消
+
+该迁移允许知识地图任务进入 `cancelled` 状态。已有数据库在部署新版后端前执行一次：
+
+Linux、macOS 或 WSL：
+
+```bash
+docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' \
+  < database/migrations/20260723_add_mind_map_job_cancelled_status.sql
+```
+
+Windows PowerShell：
+
+```powershell
+Get-Content -Raw database\migrations\20260723_add_mind_map_job_cancelled_status.sql |
   docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
 ```
 
@@ -470,7 +497,7 @@ python -m pip install pytest==8.3.5
 python -m pytest -q
 ```
 
-当前后端测试共 160 项，覆盖认证和 JWT 撤销、公共/私人知识库跨用户权限、管理员初始化与账号启停、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、文档处理与重启恢复、取消和重复任务防护、私人文档迁移及 MySQL/Chroma 事务补偿、向量 metadata 更新后校验、索引事务补偿与陈旧向量过滤、Dense/BM25/RRF/reranker 与降级、反馈持久化与管理员详情脱敏、健康检查、删除清理、Prompt、LLM 异常、RAG 编排、SSE 流式生成、问答历史、知识地图、固定质量数据校验与基线产物，以及 AI 出题的多库权限、文档轮询、覆盖度、难度结构、输入预算、来源编号白名单、答案隔离、BYOK 路由、六类题型评分和临时清理。
+当前后端测试基线以本分支完整测试结果为准，覆盖认证和 JWT 撤销、公共/私人知识库跨用户权限、管理员初始化与账号启停、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、文档格式与体积校验、Embedding 分批、文档处理与重启恢复、取消和重复任务防护、私人文档迁移及 MySQL/Chroma 事务补偿、向量 metadata 更新后校验、索引事务补偿与陈旧向量过滤、Dense/BM25/RRF/reranker 与降级、反馈持久化与管理员详情脱敏、健康检查、删除清理、Prompt、LLM 异常、RAG 编排、SSE 流式生成、问答历史、知识地图均衡采样、来源过滤、任务取消和保存上限、固定质量数据校验与基线产物，以及 AI 出题的多库权限、文档轮询、覆盖度、难度结构、输入预算、来源编号白名单、答案隔离、BYOK 路由、六类题型评分和临时清理。
 
 固定质量数据不调用在线 API 也能先做完整性校验：
 
