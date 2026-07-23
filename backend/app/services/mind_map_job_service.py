@@ -16,6 +16,14 @@ from app.services.mind_map_history_service import mind_map_history_service
 logger = logging.getLogger(__name__)
 
 
+class MindMapJobStateError(ValueError):
+    pass
+
+
+class _MindMapJobNoLongerProcessing(RuntimeError):
+    """The durable job state changed while a worker was still running."""
+
+
 class MindMapJobService:
     def __init__(self) -> None:
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -100,6 +108,31 @@ class MindMapJobService:
             if document.knowledge_base_id != request.knowledge_base_id:
                 raise ValueError("Document not found")
 
+        active_job_id = db.execute(
+            text(
+                """
+                SELECT id
+                FROM mind_map_jobs
+                WHERE user_id = :user_id
+                  AND knowledge_base_id = :knowledge_base_id
+                  AND (
+                    (document_id IS NULL AND :document_id IS NULL)
+                    OR document_id = :document_id
+                  )
+                  AND status IN ('queued', 'processing')
+                ORDER BY created_at ASC
+                LIMIT 1
+                """
+            ),
+            {
+                "user_id": owner_id,
+                "knowledge_base_id": request.knowledge_base_id,
+                "document_id": request.document_id,
+            },
+        ).scalar_one_or_none()
+        if active_job_id is not None:
+            return self.get_job(db, job_id=str(active_job_id), owner_id=owner_id)
+
         job_id = uuid4().hex
         db.execute(
             text(
@@ -125,6 +158,47 @@ class MindMapJobService:
         db.commit()
         return self.get_job(db, job_id=job_id, owner_id=owner_id)
 
+    async def cancel_job(
+        self,
+        db: Session,
+        *,
+        job_id: str,
+        owner_id: int,
+    ) -> MindMapJobRead:
+        row = self._get_row(db, job_id=job_id, owner_id=owner_id)
+        if row is None:
+            raise ValueError("Mind map job not found")
+        if row["status"] not in {"queued", "processing"}:
+            raise MindMapJobStateError("只有等待中或生成中的任务可以取消。")
+
+        result = db.execute(
+            text(
+                """
+                UPDATE mind_map_jobs
+                SET status = 'cancelled',
+                    stage = 'cancelled',
+                    progress = 100,
+                    message = '知识地图生成已取消',
+                    error_message = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :job_id
+                  AND user_id = :owner_id
+                  AND status IN ('queued', 'processing')
+                """
+            ),
+            {"job_id": job_id, "owner_id": owner_id},
+        )
+        if result.rowcount != 1:
+            db.rollback()
+            raise MindMapJobStateError("任务状态已经变化，请刷新后重试。")
+        db.commit()
+
+        task = self._tasks.get(job_id)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        return self.get_job(db, job_id=job_id, owner_id=owner_id)
+
     async def process_job(self, job_id: str) -> None:
         db = SessionLocal()
         try:
@@ -139,14 +213,15 @@ class MindMapJobService:
                 max_nodes=int(row["max_nodes"]),
             )
             def report(stage: str, progress: int, message: str) -> None:
-                self._update(
+                if not self._update(
                     db,
                     job_id,
                     status="processing",
                     stage=stage,
                     progress=progress,
                     message=message,
-                )
+                ):
+                    raise _MindMapJobNoLongerProcessing
 
             result = await mind_map_service.generate(
                 db,
@@ -160,7 +235,7 @@ class MindMapJobService:
                 result=result,
                 commit=False,
             )
-            self._update(
+            if not self._update(
                 db,
                 job_id,
                 status="completed",
@@ -169,10 +244,17 @@ class MindMapJobService:
                 message="知识地图生成完成",
                 result_json=result.model_dump_json(),
                 error_message=None,
-            )
+            ):
+                raise _MindMapJobNoLongerProcessing
         except asyncio.CancelledError:
             self._requeue(db, job_id)
             raise
+        except _MindMapJobNoLongerProcessing:
+            db.rollback()
+            logger.info(
+                "Mind map job %s stopped because its durable state changed",
+                job_id,
+            )
         except MindMapGenerationError as exc:
             db.rollback()
             self._mark_failed(db, job_id, str(exc))
@@ -268,8 +350,8 @@ class MindMapJobService:
         message: str,
         result_json: str | None = None,
         error_message: str | None = None,
-    ) -> None:
-        db.execute(
+    ) -> bool:
+        result = db.execute(
             text(
                 """
                 UPDATE mind_map_jobs
@@ -281,6 +363,7 @@ class MindMapJobService:
                     error_message = :error_message,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = :job_id
+                  AND status = 'processing'
                 """
             ),
             {
@@ -293,7 +376,13 @@ class MindMapJobService:
                 "error_message": error_message,
             },
         )
+        if result.rowcount != 1:
+            # The same transaction may already contain a generated history row.
+            # Rolling back here prevents a cancelled job from leaving that row behind.
+            db.rollback()
+            return False
         db.commit()
+        return True
 
     def _mark_failed(self, db: Session, job_id: str, message: str) -> None:
         try:

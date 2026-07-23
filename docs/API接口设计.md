@@ -56,6 +56,7 @@
 | 知识地图 | POST   | `/api/mind-maps/generate`                        | 同步生成地图（调试）   |
 | 知识地图 | POST   | `/api/mind-maps/jobs`                            | 创建后台生成任务       |
 | 知识地图 | GET    | `/api/mind-maps/jobs/{job_id}`                   | 查询任务进度和结果     |
+| 知识地图 | POST   | `/api/mind-maps/jobs/{job_id}/cancel`            | 取消后台生成任务       |
 | 知识地图 | POST   | `/api/mind-maps/ask`                             | 针对节点来源提问       |
 | 知识地图 | POST   | `/api/mind-maps/expand`                          | 根据来源扩展节点       |
 | 知识地图 | GET    | `/api/mind-maps/histories`                       | 查询地图历史           |
@@ -288,6 +289,10 @@ POST /api/documents/upload
 
 当后台解析、Embedding 或向量入库失败时，`parse_status` 为 `failed`，
 `error_message` 返回可直接展示给用户的失败原因；其他状态下该字段为 `null`。
+
+后端不会只相信扩展名：PDF 必须包含有效文件头，DOCX 必须包含标准文档结构，TXT/Markdown
+不得伪装为二进制文件。DOCX 解压体积、解析字符数和切片数量分别受配置上限约束；
+Embedding 按批次调用。超出限制时返回受控的 `400` 或 `413`，不会进入后台解析队列。
 
 所有登录用户都可以向公共库上传。公共文档对全部登录用户可见，`uploader_username` 标识上传者；
 只有上传者和管理员获得 `can_manage=true`，并可调用取消、重建和删除接口。私人文档仍只对所有者可见。
@@ -525,7 +530,7 @@ data: {"qa_record_id":1002,"knowledge_base_id":1,"question":"...","rewritten_que
 4. `error`：处理失败时发送，包含 `status_code` 和 `detail`；流式响应建立后 HTTP 状态通常已经是 `200`，客户端必须同时处理该事件。
 
 前端通过 Nginx 代理时必须关闭响应缓冲；本项目的 `frontend/nginx.conf` 已配置
-`proxy_buffering off`、`proxy_cache off` 和 300 秒读取超时。
+`proxy_buffering off`、`proxy_cache off` 和 960 秒读取超时。
 
 ## 8. 知识地图接口
 
@@ -536,6 +541,7 @@ data: {"qa_record_id":1002,"knowledge_base_id":1,"question":"...","rewritten_que
 ```text
 POST /api/mind-maps/jobs
 GET /api/mind-maps/jobs/{job_id}
+POST /api/mind-maps/jobs/{job_id}/cancel
 ```
 
 创建请求：
@@ -570,7 +576,13 @@ GET /api/mind-maps/jobs/{job_id}
 }
 ```
 
-任务状态为 `queued`、`processing`、`completed` 或 `failed`。处理中可出现 `collecting`、`preparing`、`extracting`、`merging`、`validating` 和 `assembling` 阶段。完成后 `result` 为 `MindMapResponse`；失败时读取 `error_message`。
+任务状态为 `queued`、`processing`、`completed`、`failed` 或 `cancelled`。处理中可出现 `collecting`、`preparing`、`extracting`、`merging`、`validating` 和 `assembling` 阶段。完成后 `result` 为 `MindMapResponse`；失败时读取 `error_message`。
+
+同一用户对相同知识库和文档范围重复创建活动任务时返回原任务，避免重复消耗模型额度。
+取消接口只接受 `queued` 或 `processing` 任务；任务结束后再次取消返回 `409`。
+
+`GET /api/mind-maps/histories` 不传 `knowledge_base_id` 时返回当前用户全部知识库的地图摘要，
+前端据此统一展示和筛选，不依赖当前生成范围。
 
 同步接口使用同一请求模型：
 

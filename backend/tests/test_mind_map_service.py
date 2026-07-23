@@ -23,10 +23,14 @@ from app.schemas.contracts import (
     MindMapNode,
     MindMapQuestionRequest,
     MindMapResponse,
+    MindMapSource,
     UserRead,
 )
 from app.services.llm_client import LlmRuntimeConfig, LlmServiceError
-from app.services.mind_map_history_service import MindMapHistoryService
+from app.services.mind_map_history_service import (
+    MindMapHistoryService,
+    MindMapHistoryValidationError,
+)
 from app.services.mind_map_job_service import MindMapJobService
 from app.services.mind_map_service import MindMapGenerationError, MindMapService
 
@@ -114,6 +118,28 @@ class FailingBatchLlmClient:
         except asyncio.CancelledError:
             self.cancelled_calls += 1
             raise
+
+
+class OutOfOrderBatchLlmClient:
+    def __init__(self) -> None:
+        self.merge_prompt = ""
+
+    async def generate_answer(self, prompt: str, **kwargs) -> str:
+        if "分组提炼结果：" in prompt:
+            self.merge_prompt = prompt
+            return """{
+              "title": "操作系统",
+              "children": [{
+                "title": "进程",
+                "source_chunk_ids": [11],
+                "children": []
+              }]
+            }"""
+        if "chunk_id=11" in prompt:
+            await asyncio.sleep(0.02)
+            return '{"topics":[{"topic":"第一批资料","source_chunk_ids":[11]}]}'
+        await asyncio.sleep(0)
+        return '{"topics":[{"topic":"第二批资料","source_chunk_ids":[14]}]}'
 
 
 class LengthThenSuccessStreamingLlmClient:
@@ -217,6 +243,46 @@ class MindMapServiceTest(unittest.TestCase):
         self.assertIn("严格返回 JSON", client.last_system_message)
         self.assertIn("learning_tip", client.last_prompt)
 
+    def test_unsourced_and_duplicate_nodes_are_removed(self) -> None:
+        source = MindMapSource(
+            chunk_id=11,
+            document_id=20,
+            file_name="os.txt",
+            chunk_index=0,
+            source_text="进程资料",
+            jump_url="/documents/20?chunk=11",
+        )
+        raw = """{
+          "title": "操作系统",
+          "children": [
+            {"title": "进程", "source_chunk_ids": [11], "children": []},
+            {"title": "进程", "source_chunk_ids": [11], "children": []},
+            {"title": "资料外内容", "source_chunk_ids": [999], "children": []}
+          ]
+        }"""
+
+        root = MindMapService()._parse_ai_tree(
+            raw,
+            source_map={11: source},
+            fallback_title="操作系统",
+            max_depth=3,
+            max_nodes=20,
+        )
+
+        self.assertEqual([child.title for child in root.children], ["进程"])
+
+    def test_sampling_keeps_short_documents_in_large_knowledge_base(self) -> None:
+        rows = [
+            {"chunk_id": index + 1, "document_id": 20}
+            for index in range(100)
+        ]
+        rows[-1] = {"chunk_id": 100, "document_id": 21}
+
+        selected = MindMapService()._sample_rows(rows)
+
+        self.assertLess(len(selected), len(rows))
+        self.assertIn(21, {row["document_id"] for row in selected})
+
     def test_missing_model_returns_explicit_error(self) -> None:
         service = MindMapService(client=FakeLlmClient("unused"))
 
@@ -309,6 +375,40 @@ class MindMapServiceTest(unittest.TestCase):
             )
 
         self.assertEqual(client.max_active_calls, 3)
+
+    def test_batch_notes_keep_source_order_when_later_batch_finishes_first(self) -> None:
+        for chunk_id in range(13, 17):
+            self.db.execute(
+                text(
+                    "INSERT INTO document_chunks "
+                    "(id, document_id, chunk_index, chunk_text, page_no) "
+                    "VALUES (:id, 20, :chunk_index, :chunk_text, 1)"
+                ),
+                {
+                    "id": chunk_id,
+                    "chunk_index": chunk_id - 11,
+                    "chunk_text": f"顺序测试片段 {chunk_id}",
+                },
+            )
+        self.db.commit()
+        client = OutOfOrderBatchLlmClient()
+
+        with (
+            patch("app.services.mind_map_service.settings.llm_api_key", "test-key"),
+            patch("app.services.mind_map_service.settings.llm_model", "test-model"),
+        ):
+            run_async(
+                MindMapService(client=client).generate(
+                    self.db,
+                    owner_id=1,
+                    request=MindMapGenerateRequest(knowledge_base_id=10),
+                )
+            )
+
+        self.assertLess(
+            client.merge_prompt.index("第一批资料"),
+            client.merge_prompt.index("第二批资料"),
+        )
 
     def test_generation_uses_streaming_llm_path(self) -> None:
         client = StreamingLlmClient(
@@ -637,6 +737,61 @@ class MindMapServiceTest(unittest.TestCase):
         self.assertEqual(updated.title, "操作系统复习版")
         self.assertEqual(updated.view_state, {"zoom": 1.5, "x": 20})
 
+    def test_history_rejects_oversized_view_state(self) -> None:
+        service = MindMapHistoryService()
+        result = MindMapResponse(
+            history_id=1,
+            knowledge_base_id=10,
+            generation_mode="ai",
+            node_count=1,
+            message="done",
+            root=MindMapNode(id="root", title="操作系统"),
+        )
+        self.db.execute(
+            text(
+                """
+                INSERT INTO mind_map_histories (
+                    id, user_id, knowledge_base_id, title, node_count,
+                    result_json, view_state_json
+                ) VALUES (1, 1, 10, '操作系统', 1, :result, '{}')
+                """
+            ),
+            {"result": result.model_dump_json()},
+        )
+        self.db.commit()
+
+        with (
+            patch.object(service, "max_view_state_json_bytes", 8),
+            self.assertRaises(MindMapHistoryValidationError),
+        ):
+            service.update(
+                self.db,
+                history_id=1,
+                owner_id=1,
+                payload=MindMapHistoryUpdate(view_state={"selected": "too-large"}),
+            )
+
+    def test_history_list_returns_all_summaries_without_loading_map_payloads(self) -> None:
+        self.db.execute(
+            text(
+                """
+                INSERT INTO mind_map_histories (
+                    user_id, knowledge_base_id, title, node_count,
+                    result_json, view_state_json
+                ) VALUES
+                    (1, 10, '第一张地图', 2, 'not-needed-in-list', '{"zoom": 2}'),
+                    (1, 10, '第二张地图', 3, 'not-needed-in-list', '{"zoom": 3}')
+                """
+            )
+        )
+        self.db.commit()
+
+        histories = MindMapHistoryService().list(self.db, owner_id=1)
+
+        self.assertEqual(len(histories), 2)
+        self.assertTrue(all(history.result is None for history in histories))
+        self.assertTrue(all(history.view_state == {} for history in histories))
+
     def test_background_job_persists_progress_and_result(self) -> None:
         service = MindMapJobService()
         queued = service.create_job(
@@ -666,6 +821,158 @@ class MindMapServiceTest(unittest.TestCase):
         self.assertEqual(completed.status, "completed")
         self.assertEqual(completed.progress, 100)
         self.assertEqual(completed.result.root.title, "操作系统")
+
+    def test_duplicate_active_generation_reuses_existing_job(self) -> None:
+        service = MindMapJobService()
+        first = service.create_job(
+            self.db,
+            owner_id=1,
+            request=MindMapGenerateRequest(knowledge_base_id=10),
+        )
+        second = service.create_job(
+            self.db,
+            owner_id=1,
+            request=MindMapGenerateRequest(knowledge_base_id=10),
+        )
+
+        self.assertEqual(first.job_id, second.job_id)
+        count = self.db.execute(text("SELECT COUNT(*) FROM mind_map_jobs")).scalar_one()
+        self.assertEqual(count, 1)
+
+    def test_user_can_cancel_active_generation_job(self) -> None:
+        service = MindMapJobService()
+        queued = service.create_job(
+            self.db,
+            owner_id=1,
+            request=MindMapGenerateRequest(knowledge_base_id=10),
+        )
+
+        async def cancel_active_job():
+            task = asyncio.create_task(asyncio.sleep(10))
+            service._tasks[queued.job_id] = task
+            cancelled = await service.cancel_job(
+                self.db,
+                job_id=queued.job_id,
+                owner_id=1,
+            )
+            return cancelled, task
+
+        cancelled, task = run_async(cancel_active_job())
+
+        self.assertEqual(cancelled.status, "cancelled")
+        self.assertEqual(cancelled.stage, "cancelled")
+        self.assertTrue(task.cancelled())
+
+    def test_cross_instance_cancel_prevents_late_completion_and_history(self) -> None:
+        worker_service = MindMapJobService()
+        cancelling_service = MindMapJobService()
+        queued = worker_service.create_job(
+            self.db,
+            owner_id=1,
+            request=MindMapGenerateRequest(knowledge_base_id=10),
+        )
+        self.db.rollback()
+        result = MindMapResponse(
+            knowledge_base_id=10,
+            generation_mode="ai",
+            node_count=1,
+            message="done",
+            root=MindMapNode(id="root", title="操作系统"),
+        )
+
+        async def run_worker_and_cancel_from_another_instance():
+            generation_started = asyncio.Event()
+            allow_completion = asyncio.Event()
+
+            async def delayed_generate(*args, **kwargs):
+                generation_started.set()
+                await allow_completion.wait()
+                return result
+
+            with patch(
+                "app.services.mind_map_job_service.mind_map_service.generate",
+                new=delayed_generate,
+            ):
+                worker = asyncio.create_task(worker_service.process_job(queued.job_id))
+                await asyncio.wait_for(generation_started.wait(), timeout=1)
+                with self.SessionLocal() as cancel_db:
+                    cancelled = await cancelling_service.cancel_job(
+                        cancel_db,
+                        job_id=queued.job_id,
+                        owner_id=1,
+                    )
+                allow_completion.set()
+                await worker
+                return cancelled
+
+        with patch(
+            "app.services.mind_map_job_service.SessionLocal",
+            self.SessionLocal,
+        ):
+            cancelled = run_async(run_worker_and_cancel_from_another_instance())
+
+        self.db.rollback()
+        durable_job = worker_service.get_job(
+            self.db,
+            job_id=queued.job_id,
+            owner_id=1,
+        )
+        history_count = self.db.execute(
+            text("SELECT COUNT(*) FROM mind_map_histories")
+        ).scalar_one()
+        self.assertEqual(cancelled.status, "cancelled")
+        self.assertEqual(durable_job.status, "cancelled")
+        self.assertIsNone(durable_job.result)
+        self.assertEqual(history_count, 0)
+
+    def test_cancelled_job_rejects_late_progress_from_another_instance(self) -> None:
+        worker_service = MindMapJobService()
+        cancelling_service = MindMapJobService()
+        queued = worker_service.create_job(
+            self.db,
+            owner_id=1,
+            request=MindMapGenerateRequest(knowledge_base_id=10),
+        )
+        self.db.execute(
+            text(
+                """
+                UPDATE mind_map_jobs
+                SET status = 'processing', stage = 'extracting', progress = 40
+                WHERE id = :job_id
+                """
+            ),
+            {"job_id": queued.job_id},
+        )
+        self.db.commit()
+
+        with self.SessionLocal() as cancel_db:
+            cancelled = run_async(
+                cancelling_service.cancel_job(
+                    cancel_db,
+                    job_id=queued.job_id,
+                    owner_id=1,
+                )
+            )
+        with self.SessionLocal() as worker_db:
+            updated = worker_service._update(
+                worker_db,
+                queued.job_id,
+                status="processing",
+                stage="assembling",
+                progress=92,
+                message="正在整理画布节点和连线",
+            )
+
+        self.db.rollback()
+        durable_job = worker_service.get_job(
+            self.db,
+            job_id=queued.job_id,
+            owner_id=1,
+        )
+        self.assertEqual(cancelled.status, "cancelled")
+        self.assertFalse(updated)
+        self.assertEqual(durable_job.status, "cancelled")
+        self.assertEqual(durable_job.stage, "cancelled")
 
     def test_job_completion_and_generated_history_are_atomic(self) -> None:
         service = MindMapJobService()

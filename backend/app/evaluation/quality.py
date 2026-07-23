@@ -280,7 +280,8 @@ def corpus_sha256(dataset: EvaluationDataset) -> str:
         digest.update(document.text.encode("utf-8"))
         digest.update(b"\0")
     for file_name in ("manifest.json", "rag_cases.json", "quiz_cases.json"):
-        digest.update((dataset.root / file_name).read_bytes())
+        raw = (dataset.root / file_name).read_bytes()
+        digest.update(raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
         digest.update(b"\0")
     return digest.hexdigest()
 

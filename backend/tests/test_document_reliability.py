@@ -385,6 +385,59 @@ class DocumentReliabilityTest(unittest.TestCase):
         self.assertEqual(self._chunks()[0]["vector_id"], "old-vector")
         self.assertEqual(store.upserts, [])
 
+    def test_oversized_parsed_content_stops_before_embedding_and_preserves_index(self) -> None:
+        service = DocumentService()
+        with self.SessionLocal() as db:
+            service.queue_reindex(db, document_id=1, owner_id=7)
+
+        with (
+            patch("app.services.document_service.SessionLocal", self.SessionLocal),
+            patch(
+                "app.services.document_service.document_parser.parse",
+                return_value=[SimpleNamespace(text="内容过长")],
+            ),
+            patch("app.services.document_service.settings.document_max_parsed_chars", 2),
+            patch("app.services.document_service.embedding_client.embed_texts") as embed,
+        ):
+            service.process_document(1)
+
+        embed.assert_not_called()
+        self.assertEqual(self._status()["parse_status"], "failed")
+        self.assertIn("文字过多", self._status()["error_message"])
+        self.assertEqual(self._chunks()[0]["vector_id"], "old-vector")
+
+    def test_excessive_chunk_count_stops_before_embedding_and_preserves_index(self) -> None:
+        service = DocumentService()
+        with self.SessionLocal() as db:
+            service.queue_reindex(db, document_id=1, owner_id=7)
+
+        chunks = [
+            SimpleNamespace(
+                chunk_index=index,
+                text=f"片段 {index}",
+                page_no=1,
+                start_offset=index,
+                end_offset=index + 1,
+            )
+            for index in range(3)
+        ]
+        with (
+            patch("app.services.document_service.SessionLocal", self.SessionLocal),
+            patch(
+                "app.services.document_service.document_parser.parse",
+                return_value=[SimpleNamespace(text="可解析内容")],
+            ),
+            patch("app.services.document_service.text_splitter.split_blocks", return_value=chunks),
+            patch("app.services.document_service.settings.document_max_chunks", 2),
+            patch("app.services.document_service.embedding_client.embed_texts") as embed,
+        ):
+            service.process_document(1)
+
+        embed.assert_not_called()
+        self.assertEqual(self._status()["parse_status"], "failed")
+        self.assertIn("片段过多", self._status()["error_message"])
+        self.assertEqual(self._chunks()[0]["vector_id"], "old-vector")
+
     def test_startup_recovery_requeues_processing_and_pending_documents(self) -> None:
         with self.engine.begin() as connection:
             connection.execute(text("UPDATE documents SET parse_status = 'processing' WHERE id = 1"))

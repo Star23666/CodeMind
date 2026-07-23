@@ -1,5 +1,8 @@
+import asyncio
 import logging
 import time
+import unicodedata
+import zipfile
 from pathlib import Path
 from uuid import uuid4
 
@@ -61,9 +64,14 @@ class DocumentService:
     ) -> DocumentRead:
         knowledge_base_service.get_uploadable(db, knowledge_base_id, owner_id)
 
-        original_name = Path(file.filename or "").name
-        file_type = self._detect_file_type(original_name)
-        target_path, file_size = await self._save_file(owner_id, knowledge_base_id, original_name, file)
+        display_name = self._normalize_upload_name(file.filename or "")
+        file_type = self._detect_file_type(display_name)
+        target_path, file_size = await self._save_file(
+            owner_id,
+            knowledge_base_id,
+            display_name,
+            file,
+        )
 
         try:
             result = db.execute(
@@ -82,7 +90,7 @@ class DocumentService:
                 {
                     "knowledge_base_id": knowledge_base_id,
                     "owner_id": owner_id,
-                    "file_name": original_name,
+                    "file_name": display_name,
                     "file_type": file_type,
                     "file_size": file_size,
                     "file_path": str(target_path),
@@ -506,9 +514,18 @@ class DocumentService:
             db.rollback()
 
             blocks = document_parser.parse(document["file_path"], document["file_type"])
+            parsed_chars = sum(len(getattr(block, "text", "")) for block in blocks)
+            if parsed_chars > settings.document_max_parsed_chars:
+                raise DocumentParseError(
+                    "文档解析后的文字过多，已停止处理；请拆分文档后重新上传。"
+                )
             chunks = text_splitter.split_blocks(blocks)
             if not chunks:
                 raise DocumentParseError("文档解析失败：未提取到可用文字。")
+            if len(chunks) > settings.document_max_chunks:
+                raise DocumentParseError(
+                    "文档切分后的内容片段过多，已停止处理；请拆分文档后重新上传。"
+                )
 
             embeddings = embedding_client.embed_texts(
                 [
@@ -640,30 +657,88 @@ class DocumentService:
         target_dir.mkdir(parents=True, exist_ok=True)
         target_path = target_dir / f"{uuid4().hex}_{safe_name}"
 
-        file_size = 0
         try:
-            with target_path.open("wb") as target:
-                while True:
-                    chunk = await file.read(1024 * 1024)
-                    if not chunk:
-                        break
-
-                    file_size += len(chunk)
-                    if file_size > settings.max_upload_size_bytes:
-                        raise HTTPException(
-                            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                            detail=f"文件过大，最大允许 {settings.max_upload_size_mb} MB。",
-                        )
-                    target.write(chunk)
+            await file.seek(0)
+            file_size = await asyncio.to_thread(
+                self._copy_upload_stream,
+                file.file,
+                target_path,
+            )
+            await asyncio.to_thread(self._validate_saved_file, target_path, file_type)
         except Exception:
             self._unlink_file(target_path)
+            self._remove_empty_upload_directory(owner_id, knowledge_base_id)
             raise
 
-        if file_size == 0:
-            self._unlink_file(target_path)
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="上传文件为空。")
-
         return target_path, file_size
+
+    def _copy_upload_stream(self, source, target_path: Path) -> int:
+        file_size = 0
+        with target_path.open("wb") as target:
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                file_size += len(chunk)
+                if file_size > settings.max_upload_size_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"文件过大，最大允许 {settings.max_upload_size_mb} MB。",
+                    )
+                target.write(chunk)
+        if file_size == 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="上传文件为空。")
+        return file_size
+
+    def _validate_saved_file(self, path: Path, file_type: str) -> None:
+        if file_type == "pdf":
+            with path.open("rb") as source:
+                header = source.read(1024)
+            if b"%PDF-" not in header:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="PDF 文件格式无效，请确认文件未损坏且扩展名正确。",
+                )
+            return
+
+        if file_type == "docx":
+            if not zipfile.is_zipfile(path):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="DOCX 文件格式无效，请确认文件未损坏且扩展名正确。",
+                )
+            with zipfile.ZipFile(path) as archive:
+                names = set(archive.namelist())
+                if "[Content_Types].xml" not in names or "word/document.xml" not in names:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="DOCX 文件结构不完整，请重新导出后上传。",
+                    )
+                expanded_size = 0
+                for info in archive.infolist():
+                    if info.flag_bits & 0x1:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="暂不支持加密的 DOCX 文件，请解密后上传。",
+                        )
+                    expanded_size += info.file_size
+                    if expanded_size > settings.document_max_expanded_size_bytes:
+                        raise HTTPException(
+                            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            detail=(
+                                "DOCX 解压后的内容过大，"
+                                f"最大允许 {settings.document_max_expanded_size_mb} MB。"
+                            ),
+                        )
+            return
+
+        with path.open("rb") as source:
+            sample = source.read(8192)
+        if b"\x00" in sample:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="文本文件包含二进制内容，请上传有效的 TXT 或 Markdown 文件。",
+            )
 
     def _detect_file_type(self, file_name: str) -> str:
         file_type = Path(file_name).suffix.lower().lstrip(".")
@@ -678,7 +753,20 @@ class DocumentService:
 
     def _safe_file_name(self, file_name: str) -> str:
         blocked = '<>:"/\\|?*'
-        return "".join("_" if char in blocked else char for char in file_name).strip() or "upload.bin"
+        safe_name = "".join(
+            "_" if char in blocked or unicodedata.category(char).startswith("C") else char
+            for char in unicodedata.normalize("NFC", file_name)
+        ).strip(" .")
+        if len(safe_name) > 240:
+            suffix = Path(safe_name).suffix[:16]
+            safe_name = f"{Path(safe_name).stem[: 240 - len(suffix)]}{suffix}"
+        return safe_name or "upload.bin"
+
+    def _normalize_upload_name(self, file_name: str) -> str:
+        name = file_name.replace("\\", "/").rsplit("/", 1)[-1]
+        if not name.strip():
+            return ""
+        return self._safe_file_name(name)
 
     def _get_document_row(
         self,

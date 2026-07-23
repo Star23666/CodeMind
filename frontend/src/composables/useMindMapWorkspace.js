@@ -5,6 +5,7 @@ import { listDocuments } from "../api/documents";
 import { listKnowledgeBases } from "../api/knowledgeBases";
 import {
   askMindMapNode,
+  cancelMindMapJob,
   createMindMapHistory,
   createMindMapJob,
   deleteMindMapHistory,
@@ -48,6 +49,7 @@ export function useMindMapWorkspace() {
   const loadingBases = ref(false);
   const loadingDocuments = ref(false);
   const generating = ref(false);
+  const cancellingGeneration = ref(false);
   const generationJob = ref(null);
   const generationTarget = ref(null);
   const generationConnectionIssue = ref("");
@@ -76,6 +78,8 @@ export function useMindMapWorkspace() {
   const isDirty = ref(false);
   const relatedCache = new Map();
   let relatedRequestVersion = 0;
+  let relatedController = null;
+  let viewSaveTimer = null;
   let pollTimer = null;
   let elapsedTimer = null;
   let pollAttempt = 0;
@@ -223,6 +227,8 @@ export function useMindMapWorkspace() {
   });
   onBeforeUnmount(() => {
     stopTracking();
+    relatedController?.abort();
+    window.clearTimeout(viewSaveTimer);
     window.removeEventListener("beforeunload", handleBeforeUnload);
   });
   onBeforeRouteLeave(async () => {
@@ -392,6 +398,7 @@ export function useMindMapWorkspace() {
       ElMessage.warning("请先生成或打开一张知识地图");
       return;
     }
+    window.clearTimeout(viewSaveTimer);
     saving.value = true;
     try {
       const viewState = canvasRef.value?.getViewState() || historyViewState.value || {};
@@ -439,6 +446,7 @@ export function useMindMapWorkspace() {
     } catch {
       return;
     }
+    window.clearTimeout(viewSaveTimer);
     try {
       await deleteMindMapHistory(activeHistoryId.value);
       isDirty.value = false;
@@ -499,7 +507,11 @@ export function useMindMapWorkspace() {
     selectedNode.value = node;
     nodeQuestion.value = "";
     nodeAnswer.value = null;
-    fetchRelated(node);
+    historyViewState.value = {
+      ...historyViewState.value,
+      selected_node_id: node.id,
+    };
+    scheduleViewStateSave();
     if (options.scroll !== false) scrollToDetail();
   }
 
@@ -514,7 +526,21 @@ export function useMindMapWorkspace() {
 
   function handleCanvasViewChange(viewState) {
     historyViewState.value = viewState;
-    isDirty.value = true;
+    scheduleViewStateSave();
+  }
+
+  function scheduleViewStateSave() {
+    if (!activeHistoryId.value || !historyViewState.value) return;
+    window.clearTimeout(viewSaveTimer);
+    const historyId = activeHistoryId.value;
+    const viewState = JSON.parse(JSON.stringify(historyViewState.value));
+    viewSaveTimer = window.setTimeout(async () => {
+      try {
+        await updateMindMapHistory(historyId, { view_state: viewState });
+      } catch (error) {
+        ElMessage.warning(`画布位置自动保存失败：${error.message}`);
+      }
+    }, 700);
   }
 
   function handleSearchStatus(status) {
@@ -564,6 +590,9 @@ export function useMindMapWorkspace() {
 
   async function fetchRelated(node) {
     const requestVersion = ++relatedRequestVersion;
+    relatedController?.abort();
+    relatedController = new AbortController();
+    const controller = relatedController;
     relatedError.value = "";
     relatedSources.value = [];
     relatedLoading.value = false;
@@ -581,7 +610,7 @@ export function useMindMapWorkspace() {
         knowledge_base_id: knowledgeBaseId.value,
         query,
         top_k: 6,
-      });
+      }, { signal: controller.signal });
       const results = data.results || [];
       relatedCache.set(cacheKey, results);
       if (requestVersion === relatedRequestVersion && selectedNode.value?.id === node.id) {
@@ -589,6 +618,7 @@ export function useMindMapWorkspace() {
         if (!results.length) relatedError.value = data.message || "没有检索到相关资料。";
       }
     } catch (error) {
+      if (controller.signal.aborted) return;
       if (requestVersion === relatedRequestVersion && selectedNode.value?.id === node.id) {
         relatedError.value = error.message;
       }
@@ -599,6 +629,8 @@ export function useMindMapWorkspace() {
 
   function clearRelatedState() {
     relatedRequestVersion += 1;
+    relatedController?.abort();
+    relatedController = null;
     relatedCache.clear();
     relatedLoading.value = false;
     relatedSources.value = [];
@@ -633,6 +665,10 @@ export function useMindMapWorkspace() {
 
   async function expandSelectedNode() {
     if (!selectedNode.value?.sources?.length) return;
+    if (selectedNode.value.children?.length) {
+      ElMessage.info("为避免覆盖已有内容，请选择一个末级节点再展开。");
+      return;
+    }
     const targetNode = selectedNode.value;
     const targetRootId = mapData.value?.root?.id;
     expandingNode.value = true;
@@ -797,6 +833,10 @@ export function useMindMapWorkspace() {
         loadError.value = generationJob.value.error_message || "知识地图生成失败。";
         clearActiveJob(true);
         generating.value = false;
+      } else if (generationJob.value.status === "cancelled") {
+        clearActiveJob();
+        generationJob.value = null;
+        generating.value = false;
       } else {
         generating.value = true;
         startTracking();
@@ -854,6 +894,13 @@ export function useMindMapWorkspace() {
         generating.value = false;
         return;
       }
+      if (generationJob.value.status === "cancelled") {
+        clearActiveJob();
+        stopTracking();
+        generationJob.value = null;
+        generating.value = false;
+        return;
+      }
       schedulePoll(nextPollDelay(), version);
     } catch (error) {
       if (version !== trackingVersion) return;
@@ -886,6 +933,40 @@ export function useMindMapWorkspace() {
     generating.value = false;
     loadHistories().catch((error) => ElMessage.warning(`历史列表刷新失败：${error.message}`));
     ElMessage.success("知识地图已生成并自动保存");
+  }
+
+  async function cancelGeneration() {
+    const jobId = generationJob.value?.job_id;
+    if (!jobId || !generating.value || cancellingGeneration.value) return;
+    try {
+      await ElMessageBox.confirm(
+        "取消后，本次已完成的分析不会保存。当前正在查看的地图不会受影响。",
+        "取消生成知识地图",
+        {
+          confirmButtonText: "确认取消",
+          cancelButtonText: "继续生成",
+          type: "warning",
+        },
+      );
+    } catch {
+      return;
+    }
+
+    cancellingGeneration.value = true;
+    try {
+      await cancelMindMapJob(jobId);
+      clearActiveJob();
+      stopTracking();
+      generationJob.value = null;
+      generationTarget.value = null;
+      generationConnectionIssue.value = "";
+      generating.value = false;
+      ElMessage.info("已取消本次知识地图生成");
+    } catch (error) {
+      ElMessage.error(`取消失败：${error.message}`);
+    } finally {
+      cancellingGeneration.value = false;
+    }
   }
 
   function stopTracking() {
@@ -1009,6 +1090,8 @@ export function useMindMapWorkspace() {
     askingNode,
     canGenerate,
     canSave,
+    cancelGeneration,
+    cancellingGeneration,
     canvasRef,
     completedDocuments,
     depthOptions: DEPTH_OPTIONS,
@@ -1019,6 +1102,7 @@ export function useMindMapWorkspace() {
     expandSelectedNode,
     exportMap,
     exportingFormat,
+    fetchRelated,
     focusLearningNode,
     formatTime,
     generate,

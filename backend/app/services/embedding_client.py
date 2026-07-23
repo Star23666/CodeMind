@@ -29,24 +29,45 @@ class EmbeddingClient:
             raise EmbeddingServiceError("待向量化文本为空，无法调用 Embedding 在线服务。")
 
         try:
-            vectors = self._embed_with_api(texts)
-            if len(vectors) != len(texts):
-                raise EmbeddingServiceError(
-                    "Embedding 服务返回的向量数量不正确，请检查模型配置后重试。"
+            batch_size = max(1, settings.embedding_batch_size)
+            all_vectors: list[list[float]] = []
+            expected_dimension: int | None = None
+            for start in range(0, len(texts), batch_size):
+                batch = texts[start : start + batch_size]
+                vectors = self._embed_with_api(batch)
+                expected_dimension = self._validate_vectors(
+                    vectors,
+                    expected_count=len(batch),
+                    expected_dimension=expected_dimension,
                 )
-            dimensions = {len(vector) for vector in vectors}
-            if dimensions == {0} or len(dimensions) != 1:
-                raise EmbeddingServiceError(
-                    "Embedding 服务返回了无效或维度不一致的向量。"
-                )
-            if any(not math.isfinite(value) for vector in vectors for value in vector):
-                raise EmbeddingServiceError("Embedding 服务返回的向量包含无效数值。")
-            return vectors
+                all_vectors.extend(vectors)
+            return all_vectors
         except EmbeddingServiceError:
             raise
         except Exception as exc:
             logger.exception("Embedding API request failed")
             raise EmbeddingServiceError("Embedding 服务调用失败，请稍后重试。") from exc
+
+    def _validate_vectors(
+        self,
+        vectors: list[list[float]],
+        *,
+        expected_count: int,
+        expected_dimension: int | None,
+    ) -> int:
+        if len(vectors) != expected_count:
+            raise EmbeddingServiceError(
+                "Embedding 服务返回的向量数量不正确，请检查模型配置后重试。"
+            )
+        dimensions = {len(vector) for vector in vectors}
+        if dimensions == {0} or len(dimensions) != 1:
+            raise EmbeddingServiceError("Embedding 服务返回了无效或维度不一致的向量。")
+        dimension = dimensions.pop()
+        if expected_dimension is not None and dimension != expected_dimension:
+            raise EmbeddingServiceError("Embedding 服务分批返回的向量维度不一致。")
+        if any(not math.isfinite(value) for vector in vectors for value in vector):
+            raise EmbeddingServiceError("Embedding 服务返回的向量包含无效数值。")
+        return dimension
 
     def _embed_with_api(self, texts: list[str]) -> list[list[float]]:
         from openai import (

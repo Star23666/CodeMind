@@ -22,11 +22,32 @@
             <h2>选择一张地图继续学习</h2>
             <p>这里汇总所有知识库的地图，不受当前知识库选择限制。</p>
           </div>
-          <strong>{{ histories.length }} 张</strong>
+          <strong>{{ filteredHistories.length }} / {{ histories.length }} 张</strong>
         </header>
+        <div class="history-filters" aria-label="筛选知识地图">
+          <el-input
+            v-model="historySearch"
+            clearable
+            placeholder="搜索地图标题或知识库"
+            aria-label="搜索知识地图"
+          />
+          <el-select
+            v-model="historyKnowledgeBaseFilter"
+            clearable
+            placeholder="全部知识库"
+            aria-label="按知识库筛选"
+          >
+            <el-option
+              v-for="base in knowledgeBases"
+              :key="base.id"
+              :label="base.name"
+              :value="base.id"
+            />
+          </el-select>
+        </div>
         <div class="history-shelf">
           <button
-            v-for="item in histories"
+            v-for="item in filteredHistories"
             :key="item.id"
             type="button"
             :class="{ opening: openingHistoryId === item.id }"
@@ -43,6 +64,9 @@
             <small>{{ item.node_count }} 个知识节点</small>
             <em>{{ openingHistoryId === item.id ? "正在打开…" : "打开地图 →" }}</em>
           </button>
+          <p v-if="!filteredHistories.length" class="history-filter-empty">
+            没有匹配的知识地图，请调整搜索词或知识库筛选。
+          </p>
         </div>
       </section>
 
@@ -130,7 +154,15 @@
         <b>{{ generationJob.progress }}%</b>
         <small v-if="generationConnectionIssue">{{ generationConnectionIssue }}</small>
         <small v-else-if="generationStalled">进度暂未更新，请确认后端服务仍在运行；任务可能仍在继续。</small>
-        <button v-if="generationJob.status === 'failed'" type="button" @click="generate">按原设置重试</button>
+        <div class="ribbon-actions">
+          <button
+            v-if="generating"
+            type="button"
+            :disabled="cancellingGeneration"
+            @click="cancelGeneration"
+          >{{ cancellingGeneration ? "正在取消…" : "取消生成" }}</button>
+          <button v-if="generationJob.status === 'failed'" type="button" @click="generate">按原设置重试</button>
+        </div>
       </section>
 
       <template v-if="mapData">
@@ -386,6 +418,7 @@
             @toggle-mastery="toggleMasteryWithFeedback"
             @expand="expandSelectedNode"
             @ask="askNode"
+            @request-related="fetchRelated"
           />
         </section>
       </template>
@@ -415,6 +448,12 @@
           <small v-else-if="generationStalled" class="connection-note">进度已较久没有更新，请确认后端服务仍在运行。</small>
           <small v-else>已等待 {{ elapsedSeconds }} 秒；离开页面后任务仍会继续</small>
           <el-button v-if="generationJob.status === 'failed'" type="primary" @click="generate">按原设置重试</el-button>
+          <el-button
+            v-else
+            plain
+            :loading="cancellingGeneration"
+            @click="cancelGeneration"
+          >取消本次生成</el-button>
         </div>
 
         <div v-else class="empty-copy">
@@ -439,6 +478,7 @@ import KnowledgeBaseOptions from "../components/knowledge/KnowledgeBaseOptions.v
 import MindMapCanvas from "../components/mindmap/MindMapCanvas.vue";
 import MindMapInspector from "../components/mindmap/MindMapInspector.vue";
 import { useMindMapWorkspace } from "../composables/useMindMapWorkspace";
+import { filterMindMapHistories } from "../utils/mindMapState";
 
 const {
   activeHistoryId,
@@ -446,6 +486,8 @@ const {
   askingNode,
   canGenerate,
   canSave,
+  cancelGeneration,
+  cancellingGeneration,
   canvasRef,
   completedDocuments,
   depthOptions,
@@ -456,6 +498,7 @@ const {
   expandSelectedNode,
   exportMap,
   exportingFormat,
+  fetchRelated,
   focusLearningNode,
   formatTime,
   generate,
@@ -531,6 +574,8 @@ const layoutDensity = ref("comfortable");
 const displayMode = ref("detail");
 const selectedBranchCollapsed = ref(false);
 const learningFeedback = ref(null);
+const historySearch = ref("");
+const historyKnowledgeBaseFilter = ref("");
 const searchInputRef = ref(null);
 let inspectorBeforeZen = true;
 let learningFeedbackTimer = null;
@@ -540,6 +585,12 @@ const outlineFilterOptions = [
   { label: "未掌握", value: "unmastered" },
   { label: "有原文", value: "evidence" },
 ];
+
+const filteredHistories = computed(() => filterMindMapHistories(histories.value, {
+  query: historySearch.value,
+  knowledgeBaseId: historyKnowledgeBaseFilter.value,
+  knowledgeBases: knowledgeBases.value,
+}));
 
 const outlineNodes = computed(() => {
   if (!mapData.value?.root) return [];
@@ -752,6 +803,7 @@ async function returnToHistoryList() {
 async function openInspector() {
   inspectorOpen.value = true;
   await nextTick();
+  evidenceRef.value?.showSources?.();
   if (window.innerWidth <= 980) evidenceRef.value?.scrollIntoView?.();
 }
 
@@ -1300,10 +1352,27 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.history-filters {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(180px, 260px);
+  gap: 10px;
+}
+
 .history-shelf {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
   gap: 12px;
+}
+
+.history-filter-empty {
+  grid-column: 1 / -1;
+  margin: 8px 0;
+  padding: 28px;
+  border: 1px dashed var(--cm-border);
+  border-radius: 12px;
+  color: var(--cm-muted);
+  background: var(--cm-surface-soft);
+  text-align: center;
 }
 
 .history-shelf > button {
@@ -1505,6 +1574,7 @@ onBeforeUnmount(() => {
   .empty-copy ol { align-items: flex-start; flex-direction: column; width: max-content; margin-inline: auto; }
   .history-library { padding: 16px; }
   .history-library > header { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .history-filters { grid-template-columns: 1fr; }
   .history-shelf { grid-template-columns: 1fr; }
 }
 
@@ -1553,7 +1623,7 @@ onBeforeUnmount(() => {
 
 .generation-ribbon {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) minmax(180px, 0.65fr) auto;
+  grid-template-columns: minmax(260px, 1fr) minmax(180px, 0.65fr) auto auto;
   align-items: center;
   gap: 10px 16px;
   padding: 10px 13px;
@@ -1591,8 +1661,21 @@ onBeforeUnmount(() => {
 .ribbon-progress { height: 4px; overflow: hidden; border-radius: 999px; background: var(--cm-border); }
 .ribbon-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--atlas-cobalt), var(--atlas-teal)); }
 .generation-ribbon > b { color: var(--atlas-cobalt); font-family: "DIN Alternate", Consolas, monospace; font-size: 15px; }
-.generation-ribbon > small { grid-column: 1 / 3; color: var(--cm-warning); font-size: 10px; }
-.generation-ribbon > button { justify-self: end; border: 0; color: var(--atlas-cobalt); background: transparent; font-size: 11px; font-weight: 800; cursor: pointer; }
+.generation-ribbon > small { grid-column: 1 / 4; color: var(--cm-warning); font-size: 10px; }
+.ribbon-actions {
+  display: flex;
+  justify-self: end;
+  gap: 10px;
+}
+.ribbon-actions button {
+  border: 0;
+  color: var(--atlas-cobalt);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.ribbon-actions button:disabled { cursor: wait; opacity: 0.55; }
 
 .map-document-bar {
   position: sticky;
@@ -2104,6 +2187,7 @@ kbd {
   .generation-ribbon { grid-template-columns: 1fr auto; }
   .ribbon-progress { grid-column: 1 / -1; }
   .generation-ribbon > small { grid-column: 1 / -1; }
+  .ribbon-actions { grid-column: 1 / -1; justify-self: start; }
   .zen-mode .map-document-bar { min-height: 106px; }
   .zen-mode .atlas-workspace { height: calc(100vh - 106px); }
 }

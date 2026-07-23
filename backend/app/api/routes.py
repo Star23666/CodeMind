@@ -83,8 +83,11 @@ from app.services.llm_config_service import (
     llm_config_service,
 )
 from app.services.mind_map_service import MindMapGenerationError, mind_map_service
-from app.services.mind_map_job_service import mind_map_job_service
-from app.services.mind_map_history_service import mind_map_history_service
+from app.services.mind_map_job_service import MindMapJobStateError, mind_map_job_service
+from app.services.mind_map_history_service import (
+    MindMapHistoryValidationError,
+    mind_map_history_service,
+)
 from app.services.qa_history_service import qa_history_service
 from app.services.quiz_job_service import quiz_job_service
 from app.services.quiz_service import QuizServiceError, quiz_service
@@ -594,6 +597,24 @@ async def get_mind_map_job(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="思维导图任务不存在。") from exc
 
 
+@router.post("/mind-maps/jobs/{job_id}/cancel", response_model=MindMapJobRead)
+async def cancel_mind_map_job(
+    job_id: str,
+    current_user: UserRead = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MindMapJobRead:
+    try:
+        return await mind_map_job_service.cancel_job(
+            db,
+            job_id=job_id,
+            owner_id=current_user.id,
+        )
+    except MindMapJobStateError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="思维导图任务不存在。") from exc
+
+
 @router.post("/mind-maps/ask", response_model=MindMapQuestionResponse)
 async def ask_mind_map_node(
     payload: MindMapQuestionRequest,
@@ -638,7 +659,10 @@ async def create_mind_map_history(
                 raise ValueError("Document not found")
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="知识库或文档不存在。") from exc
-    return mind_map_history_service.create(db, owner_id=current_user.id, payload=payload)
+    try:
+        return mind_map_history_service.create(db, owner_id=current_user.id, payload=payload)
+    except MindMapHistoryValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
 
 
 @router.get("/mind-maps/histories", response_model=list[MindMapHistoryRead])
@@ -666,6 +690,8 @@ async def update_mind_map_history(
 ):
     try:
         return mind_map_history_service.update(db, history_id=history_id, owner_id=current_user.id, payload=payload)
+    except MindMapHistoryValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="思维导图历史记录不存在。") from exc
 

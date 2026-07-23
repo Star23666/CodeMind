@@ -51,7 +51,7 @@
           role="tab"
           :aria-selected="activeTab === tab.key"
           :class="{ active: activeTab === tab.key }"
-          @click="activeTab = tab.key"
+          @click="selectTab(tab.key)"
         >
           {{ tab.label }}
           <span v-if="tab.key === 'sources'">{{ sourceCount }}</span>
@@ -94,12 +94,13 @@
           class="expand-button"
           plain
           :loading="expandingNode"
-          :disabled="!selectedNode.sources?.length"
+          :disabled="!selectedNode.sources?.length || Boolean(selectedNode.children?.length)"
           @click="$emit('expand')"
         >
-          AI 展开这个分支
+          {{ selectedNode.children?.length ? "请选择末级节点继续展开" : "AI 展开这个分支" }}
         </el-button>
         <p v-if="!selectedNode.sources?.length" class="action-note">该节点没有直接原文，暂时不能继续扩展。</p>
+        <p v-else-if="selectedNode.children?.length" class="action-note">已有子节点不会被覆盖；请选择一个末级节点继续细化。</p>
       </div>
 
       <div v-else-if="activeTab === 'sources'" class="tab-panel" role="tabpanel">
@@ -198,7 +199,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 
 const props = defineProps({
   selectedNode: { type: Object, default: null },
@@ -218,7 +219,15 @@ const props = defineProps({
   relatedError: { type: String, default: "" },
 });
 
-defineEmits(["focus", "toggle-mastery", "expand", "ask", "update:nodeQuestion", "close"]);
+const emit = defineEmits([
+  "focus",
+  "toggle-mastery",
+  "expand",
+  "ask",
+  "update:nodeQuestion",
+  "close",
+  "request-related",
+]);
 
 const panel = ref(null);
 const activeTab = ref("understand");
@@ -235,7 +244,22 @@ function scrollIntoView() {
   panel.value?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-defineExpose({ scrollIntoView });
+function selectTab(tab) {
+  activeTab.value = tab;
+  if (tab === "sources" && props.selectedNode) emit("request-related", props.selectedNode);
+}
+
+function showSources() {
+  selectTab("sources");
+}
+
+watch(() => props.selectedNode?.id, () => {
+  if (activeTab.value === "sources" && props.selectedNode) {
+    emit("request-related", props.selectedNode);
+  }
+});
+
+defineExpose({ scrollIntoView, showSources });
 </script>
 
 <style scoped>
