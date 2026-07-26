@@ -83,6 +83,8 @@ class QuizCreateRequest(BaseModel):
     def validate_type_selection(self):
         if not self.random_mix and not self.question_types:
             raise ValueError("指定题型模式下至少选择一种题型")
+        if not self.random_mix and len(self.question_types) > self.question_count:
+            raise ValueError("指定题型数量不能超过题目数量")
         if self.random_mix and len(self.question_types) == 1:
             raise ValueError("随机混合模式至少选择两种题型")
         return self

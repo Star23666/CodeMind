@@ -268,13 +268,25 @@ class MindMapService:
             sources=sources,
         )
         db.rollback()
+        question_timeout = max(
+            10.0,
+            min(
+                settings.mind_map_timeout_seconds,
+                settings.mind_map_question_timeout_seconds,
+            ),
+        )
+        question_total_timeout = max(
+            question_timeout,
+            settings.mind_map_question_total_timeout_seconds,
+        )
         try:
             answer = await self._generate_answer(
                 prompt,
-                timeout_seconds=settings.mind_map_timeout_seconds,
-                total_timeout_seconds=settings.mind_map_total_timeout_seconds,
+                timeout_seconds=question_timeout,
+                total_timeout_seconds=question_total_timeout,
                 max_tokens=max(settings.llm_max_tokens, 1200),
-                max_retries=settings.mind_map_max_retries,
+                max_retries=0,
+                retry_transient_errors=max(0, settings.mind_map_question_max_retries),
                 runtime_config=runtime_config,
             )
         except LlmServiceError as exc:
@@ -359,6 +371,7 @@ class MindMapService:
         prompt: str,
         *,
         total_timeout_seconds: float | None = None,
+        retry_transient_errors: int = 0,
         **kwargs,
     ) -> str:
         async with self._llm_semaphore:
@@ -401,16 +414,48 @@ class MindMapService:
                     )
                     return await request_answer(retry_kwargs)
 
+            async def request_with_transient_retry() -> str:
+                attempts = max(0, retry_transient_errors) + 1
+                for attempt in range(attempts):
+                    try:
+                        return await request_with_length_retry()
+                    except LlmServiceError as exc:
+                        if attempt + 1 >= attempts or not self._is_transient_llm_error(exc):
+                            raise
+                        logger.warning(
+                            "Mind map LLM request failed transiently; retrying "
+                            "(attempt=%s/%s, status=%s)",
+                            attempt + 1,
+                            attempts,
+                            exc.status_code,
+                        )
+                        await asyncio.sleep(min(1.0, 0.35 * (attempt + 1)))
+                raise AssertionError("transient retry loop unexpectedly exhausted")
+
             try:
                 if total_timeout_seconds is None or total_timeout_seconds <= 0:
-                    return await request_with_length_retry()
+                    return await request_with_transient_retry()
                 async with asyncio.timeout(total_timeout_seconds):
-                    return await request_with_length_retry()
+                    return await request_with_transient_retry()
             except TimeoutError as exc:
                 raise LlmServiceError(
                     f"大模型生成超过 {total_timeout_seconds:g} 秒，已停止本次请求。",
                     status_code=504,
                 ) from exc
+
+    @staticmethod
+    def _is_transient_llm_error(exc: LlmServiceError) -> bool:
+        message = str(exc).casefold()
+        permanent_markers = (
+            "认证失败",
+            "无访问权限",
+            "模型不存在",
+            "api base url",
+            "长度上限",
+        )
+        if any(marker in message for marker in permanent_markers):
+            return False
+        return exc.status_code in {429, 500, 502, 503, 504}
 
     def _get_document_scope(
         self,

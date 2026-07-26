@@ -1,11 +1,12 @@
 import json
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, require_admin
+from app.core.config import settings
 from app.db.session import get_db
 from app.schemas.contracts import (
     ActionResponse,
@@ -77,6 +78,7 @@ from app.services.knowledge_base_service import (
     knowledge_base_service,
 )
 from app.services.llm_client import LlmServiceError
+from app.services.login_rate_limiter import login_rate_limiter
 from app.services.llm_config_service import (
     LlmConfigError,
     LlmConfigRateLimitError,
@@ -108,6 +110,31 @@ def _readiness_response():
     return report
 
 
+def _login_identity_key(identity: str) -> str:
+    return f"identity:{identity.casefold()}"
+
+
+def _login_client_ip(request: Request) -> str:
+    if settings.login_rate_limit_trust_proxy:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            candidate = forwarded.split(",", 1)[0].strip()
+            if candidate:
+                return candidate[:128]
+        real_ip = request.headers.get("x-real-ip", "").strip()
+        if real_ip:
+            return real_ip[:128]
+    return (request.client.host if request.client else "unknown")[:128]
+
+
+def _login_rate_limit_keys(request: Request, identity: str) -> tuple[str, list[tuple[str, int]]]:
+    identity_key = _login_identity_key(identity)
+    return identity_key, [
+        (identity_key, settings.login_rate_limit_identity_max_attempts),
+        (f"ip:{_login_client_ip(request)}", settings.login_rate_limit_ip_max_attempts),
+    ]
+
+
 @router.get("/health/live")
 def liveness_check() -> dict[str, str]:
     return {"status": "ok"}
@@ -132,10 +159,29 @@ async def register(payload: UserCreate, db: Session = Depends(get_db)) -> UserRe
 
 
 @router.post("/auth/login", response_model=TokenResponse)
-async def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
+async def login(
+    payload: LoginRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> TokenResponse:
+    identity_key, rate_limit_keys = _login_rate_limit_keys(request, payload.username)
+    retry_after = login_rate_limiter.retry_after(
+        rate_limit_keys,
+        window_seconds=settings.login_rate_limit_window_seconds,
+    )
+    if retry_after:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"登录尝试过于频繁，请在 {retry_after} 秒后重试。",
+            headers={"Retry-After": str(retry_after)},
+        )
     try:
         user = auth_service.authenticate(db, payload)
     except AuthenticationError as exc:
+        login_rate_limiter.record_failure(
+            rate_limit_keys,
+            window_seconds=settings.login_rate_limit_window_seconds,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
@@ -143,6 +189,7 @@ async def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenRe
         ) from exc
     except DisabledUserError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    login_rate_limiter.clear(identity_key)
     return TokenResponse(
         access_token=auth_service.create_access_token(
             user,

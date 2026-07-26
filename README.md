@@ -6,7 +6,7 @@ CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented
 
 当前已实现：
 
-- JWT 注册、登录、持久化注销撤销和用户数据隔离
+- JWT 注册、失败登录限流、持久化注销撤销和用户数据隔离
 - 私人知识库创建、编辑和删除
 - 唯一全局公共知识库，支持所有登录用户共同上传、检索、问答和核对来源
 - 页面默认选择私人知识库；切换到公共库时展示常驻风险提示，并在上传前确认文件名与目标库
@@ -19,7 +19,7 @@ CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented
 - 独立语义检索页面，支持知识库选择、高级参数、加载/空/错误状态、来源 metadata 与原文跳转
 - 在线 LLM RAG 回答、来源编号校验和 SSE 流式输出
 - 用户个人大模型配置（BYOK）、加密存储、连接测试和系统模型切换
-- 文档库、原始文档预览、片段查看与来源跳转
+- 文档库、PDF.js 原始文档预览、片段查看与来源跳转
 - 已完成私人文档可在本人私人知识库之间移动，并同步更新 MySQL、Chroma metadata 和文档地图归属
 - 问答历史列表、详情查看和历史来源快照
 - 用户反馈持久化、重复提交保护、提交后只读回显和管理员筛选详情；私人库问答上下文对管理员脱敏
@@ -39,7 +39,7 @@ CodeMind 是一个面向计算机知识学习场景的 RAG（Retrieval-Augmented
 
 当前限制与后续计划：
 
-- AI 出题已建立固定在线基线；成功题目的语义质量较高，但进阶用例首轮结构成功率仍需改进。
+- AI 出题已建立固定在线基线；指定多题型会按题型配额分批生成并二次校验，仍需持续观察不同模型的在线稳定性。
 - 第一版不保存练习历史，主观题采用参考答案加用户自评。
 - 当前混合检索固定基线在 reranker 阈值 `0.55` 下达到 100% 召回和 0% 依据不足误召；仍需用更多真实资料持续验证泛化表现。
 
@@ -167,6 +167,10 @@ MIND_MAP_ENABLE_THINKING=false
 MIND_MAP_BATCH_MAX_TOKENS=1600
 MIND_MAP_MERGE_MAX_TOKENS=4096
 MIND_MAP_RETRY_MAX_TOKENS=6400
+# 节点追问使用更短的受控超时，瞬时网络失败会自动重试一次
+MIND_MAP_QUESTION_TIMEOUT_SECONDS=45
+MIND_MAP_QUESTION_TOTAL_TIMEOUT_SECONDS=90
+MIND_MAP_QUESTION_MAX_RETRIES=1
 
 # AI 出题使用短期后台会话；默认关闭思考以提高结构化输出稳定性
 QUIZ_TIMEOUT_SECONDS=300
@@ -194,6 +198,11 @@ DOCUMENT_MAX_PARSED_CHARS=3500000
 DOCUMENT_MAX_CHUNKS=5000
 
 JWT_SECRET_KEY=replace_with_a_long_random_secret
+LOGIN_RATE_LIMIT_WINDOW_SECONDS=600
+LOGIN_RATE_LIMIT_IDENTITY_MAX_ATTEMPTS=8
+LOGIN_RATE_LIMIT_IP_MAX_ATTEMPTS=30
+# 只有 backend 始终位于受信任 Nginx/网关之后时才设为 true
+LOGIN_RATE_LIMIT_TRUST_PROXY=false
 ```
 
 `RERANK_API_KEY` 和 `RERANK_BASE_URL` 留空时复用 `LLM_API_KEY` 与 `LLM_BASE_URL`。当前完整链路先从 Chroma 取 12 个 Dense 候选、从 MySQL 片段取 12 个 BM25 候选，通过 RRF 合并为最多 20 个候选，再用 `Qwen/Qwen3-Reranker-8B` 判断是否存在直接证据。2026-07-22 固定基线验证的生产阈值是 `RERANK_SCORE_THRESHOLD=0.55`。`RETRIEVAL_SCORE_THRESHOLD=0.45` 只在 reranker 失败并允许降级时生效，两个分数定义不同，不能互换。详见 [RAG 与 AI 出题质量评估](docs/RAG与AI出题质量评估.md)。
@@ -201,6 +210,10 @@ JWT_SECRET_KEY=replace_with_a_long_random_secret
 `MIND_MAP_TIMEOUT_SECONDS` 是连接、读取、写入等网络阶段的超时；`MIND_MAP_TOTAL_TIMEOUT_SECONDS`
 才是每次知识地图模型调用的墙钟总时限。管理员可以显式设为 `0` 关闭总时限，但异常上游若持续零星返回
 数据而不结束，可能长期占用 3 个全局导图 LLM 槽位，因此生产环境不建议这样配置。
+
+节点追问不再沿用导图生成的长超时：`MIND_MAP_QUESTION_TIMEOUT_SECONDS` 默认 45 秒，
+`MIND_MAP_QUESTION_TOTAL_TIMEOUT_SECONDS` 默认 90 秒，并且只对临时网络、限流或上游 5xx
+故障重试一次。认证失败、模型不存在和输出长度上限不会盲目重试。
 
 文档上传除压缩文件大小外，还分别限制 DOCX 解压体积、解析字符数和切片数量；Embedding 会按
 `EMBEDDING_BATCH_SIZE` 分批请求。默认值适合普通课程资料，管理员可根据机器内存和模型限制调整，
@@ -214,6 +227,7 @@ JWT_SECRET_KEY=replace_with_a_long_random_secret
 - 个人模型配置中的硅基流动和 OpenAI 分别只允许官方 API 域名；其他 OpenAI 兼容域名必须由服务器管理员加入 `LLM_OPENAI_COMPATIBLE_ALLOWED_HOSTS`。
 - 后端会在测试连接和每次实际 LLM 请求前重新解析域名并拒绝本机、私网、链路本地及保留地址。`LLM_ALLOW_PROXY_FAKE_IP` 只能用于显式启用本地代理的开发环境。
 - 使用 `Qwen/Qwen3.6-35B-A3B` 时，普通 RAG 默认关闭思考以避免思考过程耗尽输出额度；显式开启思考后若尚未产生正文就达到长度上限，后端会自动关闭思考重试。
+- 登录连续失败会按账号和客户端 IP 限制。Docker Compose 的前端 Nginx 会覆盖客户端伪造的转发头后再转发真实 IP，因此 Compose 默认启用 `LOGIN_RATE_LIMIT_TRUST_PROXY=true`；MySQL 和后端端口只绑定宿主机 `127.0.0.1`，公网只暴露前端站点。自行直连后端或使用未知网关时应保持该变量为 `false`。
 - 不要提交 `.env`、`backend/.env`、API Key、JWT Secret 或数据库密码。
 
 ### 4. 构建并启动
@@ -497,7 +511,7 @@ python -m pip install pytest==8.3.5
 python -m pytest -q
 ```
 
-当前后端测试共 176 项，覆盖认证和 JWT 撤销、公共/私人知识库跨用户权限、管理员初始化与账号启停、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、文档格式与体积校验、Embedding 分批、文档处理与重启恢复、取消和重复任务防护、私人文档迁移及 MySQL/Chroma 事务补偿、向量 metadata 更新后校验、索引事务补偿与陈旧向量过滤、Dense/BM25/RRF/reranker 与降级、反馈持久化与管理员详情脱敏、健康检查、删除清理、Prompt、LLM 异常、RAG 编排、SSE 流式生成、问答历史、知识地图均衡采样、来源过滤、跨实例任务取消和保存上限、固定质量数据校验、跨平台语料哈希与基线产物，以及 AI 出题的多库权限、文档轮询、覆盖度、难度结构、输入预算、来源编号白名单、答案隔离、BYOK 路由、六类题型评分和临时清理。
+后端测试覆盖认证和 JWT 撤销、失败登录限流、公共/私人知识库跨用户权限、管理员初始化与账号启停、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、文档格式与体积校验、Embedding 分批、文档处理与重启恢复、取消和重复任务防护、私人文档迁移及 MySQL/Chroma 事务补偿、向量 metadata 更新后校验、索引事务补偿与陈旧向量过滤、Dense/BM25/RRF/reranker 与降级、反馈持久化与管理员详情脱敏、健康检查、删除清理、Prompt、LLM 异常、RAG 编排、SSE 流式生成、问答历史、知识地图均衡采样、来源过滤、节点追问超时恢复、跨实例任务取消和保存上限、固定质量数据校验、跨平台语料哈希与基线产物，以及 AI 出题的多库权限、主题资料过滤、指定题型分批生成、文档轮询、覆盖度、难度结构、输入预算、来源编号白名单、答案隔离、BYOK 路由、六类题型评分和临时清理。
 
 固定质量数据不调用在线 API 也能先做完整性校验：
 
@@ -509,6 +523,8 @@ python scripts/evaluate_quality.py validate
 在线 Embedding 阈值、RAG 拒答和 AI 出题基线通过 `scripts/evaluate_quality.py` 手动执行，不加入普通 PR CI。固定语料、命令、指标和首轮结果见 [质量评估说明](docs/RAG与AI出题质量评估.md) 与 [2026-07-22 基线](docs/evaluation/2026-07-22质量基线.md)。
 
 Docker 端到端测试已验证前端 Nginx 代理下的注册、登录、默认私人库、公共上传确认、独立语义检索、跨用户公共文档检索和问答、来源片段与原文查看、反馈提交及管理员详情、普通用户管理路由拦截、管理员隐私脱敏、私人文档迁移、上传者/管理员重建和删除，以及 MySQL/文件/Chroma 同步一致性。AI 出题另以真实 MySQL、在线 Embedding 和 `Qwen/Qwen3.6-35B-A3B` 验证四份大资料的均衡覆盖、进阶认知层级、六种题型、评分、自评筛选、结果恢复、来源反查、提交即删和过期清理。当前实测 10 题覆盖项目报告、操作系统、MySQL 和计算机网络四份文档，约 77 秒完成生成。当前实测小范围知识地图约 36 秒完成，生成 15 个节点，节点数、历史记录和来源引用均通过一致性校验。
+
+2026-07-26 最终本地回归结果：后端 `183 passed`、前端 `5 passed`、生产依赖审计 `0` 个漏洞。Docker Compose 三个容器均健康，后端直连与 Nginx 代理的 readiness 均返回 `200`；PDF.js worker、JavaScript 与 CSS 静态资源 MIME 正确。一次性测试账号验证了注册、错误登录、成功登录后的限流计数清理、非法聊天请求 `422`，以及连续第 9 次错误登录 `429 + Retry-After`，随后已从数据库清理。
 
 前端生产构建检查：
 

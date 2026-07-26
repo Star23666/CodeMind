@@ -36,7 +36,7 @@ CodeMind 通过 RAG（Retrieval-Augmented Generation，检索增强生成）将�
 
 | 层次 | 技术 | 主要用途 |
 | --- | --- | --- |
-| 前端 | Vue 3、Vite、Element Plus、AntV G6、Axios | 页面、路由、知识地图画布和接口调用 |
+| 前端 | Vue 3、Vite、Element Plus、AntV G6、PDF.js、Axios | 页面、路由、知识地图画布、文档预览和接口调用 |
 | 后端 | FastAPI、Pydantic、SQLAlchemy | REST API、业务编排、参数校验和数据库访问 |
 | 业务数据库 | MySQL 8.0 | 用户、知识库、文档、片段、历史和反馈 |
 | 向量数据库 | Chroma | 文档片段向量存储和相似度召回 |
@@ -106,6 +106,7 @@ flowchart LR
 - 密码以哈希形式保存，不保存明文密码。
 - 登录成功后返回 JWT Access Token。
 - 退出登录会递增持久化 Token 版本，使当前 JWT 立即失效。
+- 连续错误登录按账号和客户端 IP 双维度限流，达到上限返回 `429` 和 `Retry-After`。
 - 前端通过 `Authorization: Bearer <token>` 访问受保护接口。
 - 后端根据 Token 中的用户身份校验知识库、文档和历史记录作用域。
 - 用户只能访问自己的私人数据；所有登录用户可访问同一个公共知识库。
@@ -132,6 +133,7 @@ flowchart LR
 - 调用 Embedding API 生成片段向量。
 - 将片段写入 MySQL，将向量及 metadata 写入 Chroma。
 - 支持取消、重新构建文档索引和删除文档。
+- 原文预览经受保护接口获取；PDF 使用 PDF.js 逐页渲染，预览失败时提供下载回退。
 - 支持在本人私人知识库之间移动已完成文档，并同步更新 MySQL、Chroma metadata 和文档地图归属；禁止直接跨私人/公共范围移动。
 - 后台任务原子领取，同一文档不会重复处理；服务重启会自动恢复中断任务。
 - 重建在新索引成功后才替换旧索引，失败或取消时旧索引继续可用。
@@ -453,6 +455,7 @@ erDiagram
 - 用户密码只保存哈希值。
 - 使用 JWT 校验登录身份。
 - 注销通过数据库 Token 版本立即撤销既有 JWT。
+- 登录限流使用滑动窗口；Docker 前端会覆盖客户端伪造的转发头后再向后端传递真实客户端 IP。
 - 私人知识库、文档、片段和历史查询校验用户归属；公共资源校验登录身份和管理权限。
 - 上传文件限制扩展名、文件大小并处理危险文件名字符。
 - API Key、JWT Secret 和数据库密码通过环境变量配置。
@@ -501,6 +504,9 @@ MIND_MAP_ENABLE_THINKING=false
 MIND_MAP_BATCH_MAX_TOKENS=1600
 MIND_MAP_MERGE_MAX_TOKENS=4096
 MIND_MAP_RETRY_MAX_TOKENS=6400
+MIND_MAP_QUESTION_TIMEOUT_SECONDS=45
+MIND_MAP_QUESTION_TOTAL_TIMEOUT_SECONDS=90
+MIND_MAP_QUESTION_MAX_RETRIES=1
 
 EMBEDDING_API_KEY=replace_with_embedding_key
 EMBEDDING_BASE_URL=https://provider.example.com/v1
@@ -517,6 +523,11 @@ RETRIEVAL_SCORE_THRESHOLD=0.45
 JWT_SECRET_KEY=replace_with_a_long_random_secret
 JWT_ALGORITHM=HS256
 JWT_EXPIRE_MINUTES=180
+LOGIN_RATE_LIMIT_WINDOW_SECONDS=600
+LOGIN_RATE_LIMIT_IDENTITY_MAX_ATTEMPTS=8
+LOGIN_RATE_LIMIT_IP_MAX_ATTEMPTS=30
+# 仅在受信任代理覆盖转发头后开启
+LOGIN_RATE_LIMIT_TRUST_PROXY=false
 ```
 
 不要将 `.env`、`backend/.env`、API Key、JWT Secret 或数据库密码提交到 Git。
@@ -560,7 +571,7 @@ docker compose down
 后端测试覆盖：
 
 - 应用启动、liveness、MySQL/Chroma readiness 和依赖故障。
-- 注册、登录、密码哈希、JWT 和注销撤销。
+- 注册、登录、密码哈希、JWT、注销撤销和失败登录限流。
 - 文档处理、原子领取、重复防护、取消、启动恢复和失败回滚。
 - 文档、向量和知识库删除。
 - Prompt 组装和引用编号清理。
@@ -570,9 +581,11 @@ docker compose down
 - 删除文档后来源快照保留。
 - 反馈持久化、重复保护、越权拒绝和管理员筛选。
 - 知识地图生成、来源校验、并发限制和失败取消。
-- 知识地图任务、历史事务和文档归属校验。
+- 知识地图任务、历史事务、文档归属校验和节点追问短超时重试。
 
-当前后端自动化测试基线为 176 项，包括公共/私人跨用户权限、管理员初始化和账号启停、私人数据脱敏、文档格式与处理上限、Embedding 分批、私人文档迁移与 MySQL/Chroma 补偿、Dense/BM25/RRF/reranker 与降级、个人模型连接错误分类、敏感日志和问答、知识地图模型路由、均衡采样、来源过滤与跨实例任务取消、固定质量数据、跨平台语料哈希与基线产物，以及 AI 出题权限、文档轮询、覆盖度、难度结构、评分、来源编号白名单和临时清理回归。
+当前后端自动化测试基线为 183 项，前端 Node 测试为 5 项。覆盖公共/私人跨用户权限、管理员初始化和账号启停、私人数据脱敏、文档格式与处理上限、Embedding 分批、私人文档迁移与 MySQL/Chroma 补偿、Dense/BM25/RRF/reranker 与降级、个人模型连接错误分类、敏感日志和问答、知识地图模型路由、均衡采样、来源过滤、节点追问短超时重试与跨实例任务取消、固定质量数据、跨平台语料哈希与基线产物，以及 AI 出题的主题资料过滤、指定题型分批生成、权限、文档轮询、覆盖度、难度结构、评分、来源编号白名单和临时清理回归。
+
+2026-07-26 最终 Docker 回归还验证了容器健康、后端与 Nginx readiness、PDF.js worker MIME、注册登录、成功登录后的限流计数清理、非法聊天参数 `422`，以及连续第 9 次错误登录 `429 + Retry-After`；一次性测试账号已清理。
 
 ### 12.2 核心验收流程
 
@@ -593,6 +606,7 @@ docker compose down
 15. 提交反馈并验证只读回显、重复提交、其他用户越权、管理员筛选和私人上下文脱敏。
 16. 在两个本人私人知识库间移动文档，核对 MySQL、Chroma metadata、地图归属和旧历史来源快照。
 17. 注销后验证旧 JWT 失效，并验证 MySQL 或 Chroma 故障时 readiness 返回 `503`。
+18. 连续错误登录验证 `429 + Retry-After`，并在文档预览页验证 PDF.js worker 可加载或回退到下载入口。
 
 ### 12.3 回答质量评估
 
@@ -636,26 +650,26 @@ docker compose down
 ### 14.1 已完成
 
 - 前后端基础工程和 Docker Compose 部署。
-- JWT 注册、登录和资源权限校验。
+- JWT 注册、登录、失败登录限流和资源权限校验。
 - 私人知识库、唯一全局公共知识库及权限化文档管理。
-- PDF、DOCX、Markdown、TXT 解析和切分。
+- PDF、DOCX、Markdown、TXT 解析、切分和受保护原文预览。
 - Embedding 与 Chroma 入库。
 - 问题重写、Dense/BM25 召回、RRF 融合、直接证据 rerank 和故障降级流程。
 - RAG Prompt、在线 LLM 调用和来源引用。
 - 问答历史后端保存及查询。
 - 问答历史前端页面和删除原文后的来源快照。
 - 文档和知识库删除业务。
-- 知识地图异步任务、历史版本、节点追问和节点扩展。
+- 知识地图异步任务、历史版本、节点追问短超时恢复、节点扩展和历史列表返回入口。
 - 知识地图学习层次、记忆点、学习建议、掌握进度、搜索导航和导出。
 - 文档任务防重、取消、重启恢复和失败时旧索引保护。
 - 反馈持久化、管理员筛选、JWT 注销撤销和 MySQL/Chroma 就绪检查。
 - 默认私人库、公共上传确认、独立语义检索、反馈只读入口、管理员中心和私人文档迁移。
-- 前端路由懒加载和重依赖独立分包。
-- 多知识库 AI 出题、六类题型、评分、来源、BYOK 路由和临时清理。
+- 前端路由懒加载、G6 异步画布、PDF.js 文档预览和重依赖独立分包。
+- 多知识库 AI 出题、主题资料过滤、指定题型分批生成、六类题型、评分、来源、BYOK 路由和临时清理。
 
 ### 14.2 待完成或待优化
 
-- 持续记录 AI 出题的在线模型耗时、错误率和语义质量；当前固定基线覆盖 8 份语料、16 套期望，首轮 8 套结构成功率为 50%，成功生成的 40 题人工事实正确率为 98.75%。
+- 持续记录 AI 出题的在线模型耗时、错误率和语义质量；当前固定基线覆盖 8 份语料、16 套期望，指定多题型已通过分批生成降低结构失败，但仍需在模型切换后复验。
 - 将真实 MySQL、Chroma 和在线模型端到端回归整理为可选 smoke 测试，减少供应商或数据库兼容问题漏检。
 - 第一版练习结果只保存在当前标签页，主观题采用用户自评；长期历史和 AI 辅助点评需要另行设计。
 - 扩充真实长文档、同主题干扰文档和跨章节问题，持续复跑固定 RAG 用例并监控 reranker 降级；继续整理项目报告、PPT、演示视频和部署文档。
@@ -696,4 +710,4 @@ docker compose down
 
 ---
 
-最后更新：2026 年 7 月 17 日；实现基线：Issue #18 多知识库 AI 出题。
+最后更新：2026 年 7 月 26 日；实现基线：最终演示加固与本地 Docker 回归。

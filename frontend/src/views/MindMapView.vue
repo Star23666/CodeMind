@@ -233,6 +233,7 @@
               <button type="button" class="more-action" aria-label="更多地图操作">•••</button>
               <template #dropdown>
                 <el-dropdown-menu>
+                  <el-dropdown-item command="history">返回地图列表</el-dropdown-item>
                   <el-dropdown-item command="setup">生成另一张地图</el-dropdown-item>
                   <el-dropdown-item command="zen">{{ zenMode ? "退出专注模式" : "进入专注模式" }}</el-dropdown-item>
                   <el-dropdown-item command="delete" divided :disabled="!activeHistoryId || generating || saving">删除当前版本</el-dropdown-item>
@@ -472,13 +473,15 @@
 
 <script setup>
 import { ElMessage, ElMessageBox } from "element-plus";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import AppHeader from "../components/layout/AppHeader.vue";
 import KnowledgeBaseOptions from "../components/knowledge/KnowledgeBaseOptions.vue";
-import MindMapCanvas from "../components/mindmap/MindMapCanvas.vue";
 import MindMapInspector from "../components/mindmap/MindMapInspector.vue";
 import { useMindMapWorkspace } from "../composables/useMindMapWorkspace";
 import { filterMindMapHistories } from "../utils/mindMapState";
+
+// G6 is only needed after a map is opened, not while the user browses history.
+const MindMapCanvas = defineAsyncComponent(() => import("../components/mindmap/MindMapCanvas.vue"));
 
 const {
   activeHistoryId,
@@ -821,6 +824,7 @@ function toggleZenMode(force) {
 }
 
 function handleDocumentCommand(command) {
+  if (command === "history") returnToHistoryList();
   if (command === "setup") openGenerationSetup();
   if (command === "zen") toggleZenMode();
   if (command === "delete") removeHistory();

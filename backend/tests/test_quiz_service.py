@@ -155,6 +155,80 @@ class QuizServiceTest(unittest.TestCase):
         self.assertGreaterEqual(len(document_ids), 2)
         self.assertEqual(set(document_ids[:2]), {21, 24})
 
+    def test_topic_context_only_keeps_directly_matching_material(self) -> None:
+        self.db.execute(
+            text(
+                "INSERT INTO documents (id, knowledge_base_id, owner_id, file_name, parse_status) "
+                "VALUES (25, 11, 1, 'network-tcp.txt', 'completed')"
+            )
+        )
+        self.db.execute(
+            text(
+                "INSERT INTO document_chunks "
+                "(id, document_id, knowledge_base_id, chunk_index, chunk_text) "
+                "VALUES (38, 25, 11, 1, 'TCP 通过三次握手建立连接，属于计算机网络传输层内容。')"
+            )
+        )
+        self.db.commit()
+
+        request = self._request([11]).model_copy(update={"topic": "TCP 与计算机网络"})
+        chunks = self.service._collect_context_chunks(self.db, request)
+
+        self.assertTrue(chunks)
+        self.assertTrue(
+            all(
+                "tcp" in (chunk["source_text"] + chunk["source"].file_name).casefold()
+                or "计算机网络" in (chunk["source_text"] + chunk["source"].file_name)
+                for chunk in chunks
+            )
+        )
+
+    def test_specified_types_are_generated_in_small_type_batches(self) -> None:
+        request = QuizCreateRequest(
+            knowledge_base_ids=[11],
+            question_count=6,
+            question_types=list(QuizQuestionType),
+            random_mix=False,
+            topic="操作系统",
+        )
+        chunks = self.service._collect_context_chunks(self.db, request)
+        templates = {
+            question["question_type"]: question
+            for question in self._valid_payload()["questions"]
+        }
+        templates["scenario"] = {
+            "question_type": "scenario",
+            "cognitive_level": "analyze",
+            "prompt": "操作系统负载升高时应如何分析调度问题？",
+            "options": [],
+            "correct_answer": None,
+            "accepted_answers": [],
+            "keywords": [],
+            "reference_answer": "检查运行队列、上下文切换和调度策略。",
+            "explanation": "资料说明调度状态和资源竞争需要结合观察。",
+            "source_ids": ["S1"],
+        }
+        payloads = []
+        for index, question_type in enumerate(QuizQuestionType, start=1):
+            question = json.loads(json.dumps(templates[question_type.value], ensure_ascii=False))
+            question["prompt"] = f"操作系统题型验证 {index}：{question['prompt']}"
+            payloads.append(json.dumps({"questions": [question]}, ensure_ascii=False))
+        self.client.generate_answer.side_effect = payloads
+
+        payload = run_async(
+            self.service._generate_payload(
+                request=request,
+                context_chunks=chunks,
+                runtime_config=self.runtime,
+            )
+        )
+
+        self.assertEqual(self.client.generate_answer.await_count, len(QuizQuestionType))
+        self.assertEqual(
+            {question.question_type for question in payload.questions},
+            set(QuizQuestionType),
+        )
+
     def test_generation_requires_document_coverage_without_a_topic(self) -> None:
         request = self._request([11]).model_copy(update={"topic": None})
         chunks = self.service._collect_context_chunks(self.db, request)

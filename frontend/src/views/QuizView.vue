@@ -626,6 +626,10 @@ async function startQuiz() {
     formError.value = "随机混合模式至少需要选择两种题型。";
     return;
   }
+  if (!form.random_mix && form.question_types.length > form.question_count) {
+    formError.value = "指定题型数量不能超过题目数量。";
+    return;
+  }
   creating.value = true;
   pollFailureCount = 0;
   try {

@@ -29,7 +29,25 @@
       <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" />
 
       <section v-loading="loading" class="viewer-card">
-        <iframe v-if="viewerType === 'pdf' && objectUrl" :src="objectUrl" class="pdf-viewer" title="PDF 文档预览" />
+        <section v-if="viewerType === 'pdf'" class="pdf-viewer" aria-label="PDF 文档预览">
+          <el-alert
+            v-if="pdfLoadError"
+            :title="pdfLoadError"
+            type="warning"
+            show-icon
+            :closable="false"
+          >
+            <template #default>
+              <el-button link type="primary" :disabled="!fileBuffer" @click="downloadFile">下载原文件查看</el-button>
+            </template>
+          </el-alert>
+          <div v-else class="pdf-pages">
+            <figure v-for="page in pdfPages" :key="page" class="pdf-page">
+              <figcaption>第 {{ page }} 页</figcaption>
+              <canvas :ref="(element) => registerPdfCanvas(page, element)" :aria-label="`PDF 第 ${page} 页`" />
+            </figure>
+          </div>
+        </section>
 
         <MarkdownContent
           v-else-if="viewerType === 'markdown'"
@@ -50,11 +68,14 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Download } from "@element-plus/icons-vue";
 import { useRoute, useRouter } from "vue-router";
 import DOMPurify from "dompurify";
 import * as mammoth from "mammoth";
+import { ElMessage } from "element-plus";
+import { getDocument as loadPdfDocument, GlobalWorkerOptions } from "pdfjs-dist/build/pdf.mjs";
+import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { getDocument, getDocumentContent } from "../api/documents";
 import { getHealth } from "../api/health";
 import MarkdownContent from "../components/common/MarkdownContent.vue";
@@ -69,12 +90,18 @@ const document = ref(null);
 const viewerType = ref("");
 const renderedHtml = ref("");
 const textContent = ref("");
-const objectUrl = ref("");
 const fileBuffer = ref(null);
+const pdfPages = ref([]);
+const pdfLoadError = ref("");
+const pdfCanvasRefs = new Map();
+let pdfDocument = null;
+let pdfRenderVersion = 0;
+
+GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 onMounted(checkHealth);
 watch(() => route.params.documentId, loadDocument, { immediate: true });
-onBeforeUnmount(revokeObjectUrl);
+onBeforeUnmount(resetPdfRenderer);
 
 async function checkHealth() {
   try { healthOnline.value = (await getHealth()).status === "ok"; }
@@ -107,7 +134,7 @@ async function renderFile(type, buffer) {
   const normalizedType = String(type).toLowerCase();
   if (normalizedType === "pdf") {
     viewerType.value = "pdf";
-    objectUrl.value = URL.createObjectURL(new Blob([buffer], { type: "application/pdf" }));
+    await renderPdf(buffer);
     return;
   }
 
@@ -137,17 +164,71 @@ async function renderFile(type, buffer) {
 }
 
 function resetViewer() {
-  revokeObjectUrl();
+  resetPdfRenderer();
   viewerType.value = "";
   renderedHtml.value = "";
   textContent.value = "";
   fileBuffer.value = null;
 }
 
-function revokeObjectUrl() {
-  if (objectUrl.value) {
-    URL.revokeObjectURL(objectUrl.value);
-    objectUrl.value = "";
+function registerPdfCanvas(pageNumber, element) {
+  if (element) {
+    pdfCanvasRefs.set(pageNumber, element);
+  } else {
+    pdfCanvasRefs.delete(pageNumber);
+  }
+}
+
+async function renderPdf(buffer) {
+  const renderVersion = ++pdfRenderVersion;
+  pdfLoadError.value = "";
+  try {
+    const task = loadPdfDocument({ data: new Uint8Array(buffer.slice(0)) });
+    const loadedDocument = await task.promise;
+    if (renderVersion !== pdfRenderVersion) {
+      loadedDocument.destroy();
+      return;
+    }
+
+    pdfDocument = loadedDocument;
+    pdfPages.value = Array.from({ length: loadedDocument.numPages }, (_, index) => index + 1);
+    await nextTick();
+
+    for (const pageNumber of pdfPages.value) {
+      if (renderVersion !== pdfRenderVersion) return;
+      const page = await loadedDocument.getPage(pageNumber);
+      const canvas = pdfCanvasRefs.get(pageNumber);
+      if (!canvas) continue;
+      const baseViewport = page.getViewport({ scale: 1 });
+      const targetWidth = Math.min(1200, Math.max(640, window.innerWidth - 96));
+      const scale = Math.min(1.8, Math.max(1, targetWidth / baseViewport.width));
+      const viewport = page.getViewport({ scale });
+      const context = canvas.getContext("2d", { alpha: false });
+      if (!context) throw new Error("浏览器不支持 PDF 画布渲染。");
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      await page.render({ canvasContext: context, viewport }).promise;
+
+      if (pageNumber % 3 === 0) {
+        await new Promise((resolve) => window.requestAnimationFrame(resolve));
+      }
+    }
+  } catch (renderError) {
+    if (renderVersion !== pdfRenderVersion) return;
+    pdfPages.value = [];
+    pdfLoadError.value = "PDF 在线预览失败，请下载原文件后查看。";
+    ElMessage.warning(renderError?.message || "PDF 在线预览失败。");
+  }
+}
+
+function resetPdfRenderer() {
+  pdfRenderVersion += 1;
+  pdfPages.value = [];
+  pdfLoadError.value = "";
+  pdfCanvasRefs.clear();
+  if (pdfDocument) {
+    pdfDocument.destroy();
+    pdfDocument = null;
   }
 }
 
@@ -187,7 +268,11 @@ function formatSize(size) {
 .viewer-head p { margin: 0; color: var(--cm-muted); }
 .head-actions { gap: 10px; flex: 0 0 auto; }
 .viewer-card { min-height: 620px; overflow: hidden; border: 1px solid var(--cm-border); border-radius: var(--cm-radius); background: var(--cm-surface); box-shadow: var(--cm-shadow); }
-.pdf-viewer { display: block; width: 100%; height: 78vh; min-height: 620px; border: 0; background: #fff; }
+.pdf-viewer { min-height: 620px; padding: 20px; background: #edf1f6; }
+.pdf-pages { display: grid; gap: 20px; justify-items: center; }
+.pdf-page { display: grid; gap: 8px; width: min(100%, 1200px); margin: 0; color: var(--cm-muted); font-size: 13px; }
+.pdf-page figcaption { padding-left: 2px; }
+.pdf-page canvas { display: block; width: 100%; height: auto; border: 1px solid rgba(24, 45, 78, 0.12); background: #fff; box-shadow: 0 8px 22px rgba(24, 45, 78, 0.12); }
 .rendered-content, .text-viewer { width: min(900px, calc(100% - 48px)); margin: 0 auto; padding: 42px 0 64px; }
 .text-viewer { color: var(--cm-text); font: 16px/1.9 "SFMono-Regular", Consolas, "Liberation Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .rendered-content { color: var(--cm-text); font-size: 16px; line-height: 1.85; }

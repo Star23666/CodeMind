@@ -15,6 +15,7 @@ FastAPI 后端负责认证、知识库与文档管理、Embedding 入库、Chrom
 | `app/services/feedback_service.py` | 问答反馈持久化、归属校验和管理员筛选 |
 | `app/services/admin_service.py` | 管理员概览、用户启停、公共文档治理和私人数据脱敏 |
 | `app/services/health_service.py` | MySQL 与 Chroma 就绪检查 |
+| `app/services/login_rate_limiter.py` | 登录失败滑动窗口限流与 `Retry-After` 计算 |
 | `app/services/retrieval_service.py` | 问题重写、Dense/BM25 召回、RRF 融合、在线 rerank 与降级 |
 | `app/services/reranker_client.py` | OpenAI 兼容根地址下的在线 Rerank 调用、重试和安全错误分类 |
 | `app/services/retrieval_scoring.py` | BM25、RRF 和回退关键词评分 |
@@ -53,6 +54,10 @@ MIND_MAP_TIMEOUT_SECONDS=600
 # 每次模型调用（含结构化输出重试）的墙钟总时限
 MIND_MAP_TOTAL_TIMEOUT_SECONDS=900
 MIND_MAP_ENABLE_THINKING=false
+# 节点追问使用独立短超时，并最多重试一次临时上游故障
+MIND_MAP_QUESTION_TIMEOUT_SECONDS=45
+MIND_MAP_QUESTION_TOTAL_TIMEOUT_SECONDS=90
+MIND_MAP_QUESTION_MAX_RETRIES=1
 
 QUIZ_TIMEOUT_SECONDS=300
 QUIZ_MAX_TOKENS=12000
@@ -77,6 +82,11 @@ DOCUMENT_MAX_PARSED_CHARS=3500000
 DOCUMENT_MAX_CHUNKS=5000
 
 JWT_SECRET_KEY=replace_with_a_long_random_secret
+# 原生直连后端保持 false；Docker Compose 前端代理会安全覆盖转发头后设为 true
+LOGIN_RATE_LIMIT_WINDOW_SECONDS=600
+LOGIN_RATE_LIMIT_IDENTITY_MAX_ATTEMPTS=8
+LOGIN_RATE_LIMIT_IP_MAX_ATTEMPTS=30
+LOGIN_RATE_LIMIT_TRUST_PROXY=false
 ```
 
 Embedding 未配置时，文档入库和检索会明确失败。`RERANK_API_KEY`/`RERANK_BASE_URL` 留空时复用系统 `LLM_*`；正常检索使用 `RERANK_SCORE_THRESHOLD=0.55`，reranker 不可用且 `RERANK_FAIL_OPEN=true` 时回退到向量链路及 `RETRIEVAL_SCORE_THRESHOLD=0.45`。普通 RAG 问答在 LLM 未配置时保留本地演示回答；知识地图和 AI 出题依赖结构化 LLM 输出，因此必须配置在线 LLM。
@@ -113,6 +123,8 @@ python -m uvicorn app.main:app --reload
 ```http
 Authorization: Bearer <access_token>
 ```
+
+登录连续失败会按账号和客户端 IP 分别计数。默认 10 分钟内同一账号最多 8 次、同一 IP 最多 30 次失败；达到上限后返回 `429` 和 `Retry-After`。Compose 中后端只信任前端 Nginx 覆盖后的转发头；自行直连后端或使用未知网关时应保持 `LOGIN_RATE_LIMIT_TRUST_PROXY=false`。
 
 RAG 问答提供两个接口：`POST /api/chat` 返回完整 JSON；`POST /api/chat/stream` 返回
 `text/event-stream`。流式接口依次发送 `meta`、多个 `token` 和 `done` 事件，只有生成完成并发送
@@ -162,6 +174,7 @@ RAG 问答提供两个接口：`POST /api/chat` 返回完整 JSON；`POST /api/c
 - 模型只能引用本次实际提供的片段；无真实来源、同级同名的重复节点会在保存前剔除。
 - 长时间等待模型前会释放只读数据库事务，避免生成期间占住连接池。
 - 同一后端实例的知识地图 LLM 调用并发上限为 3；分批调用失败时会取消剩余请求。
+- 节点追问不会沿用整张地图的长总时限：默认单次 45 秒、总计 90 秒，对限流、连接超时和上游 5xx 最多重试一次；认证、模型不存在和输出长度上限不会盲目重试。
 - 自动生成结果会保存历史版本；前端也可创建、更新和删除版本。
 - 新增节点学习字段位于历史 JSON 中，旧数据可使用默认值读取，不需要数据库迁移。
 
@@ -169,6 +182,7 @@ RAG 问答提供两个接口：`POST /api/chat` 返回完整 JSON；`POST /api/c
 
 - `POST /api/quizzes/sessions` 创建后台任务，支持同时选择 1～5 个有读取权的私人或公共知识库。
 - 后端先在每个知识库内按文档轮询、再在知识库之间轮询抽取已完成片段，并受片段数、字符数和保守 Token 上限约束；任务真正执行前会再次校验权限。
+- 指定主题时只保留直接命中主题关键词的资料片段；无匹配资料返回 `409`，不会混入无关章节。指定多种题型时，服务按题型配额分批生成并在合并后再次校验。
 - 题目由 Pydantic 校验数量、六类题型、选项、答案和真实来源编号；未限定主题时还会校验整套题的文档覆盖度，避免长文档垄断题目。
 - 每题带内部认知层级；进阶题至少 40% 达到应用或分析，挑战题至少 70% 达到应用或分析且至少 40% 为分析。无效结构只有限重试，整批验证通过后才入库。
 - `GET /api/quizzes/sessions/{id}` 只返回题干、选项和来源数量，不返回答案、解析或来源正文。
@@ -186,7 +200,7 @@ cd backend
 python -m pytest -q
 ```
 
-当前基线为 `176 passed`。测试使用 SQLite 和替身服务覆盖主要业务，其中包括全局公共库唯一性、跨用户公共文档访问和管理、私人库隔离、管理员初始化与用户启停、私人数据脱敏、删除清理、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、问答和知识地图个人模型路由、知识地图流式总超时、均衡采样、来源过滤、跨实例任务取消和并发槽位释放、文档格式与体积校验、Embedding 分批、重启恢复、重复入队、取消、私人库间迁移与 MySQL/Chroma 补偿、索引补偿和陈旧向量过滤、Dense/BM25/RRF/reranker 与权限化词法召回、反馈持久化、越权与管理员筛选，JWT 注销撤销，MySQL/Chroma 就绪探针，固定质量数据校验、指标计算、跨平台语料哈希与基线产物，以及 AI 出题的多库权限、文档轮询、覆盖度、难度结构、输入预算、来源编号白名单、答案隔离、评分、BYOK 与临时清理；Docker 端到端测试另外验证真实 MySQL、Chroma、在线 Embedding/LLM、Issue #28 角色流程、公共库跨用户检索、AI 六类题型、来源反查、权限按钮和数据同步清理。
+当前基线为 `183 passed`。测试使用 SQLite 和替身服务覆盖主要业务，其中包括全局公共库唯一性、跨用户公共文档访问和管理、私人库隔离、管理员初始化与用户启停、私人数据脱敏、删除清理、个人模型配置、连接错误分类、敏感日志与 SSRF 防护、问答和知识地图个人模型路由、知识地图流式总超时、节点追问短超时重试、均衡采样、来源过滤、跨实例任务取消和并发槽位释放、文档格式与体积校验、Embedding 分批、重启恢复、重复入队、取消、私人库间迁移与 MySQL/Chroma 补偿、索引补偿和陈旧向量过滤、Dense/BM25/RRF/reranker 与权限化词法召回、反馈持久化、越权与管理员筛选、JWT 注销撤销、登录限流、MySQL/Chroma 就绪探针、固定质量数据校验、指标计算、跨平台语料哈希与基线产物，以及 AI 出题的多库权限、主题资料过滤、指定题型分批生成、文档轮询、覆盖度、难度结构、输入预算、来源编号白名单、答案隔离、评分、BYOK 与临时清理；最终 Docker 回归另外验证后端与代理 readiness、注册登录、限流、非法请求校验、PDF.js worker 静态资源和容器健康状态。
 
 ## Docker 运行
 

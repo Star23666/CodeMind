@@ -16,8 +16,12 @@ async function bootstrap() {
   if (userStore.token) {
     try {
       userStore.updateUser(await getCurrentUser())
-    } catch {
-      userStore.clearAuth()
+    } catch (error) {
+      if ([401, 403].includes(error.status)) {
+        userStore.clearAuth()
+      } else {
+        userStore.setAuthNotice("服务暂时不可用，已保留当前登录状态，请稍后刷新重试。")
+      }
     }
   }
 

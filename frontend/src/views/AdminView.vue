@@ -301,8 +301,20 @@ async function toggleUserStatus(user) {
 }
 
 async function cancelDocument(document) {
-  try { await cancelDocumentProcessing(document.id); ElMessage.success("处理任务已取消。 "); await refreshDocumentsAndOverview(); }
-  catch (error) { ElMessage.error(error.message); }
+  try {
+    await cancelDocumentProcessing(document.id);
+    ElMessage.success("处理任务已取消。 ");
+  } catch (error) {
+    ElMessage.error(error.message || "取消任务失败。 ");
+  } finally {
+    // A task can finish between rendering the button and the cancel request.
+    // Always re-read the table so a 409 does not leave a stale processing state.
+    try {
+      await refreshDocumentsAndOverview();
+    } catch {
+      ElMessage.warning("状态刷新失败，请稍后手动刷新。 ");
+    }
+  }
 }
 
 async function rebuildDocument(document) {

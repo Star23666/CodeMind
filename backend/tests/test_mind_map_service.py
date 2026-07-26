@@ -182,6 +182,19 @@ class TricklingStreamingLlmClient:
             self.active_calls -= 1
 
 
+class TransientThenSuccessLlmClient:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.last_kwargs = None
+
+    async def generate_answer(self, prompt: str, **kwargs) -> str:
+        self.calls += 1
+        self.last_kwargs = kwargs
+        if self.calls == 1:
+            raise LlmServiceError("大模型服务连接超时或暂时不可用，请稍后重试。", status_code=503)
+        return "进程拥有独立资源，线程共享进程资源【来源1】"
+
+
 class MindMapServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.engine = create_engine("sqlite+pysqlite:///:memory:")
@@ -623,6 +636,37 @@ class MindMapServiceTest(unittest.TestCase):
 
         self.assertEqual([source.chunk_id for source in response.sources], [11])
         self.assertIn("进程与线程", client.last_prompt)
+        self.assertIn("【来源1】", response.answer)
+
+    def test_node_question_retries_a_transient_provider_failure_with_bounded_timeout(self) -> None:
+        client = TransientThenSuccessLlmClient()
+        service = MindMapService(client=client)
+        request = MindMapQuestionRequest(
+            knowledge_base_id=10,
+            node_title="进程与线程",
+            question="两者有什么区别？",
+            source_chunk_ids=[11],
+        )
+
+        with (
+            patch("app.services.mind_map_service.llm_config_service.resolve_runtime", return_value=LlmRuntimeConfig(
+                api_key="test-key",
+                base_url="https://api.siliconflow.cn/v1",
+                model="test-model",
+                provider="siliconflow",
+            )),
+            patch("app.services.mind_map_service.settings.mind_map_question_timeout_seconds", 12.0),
+            patch("app.services.mind_map_service.settings.mind_map_question_total_timeout_seconds", 24.0),
+            patch("app.services.mind_map_service.settings.mind_map_question_max_retries", 1),
+            patch("app.services.mind_map_service.asyncio.sleep", new=AsyncMock()),
+        ):
+            response = run_async(
+                service.answer_node_question(self.db, owner_id=1, request=request)
+            )
+
+        self.assertEqual(client.calls, 2)
+        self.assertEqual(client.last_kwargs["timeout_seconds"], 12.0)
+        self.assertEqual(client.last_kwargs["max_retries"], 0)
         self.assertIn("【来源1】", response.answer)
 
     def test_node_question_rejects_unknown_source_chunk(self) -> None:
