@@ -60,7 +60,7 @@
 import { Close, Menu } from "@element-plus/icons-vue";
 import { ElMessageBox } from "element-plus";
 import { ref } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { isNavigationFailure, NavigationFailureType, useRoute, useRouter } from "vue-router";
 import { logoutUser } from "../../api/auth";
 import codeMindLogo from "../../assets/codemind-wordmark.png";
 import { useUserStore } from "../../stores/user";
@@ -103,13 +103,22 @@ async function logout() {
     return;
   }
 
+  // Leave the current view while the token is still valid. This lets route
+  // guards clean up an unfinished quiz before the logout endpoint revokes it.
+  try {
+    const navigation = await router.push({ name: "home" });
+    if (isNavigationFailure(navigation, NavigationFailureType.aborted)) return;
+  } catch {
+    return;
+  }
+
   try {
     await logoutUser();
   } catch {
     // 前端退出不依赖后端登出是否成功。
   } finally {
     userStore.clearAuth();
-    router.push({ name: "login" });
+    router.replace({ name: "login" });
   }
 }
 </script>

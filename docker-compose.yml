@@ -10,7 +10,7 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-codemind}
       TZ: Asia/Shanghai
     ports:
-      - "${MYSQL_HOST_PORT:-3306}:3306"
+      - "127.0.0.1:${MYSQL_HOST_PORT:-3306}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
@@ -42,8 +42,9 @@ services:
       UPLOAD_DIR: /data/uploads
       CHROMA_PERSIST_DIR: /data/chroma
       BACKEND_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080
+      LOGIN_RATE_LIMIT_TRUST_PROXY: "true"
     ports:
-      - "${BACKEND_HOST_PORT:-8000}:8000"
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8000}:8000"
     volumes:
       - backend_uploads:/data/uploads
       - chroma_data:/data/chroma

@@ -23,7 +23,7 @@ export default defineConfig({
           if (id.includes('/element-plus/') || id.includes('/@element-plus/')) {
             return 'vendor-element-plus'
           }
-          if (/\/(mammoth|marked|dompurify|jszip)\//.test(id)) {
+          if (/\/(mammoth|marked|dompurify|jszip|pdfjs-dist)\//.test(id)) {
             return 'vendor-document-preview'
           }
           if (/\/(vue|vue-router|@vue)\//.test(id)) return 'vendor-vue'

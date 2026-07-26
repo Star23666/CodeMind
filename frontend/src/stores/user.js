@@ -15,6 +15,7 @@ function readStoredUser() {
 const userStore = reactive({
   token: localStorage.getItem(TOKEN_KEY) || "",
   user: readStoredUser(),
+  authNotice: "",
   get isLoggedIn() {
     return Boolean(this.token);
   },
@@ -42,6 +43,7 @@ const userStore = reactive({
   },
   updateUser(user) {
     this.user = user || null;
+    this.authNotice = "";
     if (this.user) {
       localStorage.setItem(USER_KEY, JSON.stringify(this.user));
     } else {
@@ -52,8 +54,12 @@ const userStore = reactive({
     clearChatResultState(this.userId);
     this.token = "";
     this.user = null;
+    this.authNotice = "";
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
+  },
+  setAuthNotice(message) {
+    this.authNotice = message || "";
   },
 });
 

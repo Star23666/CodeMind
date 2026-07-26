@@ -364,8 +364,13 @@ class RetrievalOptions(BaseModel):
 
 
 class SearchRequest(RetrievalOptions):
-    knowledge_base_id: int
-    query: str = Field(..., min_length=1)
+    knowledge_base_id: int = Field(..., ge=1)
+    query: str = Field(..., min_length=1, max_length=300)
+
+    @field_validator("query", mode="before")
+    @classmethod
+    def normalize_query(cls, value: str) -> str:
+        return value.strip() if isinstance(value, str) else value
 
 
 class SourceReference(BaseModel):
@@ -384,6 +389,11 @@ class MindMapQuestionRequest(BaseModel):
     node_title: str = Field(..., min_length=1, max_length=100)
     question: str = Field(..., min_length=1, max_length=500)
     source_chunk_ids: list[int] = Field(..., min_length=1, max_length=8)
+
+    @field_validator("node_title", "question", mode="before")
+    @classmethod
+    def normalize_required_text(cls, value: str) -> str:
+        return value.strip() if isinstance(value, str) else value
 
 
 class MindMapQuestionResponse(BaseModel):
@@ -414,8 +424,13 @@ class SearchResponse(BaseModel):
 
 
 class ChatRequest(RetrievalOptions):
-    knowledge_base_id: int
-    question: str = Field(..., min_length=1)
+    knowledge_base_id: int = Field(..., ge=1)
+    question: str = Field(..., min_length=1, max_length=500)
+
+    @field_validator("question", mode="before")
+    @classmethod
+    def normalize_question(cls, value: str) -> str:
+        return value.strip() if isinstance(value, str) else value
 
 
 class ChatResponse(BaseModel):

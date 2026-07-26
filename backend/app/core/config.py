@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     mind_map_batch_max_tokens: int = 1600
     mind_map_merge_max_tokens: int = 4096
     mind_map_retry_max_tokens: int = 6400
+    mind_map_question_timeout_seconds: float = 45.0
+    mind_map_question_total_timeout_seconds: float = 90.0
+    mind_map_question_max_retries: int = 1
 
     # Temporary AI quiz generation. Sessions are deleted after submission and
     # periodically removed after the TTL when abandoned.
@@ -92,6 +95,10 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "change-me-in-production-use-a-long-random-string"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 3  # 3 hours
+    login_rate_limit_window_seconds: int = 600
+    login_rate_limit_identity_max_attempts: int = 8
+    login_rate_limit_ip_max_attempts: int = 30
+    login_rate_limit_trust_proxy: bool = False
 
     upload_dir: str = "storage/uploads"
     max_upload_size_mb: int = 50

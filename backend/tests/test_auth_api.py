@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
@@ -13,10 +14,12 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 from app.db.session import get_db
 from app.main import create_app
+from app.services.login_rate_limiter import login_rate_limiter
 
 
 class AuthApiTest(unittest.TestCase):
     def setUp(self) -> None:
+        login_rate_limiter.reset()
         engine = create_engine(
             "sqlite+pysqlite:///:memory:",
             connect_args={"check_same_thread": False},
@@ -65,6 +68,41 @@ class AuthApiTest(unittest.TestCase):
         app = create_app()
         app.dependency_overrides[get_db] = override_get_db
         self.client = TestClient(app)
+
+    def tearDown(self) -> None:
+        login_rate_limiter.reset()
+
+    def test_login_rate_limit_blocks_repeated_failures_and_success_clears_identity(self) -> None:
+        registration = self.client.post(
+            "/api/auth/register",
+            json={
+                "username": "rate-alice",
+                "email": "rate-alice@example.com",
+                "password": "password123",
+            },
+        )
+        self.assertEqual(registration.status_code, 201)
+
+        with (
+            patch("app.api.routes.settings.login_rate_limit_identity_max_attempts", 2),
+            patch("app.api.routes.settings.login_rate_limit_ip_max_attempts", 10),
+            patch("app.api.routes.settings.login_rate_limit_window_seconds", 120),
+        ):
+            wrong = {"username": "rate-alice", "password": "wrong-password"}
+            self.assertEqual(self.client.post("/api/auth/login", json=wrong).status_code, 401)
+
+            successful = self.client.post(
+                "/api/auth/login",
+                json={"username": "rate-alice", "password": "password123"},
+            )
+            self.assertEqual(successful.status_code, 200)
+
+            self.assertEqual(self.client.post("/api/auth/login", json=wrong).status_code, 401)
+            self.assertEqual(self.client.post("/api/auth/login", json=wrong).status_code, 401)
+            blocked = self.client.post("/api/auth/login", json=wrong)
+
+        self.assertEqual(blocked.status_code, 429)
+        self.assertGreater(int(blocked.headers["Retry-After"]), 0)
 
     def test_authentication_flow_and_protected_route(self) -> None:
         unauthorized = self.client.get("/api/knowledge-bases")
