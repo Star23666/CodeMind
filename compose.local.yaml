@@ -1,0 +1,12 @@
+services:
+  mysql:
+    restart: "no"
+    ports: !reset []
+  backend:
+    restart: "no"
+    environment:
+      BACKEND_CORS_ORIGINS: http://localhost:8084,http://127.0.0.1:8084
+  frontend:
+    restart: "no"
+    ports: !override
+      - "127.0.0.1:8084:80"
